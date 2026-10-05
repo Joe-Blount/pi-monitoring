@@ -85,8 +85,13 @@ def main(argv=None):
         return 2
 
     if args.stream:
-        if device.mode == "poll":
-            sys.stderr.write("device %r is poll mode; use --poll instead\n" % device.name)
+        if device.mode != "resident":
+            sys.stderr.write(
+                "device %r is %s mode, not resident. %s\n"
+                % (device.name, device.mode,
+                   "Use --poll instead." if device.mode == "poll"
+                   else "The controller owns this device; streaming it here "
+                        "would fight the controller for the port."))
             return 2
         return runner.stream_device(node, device)
 

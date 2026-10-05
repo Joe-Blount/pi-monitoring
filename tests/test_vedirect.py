@@ -3,6 +3,7 @@ import io
 import pytest
 
 from monitoring.drivers import vedirect
+from monitoring.drivers.base import DriverError
 from tests import vedirect_fixtures as fx
 
 
@@ -148,3 +149,156 @@ def test_a_frame_becomes_valid_line_protocol():
     # Every number must be a float, including ones that happen to be whole.
     assert "pv_watts=300.0" in line
     assert "error=0.0" in line
+
+
+# -- the production paths: a port that is there but says nothing -------------
+
+class SilentPort:
+    """A serial port that is open and returns a timeout on every read.
+
+    What a connected cable with a dark controller looks like, or a by-id path
+    that resolved to a different adapter.
+    """
+
+    def __init__(self):
+        self.reads = 0
+
+    def read(self, _n):
+        self.reads += 1
+        return b""
+
+    def close(self):
+        pass
+
+
+class FakeClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        self.now += 0.5
+        return self.now
+
+
+def test_a_silent_port_gives_up_rather_than_waiting_forever():
+    """Without a limit this blocks indefinitely: a check that never returns,
+    an install script that stops with no message, and a long-lived child that
+    emits nothing and never exits, so nothing restarts it."""
+    with pytest.raises(DriverError) as exc:
+        list(vedirect.frames(SilentPort(), idle_limit=5, clock=FakeClock()))
+    assert "no complete frame" in str(exc.value)
+
+
+def test_the_silent_port_message_names_the_two_likely_causes():
+    with pytest.raises(DriverError) as exc:
+        list(vedirect.frames(SilentPort(), idle_limit=1, clock=FakeClock()))
+    message = str(exc.value)
+    assert "controller may be off" in message and "port" in message
+
+
+def test_the_driver_read_gives_up_on_a_silent_port():
+    driver = vedirect.VedirectDriver("mppt", {"port": "/dev/fake",
+                                              "frame_timeout": 1}, {})
+    driver._serial = SilentPort()
+    with pytest.raises(DriverError):
+        driver.read()
+
+
+def test_the_driver_check_gives_up_on_a_silent_port():
+    driver = vedirect.VedirectDriver("mppt", {"port": "/dev/fake",
+                                              "frame_timeout": 1}, {})
+    driver._serial = SilentPort()
+    with pytest.raises(DriverError):
+        driver.check()
+
+
+class NoisePort:
+    """A stream that is not VE.Direct: the wrong baud rate, or a bad line."""
+
+    def __init__(self, total):
+        self.left = total
+
+    def read(self, _n):
+        if self.left <= 0:
+            return b""
+        self.left -= 1
+        # Tabs and newlines are what make the parser build fields; without a
+        # Checksum label those fields would accumulate forever.
+        return b"\t" if self.left % 3 == 0 else b"\n" if self.left % 5 == 0 else b"z"
+
+    def close(self):
+        pass
+
+
+def test_garbage_does_not_accumulate_without_limit():
+    """Measured before the fix: 200 KB of noise produced no frames and left
+    hundreds of fields holding over a hundred kilobytes, on a machine with a
+    few hundred megabytes."""
+    results = list(vedirect.frames(NoisePort(20000), stop_when_empty=True,
+                                   max_frame_bytes=256))
+    assert results, "noise must be reported as bad frames, not silently absorbed"
+    assert all(ok is False for _, ok in results)
+    # Each reported frame is bounded, so nothing grows without end.
+    assert all(len(fields) < 200 for fields, _ in results)
+
+
+def test_the_parser_recovers_after_abandoning_an_oversized_frame():
+    """Recovery costs one frame, for the same reason attaching mid-stream
+    does: the garbage before the abandon is counted into the checksum of
+    whatever follows it. The frame after that is clean."""
+    data = b"z" * 2000 + fx.frame(fx.SUNNY) + fx.frame(fx.NIGHT)
+    results = list(vedirect.frames(io.BytesIO(data), stop_when_empty=True,
+                                   max_frame_bytes=256))
+    assert results[-1][1] is True, "the parser must recover, not stay broken"
+
+
+# -- stream thinning ---------------------------------------------------------
+
+class ReplayPort:
+    def __init__(self, data):
+        self.data = io.BytesIO(data)
+
+    def read(self, n):
+        return self.data.read(n)
+
+    def close(self):
+        pass
+
+
+def drain(driver):
+    """Collect what a stream emits before the port falls silent."""
+    out = []
+    try:
+        for reading in driver.stream():
+            out.append(reading)
+    except DriverError:
+        pass            # the finite test port runs out, which is the giving-up path
+    return out
+
+
+def streaming_driver(frames_of_data, emit_every="30s"):
+    driver = vedirect.VedirectDriver(
+        "mppt", {"port": "/dev/fake", "emit_every": emit_every,
+                 "frame_timeout": 0.01}, {})
+    driver._serial = ReplayPort(frames_of_data)
+    return driver
+
+
+def test_streaming_publishes_at_the_asked_rate_not_once_per_frame(monkeypatch):
+    """Frames arrive about once a second. Publishing all of them would store
+    thirty times the data for no extra information."""
+    monkeypatch.setattr(vedirect.time, "time", lambda: 1000.0)
+    emitted = drain(streaming_driver(fx.frame(fx.SUNNY) * 10))
+    assert len(emitted) == 1, "ten frames in one window must publish once"
+
+
+def test_streaming_emits_again_once_the_window_has_passed(monkeypatch):
+    clock = [1000.0]
+
+    def advancing():
+        clock[0] += 20.0
+        return clock[0]
+
+    monkeypatch.setattr(vedirect.time, "time", advancing)
+    emitted = drain(streaming_driver(fx.frame(fx.SUNNY) * 10))
+    assert len(emitted) > 1

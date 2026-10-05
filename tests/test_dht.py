@@ -21,11 +21,22 @@ def test_a_reading_is_converted_to_fahrenheit_and_percent():
     assert driver().read() == {"temp": 79.0, "humidity": 50.1}
 
 
-def test_the_right_device_is_found_among_others():
-    """An industrial I/O bus carries unrelated devices; the sensor is picked
-    by the driver's name rather than by being first."""
-    values = driver().read()
-    assert values["temp"] == 79.0
+def test_the_sensor_is_found_by_name_not_by_being_first(tmp_path):
+    """An industrial I/O bus carries unrelated devices. Picking the first
+    would read a pressure sensor and call it humidity."""
+    first = tmp_path / "iio:device0"
+    first.mkdir()
+    (first / "name").write_text("bmp280")
+
+    second = tmp_path / "iio:device1"
+    second.mkdir()
+    (second / "name").write_text("dht11")
+    (second / "in_temp_input").write_text("21000")
+    (second / "in_humidityrelative_input").write_text("44000")
+
+    values = DhtDriver("box", {"iio_root": str(tmp_path), "retries": 0},
+                       {}).read()
+    assert values["humidity"] == 44.0
 
 
 def test_a_device_can_be_named_explicitly_when_several_are_present(tmp_path):

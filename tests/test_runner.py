@@ -58,7 +58,7 @@ def test_a_reading_becomes_a_point(tmp_path, doubles):
     node = node_with(tmp_path, "  - {name: a, driver: good, mode: poll}\n")
     result = runner.read_device(node, node.find("a"), NOW)
     assert result.ok
-    assert result.lines == ["m value=2.0 %d" % NOW]
+    assert result.lines == ["m ok=1.0,value=2.0 %d" % NOW]
 
 
 def test_calibration_is_applied_to_the_reading(tmp_path, doubles):
@@ -68,7 +68,7 @@ def test_calibration_is_applied_to_the_reading(tmp_path, doubles):
     calibration: {value: {scale: 10.0, offset: 1.0}}
 """)
     result = runner.read_device(node, node.find("a"), NOW)
-    assert result.lines == ["m value=21.0 %d" % NOW]
+    assert result.lines == ["m ok=1.0,value=21.0 %d" % NOW]
 
 
 def test_a_disabled_device_publishes_that_it_is_disabled(tmp_path, doubles):
@@ -104,6 +104,40 @@ def test_one_dead_sensor_does_not_cost_the_others(tmp_path, doubles):
     assert failures == 1
     assert out.getvalue().count("value=2.0") == 2
     assert "device b (bad): the sensor is not there" in err.getvalue()
+
+    # The failure is published as well as logged. A log on a machine at the
+    # end of a track is very nearly as silent as nothing.
+    assert 'ok=0.0' in out.getvalue()
+    assert 'error="the sensor is not there"' in out.getvalue()
+
+
+def test_a_long_failure_reason_is_shortened_for_the_log_but_not_the_point(
+        tmp_path, doubles):
+    """telegraf truncates a command's stderr at 512 bytes in total, so several
+    long messages push each other out. A published field has no such limit."""
+    node = node_with(tmp_path, "  - {name: a, driver: bad, mode: poll}\n")
+    long_reason = "x" * 400
+    out, err = io.StringIO(), io.StringIO()
+
+    import monitoring.runner as mod
+    original = mod.read_device
+    mod.read_device = lambda n, d, ns=None: runner.Result(d, error=long_reason)
+    try:
+        runner.poll(node, NOW, out, err)
+    finally:
+        mod.read_device = original
+
+    assert len(err.getvalue().strip()) < 250
+    assert long_reason in out.getvalue()
+
+
+def test_every_successful_reading_says_so(tmp_path, doubles):
+    """So a dashboard can ask whether a device is working rather than infer it
+    from which fields happen to be present."""
+    node = node_with(tmp_path, "  - {name: a, driver: good, mode: poll}\n")
+    out = io.StringIO()
+    runner.poll(node, NOW, out, io.StringIO())
+    assert "ok=1.0" in out.getvalue()
 
 
 def test_poll_ignores_devices_that_are_not_poll_mode(tmp_path, doubles):
@@ -182,7 +216,8 @@ def test_streaming_prints_a_line_per_reading(tmp_path, stream_doubles):
                                 max_readings=3, clock=frozen_clock)
     assert code == 0
     assert out.getvalue().splitlines() == [
-        "m value=1.0 1700000000", "m value=2.0 1700000000", "m value=3.0 1700000000"]
+        "m ok=1.0,value=1.0 1700000000", "m ok=1.0,value=2.0 1700000000",
+        "m ok=1.0,value=3.0 1700000000"]
 
 
 def test_a_device_that_goes_away_mid_stream_exits_non_zero(tmp_path, stream_doubles):
@@ -193,7 +228,7 @@ def test_a_device_that_goes_away_mid_stream_exits_non_zero(tmp_path, stream_doub
     code = runner.stream_device(node, node.find("a"), out, err, clock=frozen_clock)
     assert code == 1
     assert "the cable was unplugged" in err.getvalue()
-    assert out.getvalue().strip() == "m value=1.0 1700000000"
+    assert out.getvalue().strip() == "m ok=1.0,value=1.0 1700000000"
 
 
 def test_a_stream_that_simply_ends_is_also_a_failure(tmp_path, stream_doubles):
@@ -230,7 +265,7 @@ def test_calibration_applies_to_streamed_readings_too(tmp_path, stream_doubles):
     out = io.StringIO()
     runner.stream_device(node, node.find("a"), out, io.StringIO(),
                          max_readings=1, clock=frozen_clock)
-    assert out.getvalue().strip() == "m value=101.0 1700000000"
+    assert out.getvalue().strip() == "m ok=1.0,value=101.0 1700000000"
 
 
 # -- devices nothing will collect --------------------------------------------

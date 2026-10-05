@@ -21,6 +21,8 @@ Values arrive by position, not by name. Firmware versions differ in how many
 they send, so a short reply is parsed as far as it goes rather than discarded.
 """
 
+import sys
+
 from .base import Driver, DriverError, required
 
 DEFAULT_BAUD = 2400
@@ -200,8 +202,12 @@ class Pi30Driver(Driver):
             raise DriverError(
                 "the pi30 driver needs pyserial (apt install python3-serial)")
         try:
+            # Exclusive: if telegraf already holds this port, a manual run
+            # must fail saying so rather than both readers seeing torn frames,
+            # which looks exactly like a cable fault.
             self._serial = serial.Serial(self.port, self.baud,
-                                         timeout=self.read_timeout)
+                                         timeout=self.read_timeout,
+                                         exclusive=True)
         except Exception as exc:
             raise DriverError("cannot open %s: %s" % (self.port, exc))
         return self._serial
@@ -220,6 +226,13 @@ class Pi30Driver(Driver):
                 "no reply to %s from %s. Check this is the port printed RS232 "
                 "or COM rather than the RS485 battery jack, and that the baud "
                 "rate is %d" % (command, self.port, self.baud))
+        if not reply.endswith(b"\r"):
+            # read_until returns what it has when it times out. Without this
+            # check, strip() takes the last two payload characters for a
+            # checksum and the remainder parses as perfectly ordinary values.
+            raise DriverError(
+                "incomplete reply to %s (%d bytes, no terminator). The baud "
+                "rate or the cable is wrong" % (command, len(reply)))
         if reply.startswith(b"(NAK"):
             raise DriverError("the inverter rejected %s as unsupported" % command)
         if self.verify_crc and not reply_is_valid(reply):
@@ -230,13 +243,19 @@ class Pi30Driver(Driver):
         return reply
 
     def read(self):
+        """Query the inverter, reporting any query that failed.
+
+        A failure is reported even when another query succeeded. Otherwise a
+        status query failing every interval while the mode query answers looks
+        like a working inverter that has stopped reporting its battery.
+        """
         fields = {}
         failures = []
         for command in self.queries:
             try:
                 payload = strip(self.ask(command))
             except DriverError as exc:
-                failures.append(str(exc))
+                failures.append("%s: %s" % (command, exc))
                 continue
             if command == "QPIGS":
                 fields.update(parse_qpigs(payload))
@@ -247,6 +266,10 @@ class Pi30Driver(Driver):
 
         if not fields:
             raise DriverError("; ".join(failures) or "the inverter returned nothing")
+        if failures:
+            # Partial data is still worth publishing, but the gap must not be
+            # silent. The runner turns this into a visible point.
+            sys.stderr.write("inverter: %s\n" % "; ".join(failures))
         return fields
 
     def check(self):

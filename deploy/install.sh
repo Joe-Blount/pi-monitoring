@@ -11,12 +11,11 @@ set -euo pipefail
 
 SITE="${1:-}"
 NODE="${2:-}"
-FORCE="${3:-}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NODE_FILE="$REPO/sites/$SITE/$NODE.yaml"
 
 if [[ -z "$SITE" || -z "$NODE" ]]; then
-    echo "usage: $0 <site> <node> [--force]" >&2
+    echo "usage: $0 <site> <node>" >&2
     echo "available:" >&2
     find "$REPO/sites" -name '*.yaml' | sed "s|$REPO/sites/|  |; s|/| |; s|\.yaml$||" >&2
     exit 2
@@ -33,8 +32,14 @@ fi
 echo "==> packages"
 # python3-yaml is the only hard requirement. Drivers that need more pull their
 # own packages in as they are written, so a sensors-only node stays small.
-apt-get install -y --no-install-recommends python3-yaml >/dev/null
-echo "    python3-yaml present"
+if python3 -c "import yaml" 2>/dev/null; then
+    echo "    python3-yaml already present"
+else
+    # Deliberately not fatal: a site with no uplink today must still be able
+    # to take a code update.
+    apt-get install -y --no-install-recommends python3-yaml >/dev/null \
+        || echo "    WARNING: could not install python3-yaml. Nothing will run"
+fi
 
 echo "==> directories"
 install -d -m 0755 /etc/monitoring
@@ -50,6 +55,11 @@ echo "    /etc/monitoring/node.yaml -> $NODE_FILE"
 
 echo "==> code"
 if [[ "$REPO" != "/opt/monitoring" ]]; then
+    if [[ -e /opt/monitoring && ! -L /opt/monitoring ]]; then
+        echo "    /opt/monitoring exists and is not a link. Refusing: linking" >&2
+        echo "    into it would put the link inside the directory." >&2
+        exit 2
+    fi
     ln -sfn "$REPO" /opt/monitoring
     echo "    /opt/monitoring -> $REPO"
 fi
@@ -80,21 +90,26 @@ install -d -m 0755 /etc/telegraf/telegraf.d
 # Remove this project's previous fragments first. Without that, a device
 # deleted from a node file would leave its stanza behind and telegraf would
 # keep running a collector for hardware that is no longer declared.
+rm -f /etc/telegraf/telegraf.d/pi-monitoring.conf
+rm -f /etc/telegraf/telegraf.d/pi-monitoring-*.conf
+# The old generic names, removed once so an existing installation is tidied.
 rm -f /etc/telegraf/telegraf.d/monitoring.conf
-rm -f /etc/telegraf/telegraf.d/monitoring-*.conf
 
 # Poll devices: one exec input for the whole node, common to every machine.
 install -m 0644 "$REPO/deploy/telegraf.d/monitoring.conf" \
-    /etc/telegraf/telegraf.d/monitoring.conf
+    /etc/telegraf/telegraf.d/pi-monitoring.conf
 
 # Resident devices: one execd stanza each, committed per node. A node with
 # none is normal and the loop simply finds nothing.
+# Per NODE, not per site. A site's nodes have different devices: installing
+# the whole site's fragments on one node would start collectors for hardware
+# attached to a different machine.
 resident=0
 if [[ -d "$REPO/sites/$SITE/telegraf.d" ]]; then
-    for fragment in "$REPO/sites/$SITE/telegraf.d"/*.conf; do
+    for fragment in "$REPO/sites/$SITE/telegraf.d/$NODE"-*.conf; do
         [[ -e "$fragment" ]] || continue
         install -m 0644 "$fragment" \
-            "/etc/telegraf/telegraf.d/monitoring-$(basename "$fragment")"
+            "/etc/telegraf/telegraf.d/pi-monitoring-$(basename "$fragment")"
         resident=$((resident + 1))
     done
 fi
@@ -105,17 +120,25 @@ echo "    (inputs only; the output on this machine is left exactly as it was)"
 # turns a mismatch into something visible at install rather than into data
 # that silently never arrives.
 echo "==> what this node expects to collect"
-/opt/monitoring/bin/collect --node /etc/monitoring/node.yaml --list | sed "s/^/    /"
+runuser -u telegraf -- /opt/monitoring/bin/collect \
+    --node /etc/monitoring/node.yaml --list | sed "s/^/    /"
 
 echo "==> checking devices"
+# telegraf's resident children hold the GPIO pins and serial ports. Probing
+# while they run gives false failures and steals bytes from a live stream.
+if systemctl is-active --quiet telegraf; then
+    systemctl stop telegraf
+    telegraf_was_running=1
+fi
 # A warning, never a refusal. A dead five dollar sensor must not block a
 # software update at a site nobody can reach; it fails loudly at runtime.
-if ! /opt/monitoring/bin/collect --node /etc/monitoring/node.yaml --check; then
-    if [[ "$FORCE" == "--force" ]]; then
-        echo "    continuing anyway (--force)"
-    else
-        echo "    some devices failed. Continuing: this is a warning."
-    fi
+# As telegraf, not as root. Root can read a repository under a 0700 home
+# directory that telegraf cannot, so checking as root would pass and every
+# collection afterwards would fail.
+if ! runuser -u telegraf -- /opt/monitoring/bin/collect \
+        --node /etc/monitoring/node.yaml --check; then
+    echo "    some devices failed. Continuing: this is a warning, because a"
+    echo "    dead sensor must not block an update at a site nobody can reach."
 fi
 
 echo "==> restarting telegraf"

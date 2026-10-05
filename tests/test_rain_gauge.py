@@ -66,7 +66,10 @@ def test_a_corrupt_state_file_starts_from_zero_rather_than_refusing(tmp_path):
     "/proc/cannot/write/here.json",  # unwritable location
 ])
 def test_a_state_file_that_cannot_be_written_does_not_stop_the_counting(
-        tmp_path, bad_path):
+        tmp_path, monkeypatch, bad_path):
+    # Run from a temporary directory: a relative bad path would otherwise
+    # create directories in the repository, which an earlier version did.
+    monkeypatch.chdir(tmp_path)
     """Persistence is best effort; counting is not. A surprise from the
     filesystem must not be the thing that stops rain being measured."""
     c = RainCounter(bad_path, 0.011)

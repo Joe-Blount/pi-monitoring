@@ -75,22 +75,39 @@ def _fail(path, message):
     raise ConfigError("%s: %s" % (path, message))
 
 
-def _check_pins(path, devices, control):
-    """Refuse a file where two things claim one GPIO pin.
+def _enabled(path, name, value):
+    """Only a real boolean turns a device off.
 
-    This is cheap to check and expensive to debug: a duplicated pin usually
-    shows up as one device working and another silently reading nonsense.
+    `enabled: 0` and `enabled: "false"` both read as true to a loose test,
+    which is the wrong way round for a setting whose whole purpose is to stop
+    something.
+    """
+    if not isinstance(value, bool):
+        _fail(path, "device %r has enabled: %r; it must be true or false"
+                    % (name, value))
+    return value
+
+
+def claimed_pins(devices, control, on_conflict=None, on_bad_pin=None):
+    """Every GPIO pin something in a node file claims, and what claims it.
+
+    One function rather than two, because the second copy lived in the GPIO
+    probe and missed the pins nested under a load's inverter and pump. The
+    probe would therefore have driven the inverter relay while reporting the
+    pin as free.
     """
     claimed = {}
 
     def claim(pin, owner):
         if pin is None:
             return
-        if not isinstance(pin, int):
-            _fail(path, "%s: pin %r is not a whole number" % (owner, pin))
-        if pin in claimed:
-            _fail(path, "GPIO%d is claimed by both %s and %s" % (pin, claimed[pin], owner))
-        claimed[pin] = owner
+        if not isinstance(pin, int) or isinstance(pin, bool):
+            if on_bad_pin:
+                on_bad_pin(pin, owner)
+            return
+        if pin in claimed and on_conflict:
+            on_conflict(pin, claimed[pin], owner)
+        claimed.setdefault(pin, owner)
 
     for device in devices:
         params = device.params
@@ -114,6 +131,22 @@ def _check_pins(path, devices, control):
         guard = load.get("guard") or {}
         if guard.get("input") == "pin":
             claim(guard.get("pin"), "load %s guard" % load_name)
+
+    return claimed
+
+
+def _check_pins(path, devices, control):
+    """Refuse a file where two things claim one GPIO pin.
+
+    Cheap to check and expensive to debug: a duplicated pin usually shows up
+    as one device working and another silently reading nonsense.
+    """
+    claimed_pins(
+        devices, control,
+        on_conflict=lambda pin, first, second: _fail(
+            path, "GPIO%d is claimed by both %s and %s" % (pin, first, second)),
+        on_bad_pin=lambda pin, owner: _fail(
+            path, "%s: pin %r is not a whole number" % (owner, pin)))
 
 
 def load(path, known_drivers=None):
@@ -173,6 +206,19 @@ def load(path, known_drivers=None):
             _fail(path, "device %r has mode %r; it must be one of %s"
                   % (name, mode, ", ".join(MODES)))
 
+        if known_drivers is not None:
+            # A driver in a mode it cannot work in is worse than an error:
+            # it validates, lists, checks, and then publishes nothing useful.
+            from . import drivers as _registry
+            try:
+                allowed = _registry.get(driver).modes
+            except Exception:
+                allowed = None
+            if allowed is not None and mode not in allowed:
+                _fail(path, "device %r uses driver %r in %s mode, which it "
+                            "cannot work in; it supports %s"
+                            % (name, driver, mode, ", ".join(allowed)))
+
         interval = entry.get("interval")
         if interval is not None:
             try:
@@ -192,7 +238,7 @@ def load(path, known_drivers=None):
             tags=tags,
             params=dict(entry.get("params") or {}),
             calibration=dict(entry.get("calibration") or {}),
-            enabled=entry.get("enabled", True) is not False,
+            enabled=_enabled(path, name, entry.get("enabled", True)),
             interval=interval,
         ))
 

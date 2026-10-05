@@ -50,11 +50,9 @@ monitoring/
   config.py          load and validate a node file
   calibration.py     scale and offset, applied in one place
   drivers/           one module per device family
-  control/           decision logic, persisted state, relay outputs
 bin/
   collect            read devices, print line protocol
-  control            the controller
-  pump-guard         independent run-time limiter
+  gpio-probe         measure what a pin does when software lets go
 sites/
   example/node.yaml  every option, with the reasoning
   blind1/            upstairs.yaml, downstairs.yaml, telegraf.d/

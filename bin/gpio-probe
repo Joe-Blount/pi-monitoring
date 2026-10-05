@@ -94,8 +94,19 @@ def describe(state):
 # -- the child that holds the pin --------------------------------------------
 
 def hold_pin(pin):
-    """Drive the pin high and wait to be killed. Run as a child process."""
+    """Drive the pin high and wait. Run as a child process.
+
+    SIGTERM is handled so that an orderly stop really is orderly: Python's
+    default action terminates the process without running close() or any
+    atexit hook, so without this the "clean exit" case would measure exactly
+    the same thing as the kill and report a distinction it had not made.
+    """
     from gpiozero import LED
+
+    def orderly(_signum, _frame):
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, orderly)
     led = LED(pin)
     led.on()
     sys.stdout.write("holding\n")
@@ -182,7 +193,14 @@ def overlay_pins():
             continue
         for line in text.splitlines():
             line = line.split("#", 1)[0].strip()
-            if line.startswith("dtoverlay=w1-gpio"):
+            if line.startswith("dtoverlay=dht11"):
+                # The DHT overlay is named dht11 whatever sensor is attached.
+                # Nothing in a node file binds its pin, so without this the
+                # probe would drive a live sensor's data line.
+                match = re.search(r"gpiopin=(\d+)", line)
+                taken[int(match.group(1)) if match else 4] = (
+                    "DHT sensor (%s)" % line)
+            elif line.startswith("dtoverlay=w1-gpio"):
                 pin = 4                      # the overlay's default
                 match = re.search(r"gpiopin=(\d+)", line)
                 if match:
@@ -199,6 +217,19 @@ def overlay_pins():
     return taken
 
 
+def debugfs_consumers():
+    """Lines from the kernel's GPIO debug file that name a consumer.
+
+    A pin an in-kernel driver has requested shows its consumer here. That
+    catches every overlay, including ones this script has never heard of.
+    """
+    try:
+        with open(DEBUGFS) as handle:
+            return handle.read().splitlines()
+    except OSError:
+        return []
+
+
 def check_pin_is_safe(pin):
     """Refuse a pin that something other than a node file has claimed."""
     if pin in ALWAYS_RESERVED:
@@ -212,6 +243,12 @@ def check_pin_is_safe(pin):
                   % (pin, role))
             print("  No node file mentions it, which is exactly why this check")
             print("  exists. Refusing.")
+            return False
+
+    for line in debugfs_consumers():
+        if re.search(r"\(GPIO%d\s*\)" % pin, line) and "|" in line:
+            print("  GPIO%d is claimed in the kernel: %s" % (pin, line.strip()))
+            print("  Refusing.")
             return False
 
     state = read_pin(pin)
@@ -236,14 +273,7 @@ def check_pin_is_free(pin, node_file):
         print("  could not read %s (%s); not checking pin use" % (node_file, exc))
         return True
 
-    claimed = {}
-    for device in node.devices:
-        for key in ("pin", "data_pin", "control_pin", "readback_pin"):
-            if device.params.get(key) == pin:
-                claimed[pin] = device.name
-    for name, load in (node.control.get("loads") or {}).items():
-        if load.get("control_pin") == pin:
-            claimed[pin] = "load %s" % name
+    claimed = config.claimed_pins(node.devices, node.control)
     if pin in claimed:
         print("  GPIO%d is declared in %s as %s. Refusing."
               % (pin, node_file, claimed[pin]))
@@ -253,7 +283,30 @@ def check_pin_is_free(pin, node_file):
 
 
 def run_checks(pin):
+    """Measure the pin. Any holder is killed even if a step raises.
+
+    Without that, an exception between spawning the holder and killing it
+    leaves the pin driven high until the machine reboots, with whatever is
+    attached to it energized.
+    """
     results = {}
+    holders = []
+
+    def hold():
+        child = spawn_holder(pin)
+        holders.append(child)
+        return child
+
+    try:
+        return _run_checks(pin, results, hold)
+    finally:
+        for child in holders:
+            if child.poll() is None:
+                child.kill()
+                child.wait(timeout=10)
+
+
+def _run_checks(pin, results, hold):
 
     print("\n== baseline, before anything drives it")
     before = read_pin(pin)
@@ -261,7 +314,7 @@ def run_checks(pin):
     results["baseline"] = before
 
     print("\n== while a process is driving it high")
-    child = spawn_holder(pin)
+    child = hold()
     time.sleep(0.5)
     driving = read_pin(pin)
     print("  %s" % describe(driving))
@@ -279,8 +332,8 @@ def run_checks(pin):
     print("  %s" % describe(after_kill))
     results["after_kill"] = after_kill
 
-    print("\n== after a process exits CLEANLY")
-    child = spawn_holder(pin)
+    print("\n== after a process exits CLEANLY (SIGTERM, cleanup runs)")
+    child = hold()
     time.sleep(0.5)
     child.send_signal(signal.SIGTERM)
     child.wait(timeout=10)
@@ -320,10 +373,20 @@ def verdict(results):
         print("  kernel debug file is readable.")
         return 2
 
-    released = killed.get("func") == "INPUT" or killed.get("level") == "0"
+    function = killed.get("func")
+    released = function == "INPUT"
+
+    if function == "OUTPUT" and killed.get("level") == "0":
+        print("  INCONCLUSIVE. A killed process left the pin still an output,")
+        print("  driving low. That is safe with an active-high relay module and")
+        print("  energizes an active-low one, and either way the line was not")
+        print("  released. Confirm the module is active-high before relying on")
+        print("  it, and prefer installing python3-lgpio so the line is freed.")
+        return 1
+
     if released:
         print("  PASS. A killed process left the pin at %s, %s."
-              % (killed.get("level"), killed.get("func")))
+              % (killed.get("level"), function))
         print("  Energize-to-connect holds: if the controller dies, the load")
         print("  drops. The irrigation fail-safe is real rather than assumed.")
     else:
@@ -333,7 +396,9 @@ def verdict(results):
         print("  controller would leave the inverter and pump energized.")
         print("  Fix before wiring anything: install python3-lgpio and set")
         print("  GPIOZERO_PIN_FACTORY=lgpio in the controller's unit file,")
-        print("  then run this again.")
+        print("  then run this again. Note that needs gpiozero 2.x, so on")
+        print("  Raspberry Pi OS Bullseye the machine has to be upgraded")
+        print("  first; 1.6.2 has no lgpio factory and no such package.")
 
     shared = results.get("shared_input")
     if shared is True:

@@ -29,14 +29,19 @@ NODE_FILES = DEPLOYED
 COMMAND = re.compile(r'collect",\s*\n?\s*"([A-Za-z0-9_]+)"')
 
 
-def fragments_for(site):
-    directory = REPO / "sites" / site / "telegraf.d"
+def fragments_for(node_path):
+    """Fragments belonging to one NODE, not to a whole site.
+
+    A site's nodes have different devices. Installing a site's fragments on
+    one node would start collectors for hardware attached to another machine,
+    and a test that unions device names across the site cannot see that.
+    """
+    directory = node_path.parent / "telegraf.d"
     if not directory.is_dir():
         return {}
-    out = {}
-    for path in sorted(directory.glob("*.conf")):
-        out[path] = path.read_text()
-    return out
+    prefix = node_path.stem + "-"
+    return {p: p.read_text()
+            for p in sorted(directory.glob(prefix + "*.conf"))}
 
 
 def devices_named_in(text):
@@ -56,7 +61,7 @@ def test_every_resident_device_has_a_stanza_to_run_it(path):
         pytest.skip("this node declares no resident devices")
 
     covered = set()
-    for _, text in fragments_for(path.parent.name).items():
+    for _, text in fragments_for(path).items():
         covered |= devices_named_in(text)
 
     missing = wanted - covered
@@ -66,52 +71,42 @@ def test_every_resident_device_has_a_stanza_to_run_it(path):
         % (path.name, ", ".join(sorted(missing))))
 
 
-@pytest.mark.parametrize("site", sorted({p.parent.name for p in NODE_FILES}))
-def test_no_stanza_runs_a_device_that_does_not_exist(site):
-    """A stanza left behind after a device was removed runs a collector for
-    hardware that is no longer declared."""
-    known = set()
-    for path in (REPO / "sites" / site).glob("*.yaml"):
-        known |= {d.name for d in load(path).devices}
+@pytest.mark.parametrize("path", NODE_FILES, ids=lambda p: "%s/%s" % (p.parent.name, p.name))
+def test_a_fragment_only_runs_devices_this_node_declares(path):
+    """A fragment naming another node's device starts a collector for hardware
+    that is not attached to this machine."""
+    node = load(path)
+    modes = {d.name: d.mode for d in node.devices}
 
-    for fragment, text in fragments_for(site).items():
-        for name in devices_named_in(text):
-            assert name in known, (
-                "%s runs device %r, which no node file in %s declares"
-                % (fragment.name, name, site))
-
-
-@pytest.mark.parametrize("site", sorted({p.parent.name for p in NODE_FILES}))
-def test_no_stanza_runs_a_poll_device_as_though_it_were_resident(site):
-    """Poll devices are collected by the single exec input. Running one as a
-    stream as well would publish it twice."""
-    modes = {}
-    for path in (REPO / "sites" / site).glob("*.yaml"):
-        for device in load(path).devices:
-            modes[device.name] = device.mode
-
-    for fragment, text in fragments_for(site).items():
-        for name in devices_named_in(text):
-            assert modes.get(name) != "poll", (
+    for fragment, text in fragments_for(path).items():
+        named = devices_named_in(text)
+        assert named, "%s names no device; the test would pass vacuously" % fragment.name
+        for name in named:
+            assert name in modes, (
+                "%s runs device %r, which %s does not declare"
+                % (fragment.name, name, path.name))
+            assert modes[name] != "poll", (
                 "%s streams %r, but it is a poll device and is already "
                 "collected by the exec input" % (fragment.name, name))
+            assert modes[name] != "controller", (
+                "%s streams %r, but it is a controller device and the "
+                "controller owns it" % (fragment.name, name))
 
 
-@pytest.mark.parametrize("site", sorted({p.parent.name for p in NODE_FILES}))
-def test_fragments_use_the_installed_paths(site):
+@pytest.mark.parametrize("path", NODE_FILES, ids=lambda p: "%s/%s" % (p.parent.name, p.name))
+def test_fragments_use_the_installed_paths(path):
     """A fragment referring to a developer's checkout works on a laptop and
     fails on the machine it was written for."""
-    for fragment, text in fragments_for(site).items():
-        for name in devices_named_in(text):
-            assert "/opt/monitoring/bin/collect" in text, fragment.name
-            assert "/etc/monitoring/node.yaml" in text, fragment.name
+    for fragment, text in fragments_for(path).items():
+        assert "/opt/monitoring/bin/collect" in text, fragment.name
+        assert "/etc/monitoring/node.yaml" in text, fragment.name
 
 
-@pytest.mark.parametrize("site", sorted({p.parent.name for p in NODE_FILES}))
-def test_resident_stanzas_do_not_ask_the_device_for_a_reading(site):
+@pytest.mark.parametrize("path", NODE_FILES, ids=lambda p: "%s/%s" % (p.parent.name, p.name))
+def test_resident_stanzas_do_not_ask_the_device_for_a_reading(path):
     """These devices talk when they feel like it; telegraf must read what the
     child prints rather than signal it."""
-    for fragment, text in fragments_for(site).items():
+    for fragment, text in fragments_for(path).items():
         if "inputs.execd" in text:
             assert 'signal = "none"' in text, fragment.name
             assert "restart_delay" in text, (
@@ -123,9 +118,25 @@ def test_the_install_script_removes_its_own_old_fragments():
     """Otherwise a device deleted from a node file leaves its stanza behind
     and keeps being collected."""
     script = (REPO / "deploy" / "install.sh").read_text()
-    assert "rm -f /etc/telegraf/telegraf.d/monitoring-*.conf" in script
+    assert "rm -f /etc/telegraf/telegraf.d/pi-monitoring-*.conf" in script
 
 
-def test_the_install_script_installs_the_node_s_resident_fragments():
+def test_the_install_script_installs_only_this_node_s_fragments():
     script = (REPO / "deploy" / "install.sh").read_text()
-    assert 'sites/$SITE/telegraf.d' in script
+    assert 'telegraf.d/$NODE"-*.conf' in script, (
+        "installing a whole site's fragments would start collectors for "
+        "hardware attached to a different machine")
+
+
+def test_the_install_script_checks_devices_as_the_collecting_user():
+    """Root can read a repository under a 0700 home directory that telegraf
+    cannot, so checking as root would pass and every collection would fail."""
+    script = (REPO / "deploy" / "install.sh").read_text()
+    assert "runuser -u telegraf" in script
+
+
+def test_the_install_script_stops_telegraf_before_probing():
+    """Its resident children hold the GPIO pins and serial ports; probing
+    while they run gives false failures and steals bytes from a live stream."""
+    script = (REPO / "deploy" / "install.sh").read_text()
+    assert "systemctl stop telegraf" in script

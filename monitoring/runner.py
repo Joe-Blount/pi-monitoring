@@ -42,10 +42,36 @@ def build_driver(device):
     return cls(device.name, device.params, device.tags)
 
 
+#: Longest failure reason written to standard error. telegraf truncates a
+#: command's stderr at 512 bytes in total, so several long messages would push
+#: each other out. The full reason goes into the published point instead,
+#: where there is no such limit.
+STDERR_REASON = 140
+
+
 def point(node, device, fields, now_ns):
-    """Render one reading as line protocol, with calibration applied."""
+    """Render one reading as line protocol, with calibration applied.
+
+    Every reading carries ok=1.0 so that a dashboard can ask whether a device
+    is working without inferring it from which fields happen to be present.
+    """
     corrected = calibration.apply(fields, device.calibration)
+    corrected = dict(corrected)
+    corrected.setdefault("ok", 1.0)
     return lineproto.line(node.measurement, device.tags, corrected, now_ns)
+
+
+def failure_point(node, device, reason, now_ns):
+    """What a device publishes when it could not be read.
+
+    A failure that exists only in a log file on a machine at the end of a
+    track is very nearly as silent as no failure at all. Publishing it puts
+    the fault on the same dashboard as the data, and the reason is a field
+    rather than a tag, so a changing string costs nothing.
+    """
+    return lineproto.line(
+        node.measurement, device.tags,
+        {"ok": 0.0, "error": str(reason)}, now_ns)
 
 
 def disabled_point(node, device, now_ns):
@@ -103,7 +129,12 @@ def poll(node, now_ns=None, out=None, err=None):
                 out.write(one + "\n")
         else:
             failures += 1
-            err.write("device %s (%s): %s\n" % (device.name, device.driver, result.error))
+            # Both: the point so it reaches a dashboard, the log line so it
+            # reaches whoever is reading journalctl at the time.
+            out.write(failure_point(node, device, result.error, now_ns) + "\n")
+            err.write("device %s (%s): %s\n"
+                      % (device.name, device.driver,
+                         str(result.error)[:STDERR_REASON]))
     out.flush()
     err.flush()
     return failures
@@ -248,7 +279,15 @@ def listing(node, out=None):
         state = "" if device.enabled else "  [disabled]"
         if device.name in stranded:
             state = "  [NOT COLLECTED: control is disabled]"
-        interval = "" if device.interval is None else "  every %gs" % device.interval
+        # Shown as informational: telegraf schedules the single poll command,
+        # so a per-device interval on a poll device describes an intention
+        # rather than what happens.
+        if device.interval is None:
+            interval = ""
+        elif device.mode == "poll":
+            interval = "  (telegraf sets the rate)"
+        else:
+            interval = "  every %gs" % device.interval
         out.write("  %-16s %-12s %-11s%s%s\n"
                   % (device.name, device.driver, device.mode, interval, state))
     if node.control:

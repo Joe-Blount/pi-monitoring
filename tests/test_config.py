@@ -2,10 +2,14 @@ import pathlib
 
 import pytest
 
-from monitoring import config
+from monitoring import config, drivers
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-KNOWN = {"host", "dht", "ds18b20", "rain_gauge", "vedirect", "ble_bms", "ble_shunt"}
+
+#: Ask the registry rather than hard-coding a list. A fixed list goes stale
+#: the day a driver is added, and then the committed node files fail for the
+#: wrong reason.
+KNOWN = drivers.names()
 
 
 def write(tmp_path, text):

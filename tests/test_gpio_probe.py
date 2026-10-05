@@ -133,3 +133,49 @@ def test_sharing_an_input_line_is_reported_either_way(probe, capsys):
     probe["verdict"]({"after_kill": {"level": "0", "func": "INPUT"},
                       "shared_input": False})
     assert "needs its own pin" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("pin,what", [
+    (23, "camera branch control"),
+    (25, "inverter relay"),
+    (22, "pump contactor"),
+])
+def test_pins_nested_under_a_load_are_refused(probe, pin, what, capsys):
+    """These live two levels down in the node file. A second copy of the pin
+    map missed them, so the probe would have driven the inverter relay while
+    reporting the pin as free."""
+    allowed = probe["check_pin_is_free"](
+        pin, str(REPO / "sites/blind1/downstairs.yaml"))
+    assert allowed is False, "%s (GPIO%d) must be refused" % (what, pin)
+    assert "Refusing" in capsys.readouterr().out
+
+
+def test_a_dht_overlay_pin_is_refused(probe, tmp_path, monkeypatch, capsys):
+    """Nothing in a node file binds the DHT pin: the overlay does. Without
+    this the probe drives a live sensor's data line."""
+    boot_config(probe, monkeypatch, "dtoverlay=dht11,gpiopin=17\n", tmp_path)
+    taken = probe["overlay_pins"]()
+    assert 17 in taken and "DHT" in taken[17]
+
+
+def test_a_dht_overlay_without_a_pin_defaults_to_four(probe, tmp_path, monkeypatch):
+    boot_config(probe, monkeypatch, "dtoverlay=dht11\n", tmp_path)
+    assert 4 in probe["overlay_pins"]()
+
+
+def test_a_pin_left_as_a_driving_output_is_not_called_a_pass(probe, capsys):
+    """Still an output driving low is not released. Safe with an active-high
+    module, energized with an active-low one, and false either way."""
+    code = probe["verdict"]({"after_kill": {"level": "0", "func": "OUTPUT"}})
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "INCONCLUSIVE" in out
+    assert "PASS" not in out
+
+
+def test_the_remedy_names_its_own_prerequisite(probe, capsys):
+    """The older of the two deployed systems ships gpiozero 1.6.2, which has
+    no lgpio factory, so the advice cannot be followed there as written."""
+    probe["verdict"]({"after_kill": {"level": "1", "func": "OUTPUT"}})
+    out = capsys.readouterr().out
+    assert "Bullseye" in out or "gpiozero 2" in out

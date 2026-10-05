@@ -18,7 +18,9 @@ switch, or a GPIO library.
 
 import json
 import os
+import sys
 import tempfile
+import threading
 import time
 
 from ..duration import seconds as _seconds
@@ -40,6 +42,7 @@ class RainCounter:
         self.clock = clock
         self.tips = 0
         self.last_tip = None
+        self._warned = False
         self.load()
 
     # -- persistence ------------------------------------------------------
@@ -53,14 +56,25 @@ class RainCounter:
         """
         if not self.state_file:
             return
+        if not os.path.exists(self.state_file):
+            return                      # a first run, which is not a problem
         try:
             with open(self.state_file) as handle:
                 saved = json.load(handle)
+            if not isinstance(saved, dict):
+                raise ValueError("expected an object, found %s"
+                                 % type(saved).__name__)
             self.tips = int(saved.get("tips", 0))
             self.last_tip = saved.get("last_tip")
-        except (OSError, ValueError, TypeError):
+        except Exception as exc:
+            # Starting from zero is right; doing it silently is not. A total
+            # that quietly resets looks like rain that stopped.
             self.tips = 0
             self.last_tip = None
+            sys.stderr.write(
+                "rain gauge: could not read %s (%s); the running total starts "
+                "again from zero\n" % (self.state_file, exc))
+            sys.stderr.flush()
 
     def save(self):
         """Write the count so a restart does not lose it.
@@ -85,9 +99,20 @@ class RainCounter:
                 os.fsync(handle.fileno())
             finally:
                 handle.close()
+            # The temporary file is created 0600 by its owner. During
+            # bring-up that owner is often root, and telegraf could then never
+            # read it again: the total would restart at zero on every boot,
+            # silently, forever.
+            os.chmod(temporary, 0o644)
             os.replace(temporary, self.state_file)
             temporary = None
-        except Exception:
+        except Exception as exc:
+            if not self._warned:
+                self._warned = True
+                sys.stderr.write("rain gauge: cannot save %s (%s); the total "
+                                 "will not survive a restart\n"
+                                 % (self.state_file, exc))
+                sys.stderr.flush()
             # Every failure, not only OSError: a path containing a null byte
             # raises ValueError, and a surprise from the filesystem must not
             # be the thing that stops rain being counted. Persistence is
@@ -128,6 +153,9 @@ class RainGaugeDriver(Driver):
     """Count tips on a GPIO pin and publish the running total."""
 
     description = "tipping bucket rain gauge"
+    # Counting edges needs a process that is always there. In poll mode
+    # nothing watches the pin between readings, so the total never moves.
+    modes = ("resident",)
 
     def __init__(self, name, params, tags):
         Driver.__init__(self, name, params, tags)
@@ -139,6 +167,7 @@ class RainGaugeDriver(Driver):
             self.params.get("state_file"),
             self.params.get("inches_per_tip", DEFAULT_INCHES_PER_TIP))
         self.heartbeat = _seconds(self.params.get("emit_every", "60s"))
+        self._tipped = threading.Event()
         self._button = None
 
     def _open(self):
@@ -160,7 +189,11 @@ class RainGaugeDriver(Driver):
                                   bounce_time=self.bounce_seconds)
         except Exception as exc:
             raise DriverError("cannot attach to GPIO%s: %s" % (self.pin, exc))
-        self._button.when_pressed = lambda *_: self.counter.tip()
+        def on_tip(*_):
+            self.counter.tip()
+            self._tipped.set()
+
+        self._button.when_pressed = on_tip
         return self._button
 
     def stream(self):
@@ -177,7 +210,11 @@ class RainGaugeDriver(Driver):
             if self.counter.tips != last_tips or now - last >= self.heartbeat:
                 last, last_tips = now, self.counter.tips
                 yield self.counter.fields()
-            time.sleep(0.2)
+            # Wait to be told, rather than waking several times a second
+            # forever to ask. The callback sets the event on a tip; otherwise
+            # this sleeps until the next heartbeat is due.
+            self._tipped.wait(timeout=max(0.1, self.heartbeat - (time.time() - last)))
+            self._tipped.clear()
 
     def read(self):
         """Return the current total without waiting for a tip."""
