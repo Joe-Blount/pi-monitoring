@@ -57,9 +57,9 @@ bin/
   pump-guard         independent run-time limiter
 sites/
   example/node.yaml  every option, with the reasoning
-  blind1/            upstairs.yaml, downstairs.yaml
-  garage/            garage.yaml
-deploy/              install script, systemd units, telegraf fragments
+  blind1/            upstairs.yaml, downstairs.yaml, telegraf.d/
+  garage/            garage.yaml, telegraf.d/
+deploy/              install script, systemd units, the shared telegraf input
 tests/               fixtures and tests, none of which need hardware
 ```
 
@@ -164,9 +164,15 @@ sudo deploy/install.sh <site> <node>
 sudo deploy/install.sh garage garage
 ```
 
-Idempotent, so updating is `git pull` and run it again. It installs a telegraf
-**input** only and never touches the output, so a machine that already writes
+Idempotent, so updating is `git pull` and run it again. It installs telegraf
+**inputs** only and never touches the output, so a machine that already writes
 to InfluxDB keeps its existing configuration and its existing credentials.
+
+Poll devices share one `exec` input, common to every machine. Resident devices
+need one `execd` stanza each, committed per site under `sites/<site>/telegraf.d/`.
+A test asserts that those fragments and the node file agree, because a resident
+device with no stanza never runs and nothing reports it -- it simply never
+appears in the data.
 
 A device that fails its check produces a warning, not a refusal. A dead five
 dollar sensor must never block a software update at a site nobody can reach.

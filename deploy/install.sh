@@ -74,11 +74,38 @@ for group in gpio i2c dialout bluetooth; do
     fi
 done
 
-echo "==> telegraf input"
+echo "==> telegraf inputs"
 install -d -m 0755 /etc/telegraf/telegraf.d
-install -m 0644 "$REPO/deploy/telegraf.d/monitoring.conf" /etc/telegraf/telegraf.d/monitoring.conf
-echo "    /etc/telegraf/telegraf.d/monitoring.conf installed (input only; the"
-echo "    output on this machine is left exactly as it was)"
+
+# Remove this project's previous fragments first. Without that, a device
+# deleted from a node file would leave its stanza behind and telegraf would
+# keep running a collector for hardware that is no longer declared.
+rm -f /etc/telegraf/telegraf.d/monitoring.conf
+rm -f /etc/telegraf/telegraf.d/monitoring-*.conf
+
+# Poll devices: one exec input for the whole node, common to every machine.
+install -m 0644 "$REPO/deploy/telegraf.d/monitoring.conf" \
+    /etc/telegraf/telegraf.d/monitoring.conf
+
+# Resident devices: one execd stanza each, committed per node. A node with
+# none is normal and the loop simply finds nothing.
+resident=0
+if [[ -d "$REPO/sites/$SITE/telegraf.d" ]]; then
+    for fragment in "$REPO/sites/$SITE/telegraf.d"/*.conf; do
+        [[ -e "$fragment" ]] || continue
+        install -m 0644 "$fragment" \
+            "/etc/telegraf/telegraf.d/monitoring-$(basename "$fragment")"
+        resident=$((resident + 1))
+    done
+fi
+echo "    1 poll fragment and $resident resident fragment(s) installed"
+echo "    (inputs only; the output on this machine is left exactly as it was)"
+
+# The node file is the authority on what should be running. Saying so here
+# turns a mismatch into something visible at install rather than into data
+# that silently never arrives.
+echo "==> what this node expects to collect"
+/opt/monitoring/bin/collect --node /etc/monitoring/node.yaml --list | sed "s/^/    /"
 
 echo "==> checking devices"
 # A warning, never a refusal. A dead five dollar sensor must not block a
