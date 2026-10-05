@@ -1,0 +1,48 @@
+# Run the test suite on every push.
+#
+# The point is to catch a broken commit before it reaches a machine at the end
+# of a dirt road, where fixing it means either a working overlay network or a
+# drive.
+#
+# Linux runners only. They bill at the plain rate, where macOS bills at ten
+# times that and Windows at twice, and nothing here is platform specific.
+#
+# Two Python versions on purpose: 3.9 because that is what the oldest deployed
+# machine runs, and 3.11 because that is what the newest runs. A change that
+# only works on one of them is a change that breaks a site.
+
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.11"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: install
+        run: python -m pip install -e ".[dev]"
+
+      - name: tests
+        run: python -m pytest -q
+
+      - name: every committed node file is valid
+        run: |
+          for node in sites/*/*.yaml; do
+            echo "== $node"
+            python bin/collect --node "$node" --list
+          done

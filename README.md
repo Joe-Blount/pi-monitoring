@@ -171,6 +171,11 @@ to InfluxDB keeps its existing configuration and its existing credentials.
 A device that fails its check produces a warning, not a refusal. A dead five
 dollar sensor must never block a software update at a site nobody can reach.
 
+## Continuous integration
+
+Every push runs the suite on Python 3.9 and 3.11, the oldest and newest
+versions deployed, and loads every committed node file. Linux runners only.
+
 ## Development
 
 ```
@@ -185,9 +190,13 @@ No hardware, no network, no credentials.
 
 Telemetry: the core is written and tested, in both poll and resident mode.
 Line protocol, the configuration loader, calibration, the runner, the host
-driver, the Victron VE.Direct driver, the DS18B20 and the rain gauge. The DHT
-sensor, the EG4 inverter and the two Bluetooth devices are registered as stubs
-that fail loudly rather than silently returning nothing.
+driver, the Victron VE.Direct driver, the DS18B20, the rain gauge and the
+Voltronic PI30 inverter. The DHT sensor and the two Bluetooth devices are
+registered as stubs that fail loudly rather than silently returning nothing.
+
+Five of eight drivers are written. The PI30 driver is tested against the
+protocol's published frames but has not yet met the inverter, which is waiting
+on a serial adapter. The Bluetooth drivers wait on knowing their protocols.
 
 Control: designed, not written, and waiting on a bench rig that must
 physically demonstrate four things before any contactor is bought. That a

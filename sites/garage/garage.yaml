@@ -26,6 +26,24 @@ devices:
     interval: 30s
     tags: {location: pi}
 
-# The EG4 inverter is not here yet. It needs a USB-to-RS232 adapter into the
-# jack marked RS232 or COM, after which it speaks the Voltronic PI30 ASCII
-# protocol at 2400 8N1 and becomes a device entry using the pi30 driver.
+# The EG4 inverter is waiting on one cable: a USB-to-RS232 adapter with a DB9
+# male end, which mates with the RJ45-to-DB9 cable that came with the inverter.
+# That goes into the jack printed RS232 or COM.
+#
+# NOT the jack printed RS485, which is the battery channel where the inverter
+# is the master and never answers a query. Not the USB-B port either, which is
+# documented as unusable for monitoring on this model. Both were tried.
+#
+# Uncomment when the adapter arrives. If the first read fails its checksum,
+# this firmware computes it differently from the specification; set
+# verify_reply_crc: false rather than assuming the wiring is wrong.
+#
+# - name: inverter
+#   driver: pi30
+#   mode: poll
+#   interval: 30s
+#   tags: {location: inverter}
+#   params:
+#     port: /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_XXXXXXXX-if00-port0
+#     baud: 2400
+#     queries: [QPIGS, QMOD]

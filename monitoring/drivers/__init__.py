@@ -20,7 +20,7 @@ REGISTRY = {
     "ds18b20": ("monitoring.drivers.ds18b20", "Ds18b20Driver"),
     "rain_gauge": ("monitoring.drivers.rain_gauge", "RainGaugeDriver"),
     "vedirect": ("monitoring.drivers.vedirect", "VedirectDriver"),
-    "pi30": ("monitoring.drivers.stubs", "Pi30Driver"),
+    "pi30": ("monitoring.drivers.pi30", "Pi30Driver"),
     "ble_bms": ("monitoring.drivers.stubs", "BleBmsDriver"),
     "ble_shunt": ("monitoring.drivers.stubs", "BleShuntDriver"),
 }

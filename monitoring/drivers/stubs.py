@@ -33,17 +33,6 @@ class DhtDriver(NotWrittenYet):
     device = "dht"
 
 
-class Pi30Driver(NotWrittenYet):
-    """Voltronic PI30 ASCII protocol, as used by EG4 all-in-one inverters.
-
-    2400 8N1 over the port marked RS232 or COM, not the RS485 BMS jack and not
-    the USB-B port. A query is the command text, a two byte CRC-16/XMODEM, and
-    a carriage return; any CRC byte equal to 0x28, 0x0D or 0x0A is incremented
-    by one. A reply opens with "(" and closes with its own CRC.
-    """
-    device = "pi30"
-
-
 class BleBmsDriver(NotWrittenYet):
     """Battery management system over Bluetooth low energy.
 
