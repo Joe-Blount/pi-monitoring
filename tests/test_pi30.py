@@ -221,3 +221,36 @@ def test_a_reading_becomes_valid_line_protocol():
     assert "pv_watts=1230.0" in line
     assert 'mode="battery"' in line
     assert "load_on=1.0" in line
+
+
+def test_a_truncated_reply_is_refused_even_with_checksums_off():
+    """read_until returns what it has when it times out. Without a terminator
+    check, strip() takes the last two payload characters for a checksum and
+    the remainder parses as perfectly ordinary values -- and turning checksums
+    off is the documented remedy for a firmware mismatch."""
+    truncated = ("(" + SUNNY[:40]).encode()          # no CRC, no terminator
+    d = driver_with({"QPIGS": truncated}, verify_reply_crc=False,
+                    queries=["QPIGS"])
+    with pytest.raises(DriverError) as exc:
+        d.read()
+    assert "incomplete" in str(exc.value)
+
+
+def test_a_query_that_fails_is_reported_even_when_another_succeeds(capsys):
+    """Otherwise a status query failing every interval while the mode query
+    answers looks like a working inverter that has stopped reporting its
+    battery."""
+    d = driver_with({"QMOD": reply("B")}, queries=["QPIGS", "QMOD"])
+    values = d.read()
+    assert values == {"mode": "battery"}
+    assert "QPIGS" in capsys.readouterr().err
+
+
+def test_serial_ports_are_opened_exclusively():
+    """A second reader must fail saying so, rather than both seeing torn
+    frames, which looks exactly like a cable fault."""
+    import inspect
+    from monitoring.drivers import vedirect
+    for module in (pi30, vedirect):
+        source = inspect.getsource(module)
+        assert "exclusive=True" in source, module.__name__

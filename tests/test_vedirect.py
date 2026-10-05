@@ -302,3 +302,91 @@ def test_streaming_emits_again_once_the_window_has_passed(monkeypatch):
     monkeypatch.setattr(vedirect.time, "time", advancing)
     emitted = drain(streaming_driver(fx.frame(fx.SUNNY) * 10))
     assert len(emitted) > 1
+
+
+# -- the driver's own production paths ---------------------------------------
+
+def frame_source(data):
+    driver = vedirect.VedirectDriver("mppt", {"port": "/dev/fake",
+                                              "frame_timeout": 0.01}, {})
+    driver._serial = ReplayPort(data)
+    return driver
+
+
+def test_read_returns_the_first_good_frame():
+    """The method telegraf actually calls. Only the parser underneath it had
+    a test."""
+    values = frame_source(fx.frame(fx.SUNNY)).read()
+    assert values["battery_volts"] == 13.51
+    assert values["charge_state"] == "bulk"
+
+
+def test_read_skips_a_corrupt_frame_and_uses_the_next():
+    """A noisy line is normal; the controller simply sends another."""
+    values = frame_source(fx.corrupt(fx.frame(fx.SUNNY)) + fx.frame(fx.NIGHT)).read()
+    assert values["pv_watts"] == 0.0
+
+
+def test_read_gives_up_when_every_frame_is_corrupt():
+    data = fx.corrupt(fx.frame(fx.SUNNY)) * 5
+    with pytest.raises(DriverError):
+        frame_source(data).read()
+
+
+def test_check_reports_the_controller_identity():
+    """What the install script prints while someone is standing at the
+    machine, so it has to name the device rather than just say yes."""
+    detail = frame_source(fx.frame(fx.SUNNY)).check()
+    assert "HQ25453MGTX" in detail and "0xA057" in detail
+
+
+class EndlessCorruptPort:
+    """A line that keeps talking and never says anything valid.
+
+    Distinct from a silent port: here bytes do arrive, so the idle limit never
+    fires and the frame deadline is what has to stop it.
+    """
+
+    def __init__(self):
+        self.data = fx.corrupt(fx.frame(fx.SUNNY))
+        self.at = 0
+
+    def read(self, n):
+        out = self.data[self.at:self.at + n]
+        self.at = (self.at + n) % len(self.data)
+        return out
+
+    def close(self):
+        pass
+
+
+def test_check_fails_clearly_when_a_talkative_line_says_nothing_valid():
+    driver = vedirect.VedirectDriver("mppt", {"port": "/dev/fake",
+                                              "frame_timeout": 0.2}, {})
+    driver._serial = EndlessCorruptPort()
+    with pytest.raises(DriverError) as exc:
+        driver.check()
+    assert "none valid" in str(exc.value)
+    assert "nothing else holds the port" in str(exc.value)
+
+
+def test_raw_returns_the_unparsed_fields_for_bringing_up_a_cable():
+    out = frame_source(fx.frame(fx.SUNNY)).raw()
+    assert out["checksum_ok"] is True
+    assert out["fields"]["V"] == "13510"
+
+
+def test_a_long_run_of_corrupt_frames_ends_the_stream():
+    """A persistently bad line must exit so telegraf restarts the child,
+    rather than streaming silence forever."""
+    driver = frame_source(fx.corrupt(fx.frame(fx.SUNNY)) * 120)
+    with pytest.raises(DriverError) as exc:
+        list(driver.stream())
+    assert "consecutive frames failed" in str(exc.value)
+
+
+def test_an_off_reason_that_is_not_hex_does_not_lose_the_frame():
+    values = vedirect.normalize(dict(fx.SUNNY, OR="unexpected"))
+    assert values["off_reason"] == "unexpected"
+    assert "off_reason_code" not in values
+    assert values["battery_volts"] == 13.51

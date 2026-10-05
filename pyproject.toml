@@ -12,7 +12,7 @@ requires-python = ">=3.9"
 dependencies = ["PyYAML>=5.4"]
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+dev = ["pytest>=7", "gpiozero>=2"]   # gpiozero for its mock pin factory
 
 [tool.setuptools.packages.find]
 include = ["monitoring*"]

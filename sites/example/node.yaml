@@ -21,6 +21,9 @@ measurement: example          # InfluxDB measurement for everything this node
                               # every existing dashboard.
 
 tags:
+  # A tag naming the device is added automatically to every device, so two
+  # devices sharing a location cannot write into one series. Set `device`
+  # explicitly on a device only to choose a different series name.
   node: example               # REQUIRED when a site has more than one machine.
                               # Every Pi here is named raspberrypi and every
                               # node runs the host driver with the same field

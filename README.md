@@ -118,6 +118,11 @@ real problem.
   publishes something every interval; one that is `enabled: false` publishes
   `enabled=0.0` and nothing else. A device this machine does not have is
   absent from the configuration instead, which is a different statement.
+- **A device that cannot be read publishes that it failed**, with the reason
+  as a field, rather than publishing nothing. A gap in a graph is ambiguous;
+  `ok=0.0` beside an error string is not.
+- **Every device is tagged with its own name**, so two devices sharing a
+  location cannot write into one series and silently overwrite each other.
 - **A failed write is logged, never discarded.**
 - **Counters persist.** Anything that accumulates, such as a rain total or a
   lockout counter, survives a restart in a state file, because the thing it

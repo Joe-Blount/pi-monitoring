@@ -94,6 +94,12 @@ def read_device(node, device, now_ns=None):
     try:
         driver = build_driver(device)
         fields = driver.read()
+        if not any(value is not None for value in (fields or {}).values()):
+            # Every reading carries ok=1.0, so without this check a driver
+            # that returned nothing would publish a point saying the device is
+            # healthy and carrying no measurement at all. A read that produced
+            # no value is a failed read.
+            raise DriverError("the device returned no usable values")
         return Result(device, lines=[point(node, device, fields, now_ns)])
     except DriverError as exc:
         return Result(device, error=str(exc))

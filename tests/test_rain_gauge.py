@@ -155,3 +155,128 @@ def test_attaching_without_gpiozero_says_what_to_install(tmp_path, monkeypatch):
     with pytest.raises(DriverError) as exc:
         driver.check()
     assert "python3-gpiozero" in str(exc.value)
+
+
+def test_a_state_file_holding_the_wrong_shape_does_not_crash_the_child(tmp_path, capsys):
+    """A JSON list where an object was expected used to raise, and the resident
+    child then restarted every ten seconds forever."""
+    state = tmp_path / "rain.json"
+    state.write_text('["not", "an", "object"]')
+    c = RainCounter(str(state), 0.011)
+    assert c.tips == 0
+    c.tip()
+    assert c.tips == 1
+    assert "could not read" in capsys.readouterr().err
+
+
+def test_an_unreadable_state_file_says_so_rather_than_resetting_in_silence(
+        tmp_path, capsys):
+    """A total that quietly restarts at zero looks like rain that stopped."""
+    state = tmp_path / "rain.json"
+    state.write_text("{not json")
+    RainCounter(str(state), 0.011)
+    assert "starts again from zero" in capsys.readouterr().err
+
+
+def test_the_state_file_is_readable_by_more_than_its_creator(tmp_path):
+    """Written once by root during bring-up, a 0600 file becomes unreadable to
+    the collector, which then restarts the total at zero on every boot."""
+    import os
+    import stat
+    state = tmp_path / "rain.json"
+    c = RainCounter(str(state), 0.011)
+    c.tip()
+    mode = stat.S_IMODE(os.stat(state).st_mode)
+    assert mode & stat.S_IRGRP and mode & stat.S_IROTH, oct(mode)
+
+
+# -- the loop that actually runs in production -------------------------------
+
+@pytest.fixture
+def mock_pins():
+    """gpiozero's own mock factory, so the real driver can be exercised."""
+    gpiozero = pytest.importorskip("gpiozero")
+    from gpiozero.pins.mock import MockFactory
+    previous = gpiozero.Device.pin_factory
+    gpiozero.Device.pin_factory = MockFactory()
+    yield gpiozero.Device.pin_factory
+    gpiozero.Device.pin_factory.reset()
+    gpiozero.Device.pin_factory = previous
+
+
+def tip_the_bucket(factory, pin=6):
+    """Close and release the reed switch, which pulls the pin to ground."""
+    p = factory.pin(pin)
+    p.drive_low()
+    p.drive_high()
+
+
+def test_a_real_tip_on_the_pin_is_counted(mock_pins, tmp_path):
+    """Everything above this tests the counter. This tests the wiring to it:
+    a falling edge on the pin must reach the count."""
+    driver = RainGaugeDriver("rain", {"pin": 6, "bounce_ms": 0,
+                                      "state_file": str(tmp_path / "r.json"),
+                                      "inches_per_tip": 0.011}, {})
+    try:
+        driver.check()                      # attaches to the pin
+        assert driver.counter.tips == 0
+        tip_the_bucket(mock_pins)
+        assert driver.counter.tips == 1
+        assert driver.read()["rain_inches"] == 0.011
+    finally:
+        driver.close()
+
+
+def test_the_stream_publishes_when_the_bucket_tips(mock_pins, tmp_path):
+    """The production loop. It had no test at all, despite being the only code
+    that runs for this device once installed."""
+    driver = RainGaugeDriver("rain", {"pin": 6, "bounce_ms": 0,
+                                      "emit_every": "30s",
+                                      "state_file": str(tmp_path / "r.json")}, {})
+    try:
+        stream = driver.stream()
+        first = next(stream)                # the opening reading
+        assert first["rain_tips"] == 0.0
+
+        tip_the_bucket(mock_pins)
+        second = next(stream)               # woken by the tip, not by a timer
+        assert second["rain_tips"] == 1.0
+        assert second["rain_inches"] == 0.011
+    finally:
+        driver.close()
+
+
+def test_the_stream_publishes_even_when_it_is_not_raining(mock_pins, tmp_path):
+    """Without this the series simply stops in dry weather, which is
+    indistinguishable from the gauge having failed."""
+    driver = RainGaugeDriver("rain", {"pin": 6, "bounce_ms": 0,
+                                      "emit_every": "0.2s",
+                                      "state_file": str(tmp_path / "r.json")}, {})
+    try:
+        stream = driver.stream()
+        next(stream)
+        heartbeat = next(stream)            # no tip happened at all
+        assert heartbeat["rain_tips"] == 0.0
+    finally:
+        driver.close()
+
+
+def test_the_count_survives_being_reattached(mock_pins, tmp_path):
+    """A restart must not lose the total, which is the whole point of the
+    state file. Exercised through the driver rather than the counter."""
+    state = str(tmp_path / "r.json")
+    first = RainGaugeDriver("rain", {"pin": 6, "bounce_ms": 0,
+                                     "state_file": state}, {})
+    try:
+        first.check()
+        tip_the_bucket(mock_pins)
+        tip_the_bucket(mock_pins)
+    finally:
+        first.close()
+
+    second = RainGaugeDriver("rain", {"pin": 6, "bounce_ms": 0,
+                                      "state_file": state}, {})
+    try:
+        assert second.read()["rain_tips"] == 2.0
+    finally:
+        second.close()

@@ -48,7 +48,38 @@ tags: {node: upstairs}
 devices:
   - {name: host, driver: host, mode: poll, tags: {location: pi}}
 """), KNOWN)
-    assert node.devices[0].tags == {"node": "upstairs", "location": "pi"}
+    assert node.devices[0].tags == {"node": "upstairs", "location": "pi",
+                                    "device": "host"}
+
+
+def test_every_device_is_tagged_with_its_own_name(tmp_path):
+    """Two devices sharing a location would otherwise write into one series,
+    and any field name they have in common silently overwrites. That became
+    live the moment every reading started carrying a health field."""
+    node = config.load(write(tmp_path, """
+site: s
+node: n
+measurement: m
+devices:
+  - {name: box, driver: host, mode: poll, tags: {location: pi}}
+  - {name: host, driver: host, mode: poll, tags: {location: pi}}
+"""), KNOWN)
+    assert node.devices[0].tags["device"] == "box"
+    assert node.devices[1].tags["device"] == "host"
+    assert node.devices[0].tags != node.devices[1].tags
+
+
+def test_a_node_file_may_name_a_series_itself(tmp_path):
+    """Overridable, for a file that wants two devices to share a series on
+    purpose, or to keep a name that a dashboard already uses."""
+    node = config.load(write(tmp_path, """
+site: s
+node: n
+measurement: m
+devices:
+  - {name: internal_name, driver: host, mode: poll, tags: {device: public_name}}
+"""), KNOWN)
+    assert node.devices[0].tags["device"] == "public_name"
 
 
 def test_a_device_tag_overrides_a_node_tag(tmp_path):
@@ -192,3 +223,29 @@ def test_the_committed_site_files_are_valid(path):
     """The files actually deployed must pass the same validation as any other."""
     node = config.load(path, KNOWN)
     assert node.measurement and node.site and node.node
+
+
+@pytest.mark.parametrize("value", [0, 1, "false", "no", None, []])
+def test_enabled_must_be_a_real_boolean(tmp_path, value):
+    """`enabled: 0` and `enabled: "false"` both read as true to a loose test,
+    which is the wrong way round for a setting whose purpose is to stop
+    something."""
+    import yaml as _yaml
+    text = ("site: s\nnode: n\nmeasurement: m\ndevices:\n"
+            "  - {name: x, driver: host, mode: poll, enabled: %s}\n"
+            % _yaml.safe_dump(value).strip())
+    with pytest.raises(config.ConfigError) as exc:
+        config.load(write(tmp_path, text), KNOWN)
+    assert "true or false" in str(exc.value)
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_a_real_boolean_is_accepted(tmp_path, value):
+    node = config.load(write(tmp_path, """
+site: s
+node: n
+measurement: m
+devices:
+  - {name: x, driver: host, mode: poll, enabled: %s}
+""" % ("true" if value else "false")), KNOWN)
+    assert node.devices[0].enabled is value

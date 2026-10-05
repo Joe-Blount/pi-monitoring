@@ -24,6 +24,7 @@ class NotWrittenYet(Driver):
 
 
 class BleBmsDriver(NotWrittenYet):
+    description = "battery management system over Bluetooth (not written yet)"
     """Battery management system over Bluetooth low energy.
 
     Connect, read, disconnect rather than holding the link: these modules
@@ -37,6 +38,7 @@ class BleBmsDriver(NotWrittenYet):
 
 
 class BleShuntDriver(NotWrittenYet):
+    description = "battery shunt over Bluetooth (not written yet)"
     """Battery shunt over Bluetooth low energy.
 
     Same connection discipline as the battery management system. The sign of

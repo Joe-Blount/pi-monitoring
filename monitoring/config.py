@@ -228,7 +228,13 @@ def load(path, known_drivers=None):
         elif mode == "poll":
             interval = 30.0
 
+        # The device's own name, so that two devices sharing a location
+        # cannot write into one series. Without it they collide on any field
+        # name they have in common, and one value silently replaces the other
+        # with no error anywhere. Overridable, for a node file that wants to
+        # name a series something else.
         tags = dict(node.tags)
+        tags["device"] = name
         tags.update(entry.get("tags") or {})
 
         node.devices.append(Device(

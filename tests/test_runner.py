@@ -1,4 +1,5 @@
 import io
+import pathlib
 
 import pytest
 
@@ -58,7 +59,7 @@ def test_a_reading_becomes_a_point(tmp_path, doubles):
     node = node_with(tmp_path, "  - {name: a, driver: good, mode: poll}\n")
     result = runner.read_device(node, node.find("a"), NOW)
     assert result.ok
-    assert result.lines == ["m ok=1.0,value=2.0 %d" % NOW]
+    assert result.lines == ["m,device=a ok=1.0,value=2.0 %d" % NOW]
 
 
 def test_calibration_is_applied_to_the_reading(tmp_path, doubles):
@@ -68,7 +69,7 @@ def test_calibration_is_applied_to_the_reading(tmp_path, doubles):
     calibration: {value: {scale: 10.0, offset: 1.0}}
 """)
     result = runner.read_device(node, node.find("a"), NOW)
-    assert result.lines == ["m ok=1.0,value=21.0 %d" % NOW]
+    assert result.lines == ["m,device=a ok=1.0,value=21.0 %d" % NOW]
 
 
 def test_a_disabled_device_publishes_that_it_is_disabled(tmp_path, doubles):
@@ -77,7 +78,7 @@ def test_a_disabled_device_publishes_that_it_is_disabled(tmp_path, doubles):
     node = node_with(tmp_path, "  - {name: a, driver: good, mode: poll, enabled: false}\n")
     result = runner.read_device(node, node.find("a"), NOW)
     assert result.ok and result.skipped
-    assert result.lines == ["m enabled=0.0 %d" % NOW]
+    assert result.lines == ["m,device=a enabled=0.0 %d" % NOW]
 
 
 def test_a_dead_sensor_reports_an_error_rather_than_raising(tmp_path, doubles):
@@ -187,6 +188,21 @@ class FailingStreamDriver(Driver):
         raise DriverError("the cable was unplugged")
 
 
+class ExplodingMidStreamDriver(Driver):
+    description = "test double with a bug partway through a stream"
+
+    def stream(self):
+        yield {"value": 1.0}
+        raise ZeroDivisionError("a bug, not a cable")
+
+
+class EmptyReadingDriver(Driver):
+    description = "test double whose reading has nothing in it"
+
+    def read(self):
+        return {"everything": None}
+
+
 class EndingStreamDriver(Driver):
     description = "test double whose device simply stops"
 
@@ -216,8 +232,9 @@ def test_streaming_prints_a_line_per_reading(tmp_path, stream_doubles):
                                 max_readings=3, clock=frozen_clock)
     assert code == 0
     assert out.getvalue().splitlines() == [
-        "m ok=1.0,value=1.0 1700000000", "m ok=1.0,value=2.0 1700000000",
-        "m ok=1.0,value=3.0 1700000000"]
+        "m,device=a ok=1.0,value=1.0 1700000000",
+        "m,device=a ok=1.0,value=2.0 1700000000",
+        "m,device=a ok=1.0,value=3.0 1700000000"]
 
 
 def test_a_device_that_goes_away_mid_stream_exits_non_zero(tmp_path, stream_doubles):
@@ -228,7 +245,7 @@ def test_a_device_that_goes_away_mid_stream_exits_non_zero(tmp_path, stream_doub
     code = runner.stream_device(node, node.find("a"), out, err, clock=frozen_clock)
     assert code == 1
     assert "the cable was unplugged" in err.getvalue()
-    assert out.getvalue().strip() == "m ok=1.0,value=1.0 1700000000"
+    assert out.getvalue().strip() == "m,device=a ok=1.0,value=1.0 1700000000"
 
 
 def test_a_stream_that_simply_ends_is_also_a_failure(tmp_path, stream_doubles):
@@ -252,7 +269,7 @@ def test_a_disabled_resident_device_keeps_reporting_that_it_is_disabled(
                                 max_readings=2, sleep=slept.append, clock=frozen_clock)
     assert code == 0
     assert out.getvalue().splitlines() == [
-        "m enabled=0.0 1700000000", "m enabled=0.0 1700000000"]
+        "m,device=a enabled=0.0 1700000000", "m,device=a enabled=0.0 1700000000"]
     assert slept == [30.0]
 
 
@@ -265,7 +282,7 @@ def test_calibration_applies_to_streamed_readings_too(tmp_path, stream_doubles):
     out = io.StringIO()
     runner.stream_device(node, node.find("a"), out, io.StringIO(),
                          max_readings=1, clock=frozen_clock)
-    assert out.getvalue().strip() == "m ok=1.0,value=101.0 1700000000"
+    assert out.getvalue().strip() == "m,device=a ok=1.0,value=101.0 1700000000"
 
 
 # -- devices nothing will collect --------------------------------------------
@@ -326,3 +343,58 @@ def test_poll_is_unaffected_by_stranded_devices(tmp_path):
     node collects normally."""
     node = controller_node(tmp_path, control_enabled=False)
     assert [d.name for d in node.by_mode("poll")] == ["host"]
+
+
+def test_streaming_refuses_a_device_the_controller_owns(tmp_path, stream_doubles):
+    """Streaming it here would fight the controller for the port."""
+    import subprocess
+    import sys as _sys
+    path = tmp_path / "node.yaml"
+    path.write_text("""
+site: s
+node: n
+measurement: m
+devices:
+  - {name: mppt, driver: vedirect, mode: controller, params: {port: /dev/x}}
+control:
+  enabled: true
+  loads:
+    cameras: {control_pin: 23}
+""")
+    repo = pathlib.Path(__file__).resolve().parent.parent
+    out = subprocess.run(
+        [_sys.executable, str(repo / "bin" / "collect"), "mppt",
+         "--node", str(path), "--stream"],
+        capture_output=True, text=True, timeout=60)
+    assert out.returncode == 2
+    assert "controller owns" in out.stderr
+
+
+def test_a_driver_that_crashes_mid_stream_is_named_not_swallowed(
+        tmp_path, stream_doubles):
+    """A bug in a driver must not look like a dead sensor, and must end the
+    process so telegraf restarts it."""
+    REGISTRY["exploder"] = ("tests.test_runner", "ExplodingMidStreamDriver")
+    try:
+        node = node_with(tmp_path, "  - {name: a, driver: exploder, mode: resident}\n")
+        err = io.StringIO()
+        code = runner.stream_device(node, node.find("a"), io.StringIO(), err,
+                                    clock=frozen_clock)
+        assert code == 1
+        assert "ZeroDivisionError" in err.getvalue()
+    finally:
+        REGISTRY.pop("exploder", None)
+
+
+def test_a_driver_returning_nothing_usable_is_reported_not_crashed(
+        tmp_path, doubles):
+    """A reading with no usable fields cannot be written. That must surface as
+    a device error, not as a traceback that takes the process down."""
+    REGISTRY["empty"] = ("tests.test_runner", "EmptyReadingDriver")
+    try:
+        node = node_with(tmp_path, "  - {name: a, driver: empty, mode: poll}\n")
+        result = runner.read_device(node, node.find("a"), NOW)
+        assert not result.ok
+        assert "no usable values" in result.error
+    finally:
+        REGISTRY.pop("empty", None)

@@ -140,3 +140,19 @@ def test_the_install_script_stops_telegraf_before_probing():
     while they run gives false failures and steals bytes from a live stream."""
     script = (REPO / "deploy" / "install.sh").read_text()
     assert "systemctl stop telegraf" in script
+
+
+def test_telegraf_is_told_to_log_a_failing_device():
+    """Without this telegraf discards the command's stderr whenever the exit
+    code is zero, which is the normal case when one device fails and the rest
+    succeed. The failure would then appear nowhere at all."""
+    conf = (REPO / "deploy" / "telegraf.d" / "monitoring.conf").read_text()
+    assert "log_stderr = true" in conf
+
+
+def test_the_poll_command_has_room_for_a_retrying_sensor():
+    """A sensor that retries can take several seconds. telegraf's default
+    command timeout is five, and a timeout looks exactly like a dead sensor."""
+    conf = (REPO / "deploy" / "telegraf.d" / "monitoring.conf").read_text()
+    match = re.search(r'timeout\s*=\s*"(\d+)s"', conf)
+    assert match and int(match.group(1)) >= 15
