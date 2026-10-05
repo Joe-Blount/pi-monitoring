@@ -1,0 +1,22 @@
+# Never commit real credentials. influx.env.example is the only one tracked.
+influx.env
+*.env
+!influx.env.example
+
+# Editor leftovers
+*.swp
+*.swo
+*~
+.DS_Store
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# Captured device output used to build fixtures. Curated fixtures under
+# tests/fixtures/ are tracked; raw captures are not.
+*.cap
+*.raw

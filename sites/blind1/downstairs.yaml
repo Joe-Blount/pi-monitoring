@@ -1,0 +1,172 @@
+# Deer blind, downstairs Pi: power devices and load control.
+#
+# NOT BUILT YET. This machine does not exist. The file is here so the schema
+# can be reviewed and so the design has somewhere concrete to live.
+#
+# Before any of the control section is enabled, a bench rig must prove four
+# things that the safety argument rests on:
+#
+#   1. the relay stays off through a cold boot with the gpio= line in place
+#   2. kill -9 of a process driving a pin high actually drops the relay
+#   3. which gpiozero pin factory is in use (must be the character device)
+#   4. whether two processes can read one input line
+#
+# Until then, treat every threshold below as a placeholder.
+
+site: blind1
+node: downstairs
+measurement: blind1
+tags:
+  node: downstairs
+
+
+battery:
+  bank_capacity_ah: 520
+  nominal_volts: 12
+  monitored_represents_bank: true     # checked repeatedly against the shunt:
+                                      # state of charge and charge rate track
+                                      # proportionally
+
+  packs:
+    - {name: chins320, capacity_ah: 320, bms_amps: 200, monitored: true}
+    - {name: weize_a,  capacity_ah: 100, bms_amps: 100, monitored: false}
+    - {name: weize_b,  capacity_ah: 100, bms_amps: 100, monitored: false}
+
+  soc_sources: [corrected, bms]
+  stale_after: 10m
+
+  # All three packs self-heat, so heater current inflates the shunt's figure
+  # while charging in the cold.
+  resync_on_full: true
+  full_when:
+    charge_state_in: [float]
+    bms_reports_full: true
+
+
+devices:
+
+  - name: mppt
+    driver: vedirect
+    mode: controller
+    tags: {location: solar}
+    params:
+      port: /dev/serial/by-id/usb-VictronEnergy_BV_VE_Direct_cable_VEAWO3NQ-if00-port0
+      baud: 19200
+      emit_every: 30s
+      # Connects directly on this node. The upstairs Pi needed a USB
+      # extension to span 8 to 9 feet, which is a known source of
+      # intermittent enumeration failures.
+
+  - name: bms
+    driver: ble_bms
+    mode: controller
+    tags: {location: battery}
+    params:
+      address: "00:00:00:00:00:00"    # fill in from a scan
+      protocol: grenergy              # BAT-BMS app, Shenzhen Grenergy
+      poll_every: 60s
+      hold_connection: false
+      timeout: 40s
+
+  - name: shunt
+    driver: ble_shunt
+    mode: controller
+    tags: {location: battery}
+    params:
+      address: "00:00:00:00:00:00"    # fill in from a scan
+      poll_every: 30s
+      hold_connection: false
+      timeout: 40s
+      charge_is_positive: true        # VERIFY. Depends on how it was wired.
+      # If this shunt turns out to have an RS485 port, use it instead of
+      # Bluetooth: wired, no single-connection limit, documented protocol.
+
+  - name: host
+    driver: host
+    mode: poll
+    interval: 30s
+    tags: {location: pi}
+
+
+control:
+  enabled: false                      # stays false until the bench rig passes
+
+  state_file: /var/lib/monitoring/blind1-control.json
+  loop_interval: 10s
+  publish_as:
+    location: control
+
+  clock:
+    require_sync_for_schedule: true
+    mode_when_unsynced: full
+
+  loads:
+
+    cameras:
+      type: dc_branch
+      control_pin: 23                 # physical 16
+      readback_pin: 24                # physical 18
+      polarity: energize_to_shed      # normally closed: a failed Pi leaves
+                                      # the cameras running, as today
+      on_stale_data: permit
+      shed:
+        below_soc_pct: 12
+        restore_above_soc_pct: 25
+        voltage_floor: 12.4
+        voltage_restore: 12.9
+        dwell: 5m
+        min_off: 30m
+      conservation:
+        enabled: false                # turn on once the shed behaviour is
+                                      # trusted
+        window: {from: "00:00", to: "04:00"}
+        enter_below_soc_pct: 40
+        exit_above_soc_pct: 60
+
+    irrigation:
+      type: sequenced_ac
+      on_stale_data: deny
+
+      inverter:
+        control_pin: 25               # physical 22, relay in parallel with
+                                      # the inverter's own panel switch
+        readback_pin: 16              # physical 36, isolated AC-present sense
+        polarity: energize_to_connect
+        settle_after_on: 10s
+
+      pump:
+        control_pin: 22               # physical 15
+        readback_pin: 13              # physical 33, contactor aux contact
+        polarity: energize_to_connect
+        settle_before_inverter_off: 3s
+
+      schedule: []                    # none yet; manual requests only at first
+      request_file: /var/lib/monitoring/blind1-irrigation-request.json
+      request_max_age: 2h
+
+      start_conditions:
+        charge_state_was_in: [float, absorption]
+        within: 6h
+        soc_above_pct: 40
+        battery_volts_above: 13.0
+
+      continue_conditions:
+        max_run: 45m
+        soc_above_pct: 30
+        battery_volts_above: 12.6
+
+      limits:
+        cooldown: 2h
+        max_amp_hours_per_day: 160    # about 31 percent of the bank
+        failed_start_lockout: 3
+        lockout_until: next_day
+
+      dry_run_check:
+        enabled: true
+        expected_delta_amps: {min: 90, max: 180}   # placeholder until the
+                                                   # load is characterized
+        settle: 15s
+        on_stale_shunt: skip
+
+      guard:
+        absolute_max_run: 60m

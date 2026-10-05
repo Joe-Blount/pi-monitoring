@@ -1,0 +1,29 @@
+# Garage: one sensor, no control. Raspberry Pi 4, Raspbian 11.
+
+site: garage
+node: garage
+measurement: garage
+tags:
+  node: garage
+
+devices:
+
+  - name: box
+    driver: dht
+    mode: poll
+    interval: 30s
+    tags: {location: box}
+    params:
+      model: DHT22
+      pin: 4
+      retries: 3
+
+  - name: host
+    driver: host
+    mode: poll
+    interval: 30s
+    tags: {location: pi}
+
+# The EG4 inverter is not here yet. It needs a USB-to-RS232 adapter into the
+# jack marked RS232 or COM, after which it speaks the Voltronic PI30 ASCII
+# protocol at 2400 8N1 and becomes a device entry using the pi30 driver.

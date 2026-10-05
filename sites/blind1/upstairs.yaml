@@ -1,0 +1,52 @@
+# Deer blind, upstairs Pi: sensors only, no control.
+#
+# Raspberry Pi Zero 2 W, Debian 12. Pin assignments match what is already
+# wired; this file documents the existing installation rather than proposing
+# a change to it.
+
+site: blind1
+node: upstairs
+measurement: blind1
+tags:
+  node: upstairs
+
+devices:
+
+  - name: box
+    driver: dht
+    mode: poll
+    interval: 30s
+    tags: {location: pi}
+    params:
+      model: DHT11
+      pin: 17
+      retries: 3
+
+  - name: outdoor_temp
+    driver: ds18b20
+    mode: poll
+    interval: 30s
+    tags: {location: outdoor}
+    params:
+      device_id: 28-3ce1d44326bf
+
+  - name: rain
+    driver: rain_gauge
+    mode: resident
+    tags: {location: outdoor}
+    params:
+      pin: 6
+      bounce_ms: 1
+      inches_per_tip: 0.011
+      state_file: /var/lib/monitoring/blind1-rain.json
+
+  - name: host
+    driver: host
+    mode: poll
+    interval: 30s
+    tags: {location: pi}
+
+# The PCF8591 analog-to-digital converter on GPIO2 and GPIO3 is deliberately
+# absent. It exists only to measure battery voltage, which the charge
+# controller reports more accurately on the downstairs node, and the two
+# disagreed by about 0.3 V. Retiring it frees the I2C pins.

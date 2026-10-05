@@ -1,0 +1,325 @@
+# Reference node file. Every option this project understands appears here,
+# with the reasoning for the ones that are not obvious.
+#
+# One file describes one MACHINE, not one site. A site can have several
+# machines: the deer blind is planned as an upstairs node holding the sensors
+# and a downstairs node holding the power devices and the load control. Both
+# write the same measurement, so dashboards do not care how the work is split.
+#
+# Copy this file, delete what does not apply, and keep the comments that
+# explain a local decision.
+
+
+# ---------------------------------------------------------------------------
+# Identity
+# ---------------------------------------------------------------------------
+
+site: example                 # the physical place
+node: example                 # the machine within that place
+measurement: example          # InfluxDB measurement for everything this node
+                              # writes. Keep it stable: changing it breaks
+                              # every existing dashboard.
+
+tags:
+  node: example               # REQUIRED when a site has more than one machine.
+                              # Every Pi here is named raspberrypi and every
+                              # node runs the host driver with the same field
+                              # names, so without this tag two machines write
+                              # into one series and overwrite each other.
+
+
+# ---------------------------------------------------------------------------
+# Battery
+#
+# Only on nodes that read battery state. It describes the bank, not a device.
+# ---------------------------------------------------------------------------
+
+battery:
+  bank_capacity_ah: 520
+  nominal_volts: 12
+
+  # Whether the monitored packs may stand in for the whole bank. Only some
+  # packs report anything, so this is an assumption either way; state it here
+  # rather than burying it in code.
+  monitored_represents_bank: true
+
+  packs:
+    - {name: smart_pack, capacity_ah: 320, bms_amps: 200, monitored: true}
+    - {name: pack_a,     capacity_ah: 100, bms_amps: 100, monitored: false}
+    - {name: pack_b,     capacity_ah: 100, bms_amps: 100, monitored: false}
+
+  # Where state of charge comes from, in priority order. The first source with
+  # a reading newer than stale_after wins.
+  #
+  #   corrected  the project's own figure: the shunt integrated, but
+  #              resynchronized to full on a detected full event
+  #   bms        whatever the smart pack reports
+  #   shunt_raw  the shunt's own figure, kept for comparison, not for control
+  soc_sources: [corrected, bms]
+  stale_after: 10m
+
+  # Self-heating packs corrupt a coulomb counter: while charging in the cold,
+  # heater current passes through the shunt and is counted as charge entering
+  # the battery when it actually left as heat. The shunt therefore reads high
+  # in exactly the season when accuracy matters. The fix is to resynchronize
+  # on a full event detected WITHOUT the shunt.
+  resync_on_full: true
+  full_when:
+    charge_state_in: [float]
+    bms_reports_full: true
+
+
+# ---------------------------------------------------------------------------
+# Devices
+#
+#   mode: poll        telegraf inputs.exec runs every device of this mode in
+#                     ONE process per interval. Stateless reads only.
+#   mode: resident    telegraf inputs.execd holds it open. For things that
+#                     stream or count: a rain gauge, unprompted serial frames.
+#   mode: controller  the controller opens this device and publishes its
+#                     readings. Telegraf never touches it. Use this for any
+#                     device that admits a single reader on a node that also
+#                     runs control, otherwise the controller and telegraf
+#                     fight over the port and the control loop loses.
+# ---------------------------------------------------------------------------
+
+devices:
+
+  - name: box                 # becomes part of the log line, not a tag
+    driver: dht
+    mode: poll
+    interval: 30s
+    enabled: true
+    tags:
+      location: box           # tags are per device, merged over the node tags
+    params:
+      model: DHT22            # DHT11 or DHT22
+      pin: 4                  # BCM numbering everywhere in this project
+      retries: 3              # bit-banged protocol; single reads fail often
+    calibration:
+      temp: {scale: 1.0, offset: 0.0}
+      humidity: {scale: 1.0, offset: 0.0}
+
+  - name: outdoor_temp
+    driver: ds18b20
+    mode: poll
+    interval: 30s
+    tags: {location: outdoor}
+    params:
+      device_id: 28-000000000000   # the 1-Wire id, never a bus position
+
+  - name: rain
+    driver: rain_gauge
+    mode: resident            # must be resident: it counts edges that arrive
+                              # at unpredictable times
+    tags: {location: outdoor}
+    params:
+      pin: 6
+      bounce_ms: 1
+      inches_per_tip: 0.011
+      state_file: /var/lib/monitoring/example-rain.json
+                              # the total lives only in memory otherwise and
+                              # silently resets on every power event
+
+  - name: mppt
+    driver: vedirect
+    mode: controller          # single-reader device on a controlling node
+    tags: {location: solar}
+    params:
+      # Always the by-id path. /dev/ttyUSB0 numbering moves between boots.
+      # Note this path contains the CABLE's serial number, so a replacement
+      # cable changes it.
+      port: /dev/serial/by-id/usb-VictronEnergy_BV_VE_Direct_cable_XXXXXXXX-if00-port0
+      baud: 19200
+      emit_every: 30s         # frames arrive about once a second; publish at
+                              # this rate rather than storing 30x the data
+
+  - name: bms
+    driver: ble_bms
+    mode: controller
+    tags: {location: battery}
+    params:
+      address: "AA:BB:CC:DD:EE:FF"
+      protocol: grenergy
+      poll_every: 60s
+      # Connect, read, disconnect. These modules accept one connection at a
+      # time, so holding it open locks the vendor phone app out of the battery
+      # while standing next to it.
+      hold_connection: false
+      timeout: 40s            # a cold BLE connect routinely takes 10 to 40s
+
+  - name: shunt
+    driver: ble_shunt
+    mode: controller
+    tags: {location: battery}
+    params:
+      address: "AA:BB:CC:DD:EE:FF"
+      poll_every: 30s
+      hold_connection: false
+      timeout: 40s
+      # Positive current means charging. Verify against reality before
+      # trusting any derived load figure: the sign depends on which way the
+      # shunt was wired.
+      charge_is_positive: true
+
+  - name: host
+    driver: host
+    mode: poll
+    interval: 30s
+    tags: {location: pi}
+
+
+# ---------------------------------------------------------------------------
+# Control
+#
+# Omit this whole block on a node that only collects. The controller is a
+# separate systemd unit, not a telegraf input, and it reads only devices
+# attached to this machine: load shedding that needs a network fails exactly
+# when the power is failing.
+# ---------------------------------------------------------------------------
+
+control:
+  enabled: false              # default off. A node switches loads only when
+                              # this is deliberately turned on.
+
+  state_file: /var/lib/monitoring/example-control.json
+                              # lockouts, counters, cooldowns and the last
+                              # full-charge timestamp. The controller discards
+                              # in-memory state on restart by design, so
+                              # anything that must brake a restart loop has to
+                              # live here.
+  loop_interval: 10s
+  publish_as:
+    location: control         # where decisions and readbacks are published
+
+  clock:
+    # The Pi has no real-time clock. After a power cut it boots with whatever
+    # fake-hwclock saved, which can be days wrong, so a schedule would fire at
+    # the wrong time.
+    require_sync_for_schedule: true
+    mode_when_unsynced: full  # err toward running, not toward shedding
+
+  loads:
+
+    # -- DC branch: cameras and recorder ------------------------------------
+    cameras:
+      type: dc_branch
+      control_pin: 23
+      readback_pin: 24        # contactor auxiliary contact
+
+      # energize_to_shed means NORMALLY CLOSED contacts: the load runs unless
+      # the Pi deliberately opens them.
+      #
+      # This is the opposite of the irrigation polarity, deliberately. The
+      # Pi supplies policy and the battery BMS is the hardware backstop, so a
+      # failed Pi should leave the site behaving as it does today rather than
+      # dark. With energize_to_connect, camera uptime would become a function
+      # of Pi uptime: every restart, watchdog kill and deploy would cut the
+      # recorder. The cost is coil power while shedding, which is a few watts
+      # against the load being shed.
+      polarity: energize_to_shed
+
+      # What to do when state of charge is unknown. Never stop something on
+      # ignorance; the voltage floor below still protects the bank, and it
+      # comes over a wire rather than over Bluetooth.
+      on_stale_data: permit
+
+      shed:
+        below_soc_pct: 12
+        restore_above_soc_pct: 25
+        voltage_floor: 12.4   # loaded volts. LiFePO4 is nearly flat from
+                              # about 15 to 95 percent, so voltage is only
+                              # useful near the bottom
+        voltage_restore: 12.9
+        dwell: 5m             # the condition must hold this long
+        min_off: 30m          # no chatter around the threshold
+
+      conservation:
+        enabled: false
+        window: {from: "00:00", to: "04:00"}
+        enter_below_soc_pct: 40
+        exit_above_soc_pct: 60
+
+    # -- Sequenced AC: inverter and pump ------------------------------------
+    irrigation:
+      type: sequenced_ac
+      on_stale_data: deny     # never start something on ignorance
+
+      inverter:
+        control_pin: 25
+        readback_pin: 16      # senses AC actually present, not what was
+                              # commanded. Needs an isolated sensing module;
+                              # 120 V does not go to a GPIO pin.
+        polarity: energize_to_connect
+        settle_after_on: 10s  # let the inverter stabilize before any load
+
+      pump:
+        control_pin: 22
+        readback_pin: 13      # contactor auxiliary contact
+        polarity: energize_to_connect
+        settle_before_inverter_off: 3s
+
+      # Where a request comes from. A decision may not depend on the network,
+      # but a request is not a decision: the file is read locally like any
+      # other input.
+      schedule:
+        - {days: [mon, wed, fri], at: "18:30", duration: 45m}
+      request_file: /var/lib/monitoring/example-irrigation-request.json
+      request_max_age: 2h     # a forgotten manual request must expire
+
+      start_conditions:
+        # Charge state is drift-free, unlike any coulomb counter. But the
+        # Victron reports off or bulk after sunset however full the bank is,
+        # so requiring it RIGHT NOW would make evening watering impossible.
+        # "Was full within the window" keeps the drift-free property and
+        # allows an evening run.
+        charge_state_was_in: [float, absorption]
+        within: 6h
+        soc_above_pct: 40
+        battery_volts_above: 13.0   # checked at the moment of starting: a
+                                    # sagging bank plus motor inrush is how an
+                                    # inverter trips mid-start
+
+        # Deliberately NOT a production threshold. In float the charge
+        # controller curtails, so production falls to whatever the loads draw.
+        # A PV-watts gate would therefore fail hardest on the sunniest day.
+
+      continue_conditions:
+        # Separate from the start conditions on purpose. The pump itself
+        # changes the conditions that allowed it to start: at 130 A the bank
+        # sags and the controller leaves float within seconds, so re-checking
+        # the start conditions would stop every cycle it began.
+        max_run: 45m
+        soc_above_pct: 30
+        battery_volts_above: 12.6
+
+      limits:
+        cooldown: 2h
+        max_amp_hours_per_day: 160
+        failed_start_lockout: 3     # consecutive failed starts before giving
+                                    # up for the day. This is what brakes the
+                                    # loop where a converter brownout during
+                                    # inrush reboots the Pi, the bank recovers
+                                    # unloaded, and the criteria pass again
+                                    # immediately.
+        lockout_until: next_day
+
+      dry_run_check:
+        # A centrifugal pump running dry draws noticeably LESS current than a
+        # loaded one, so the current step at start says whether it is really
+        # pumping. Catches a dry creek, a seized pump, an airlock, a tripped
+        # breaker. Real dry protection is still manual: disable irrigation
+        # when the creek is dry.
+        enabled: true
+        expected_delta_amps: {min: 90, max: 180}   # measure, do not guess
+        settle: 15s
+        on_stale_shunt: skip        # skip | abort. Refusing to irrigate on a
+                                    # stale Bluetooth reading would mean a
+                                    # flaky radio stops the watering.
+
+      guard:
+        # Enforced by a separate systemd unit that reads only the pump
+        # readback and kills the controller. Killing releases the output pins,
+        # which drops the contactor. Deliberately longer than max_run, so the
+        # two limits do not share a failure mode.
+        absolute_max_run: 60m
