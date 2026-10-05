@@ -249,3 +249,69 @@ devices:
   - {name: x, driver: host, mode: poll, enabled: %s}
 """ % ("true" if value else "false")), KNOWN)
     assert node.devices[0].enabled is value
+
+
+# -- refusals that existed with no test to show them ------------------------
+
+def test_a_rain_gauge_in_poll_mode_is_refused(tmp_path):
+    """Nothing watches the pin between polls, so the total never moves and the
+    dashboard shows a working gauge in a drought. Deleting the check in the
+    loader passed the whole suite before this existed."""
+    with pytest.raises(config.ConfigError) as exc:
+        config.load(write(tmp_path, """
+site: s
+node: n
+measurement: m
+devices:
+  - {name: rain, driver: rain_gauge, mode: poll, params: {pin: 6}}
+"""), KNOWN)
+    assert "cannot work in" in str(exc.value)
+    assert "resident" in str(exc.value)
+
+
+def test_a_load_readback_pin_cannot_repeat_its_control_pin(tmp_path):
+    """Two claims on one line, two levels down in the file, where the earlier
+    duplicate of this check did not look."""
+    with pytest.raises(config.ConfigError) as exc:
+        config.load(write(tmp_path, """
+site: s
+node: n
+measurement: m
+control:
+  enabled: true
+  loads:
+    cameras:
+      control_pin: 23
+      readback: {source: pin, pin: 23}
+"""), KNOWN)
+    assert "GPIO23" in str(exc.value)
+
+
+def test_a_guard_pin_cannot_repeat_a_pump_pin(tmp_path):
+    with pytest.raises(config.ConfigError) as exc:
+        config.load(write(tmp_path, """
+site: s
+node: n
+measurement: m
+control:
+  enabled: true
+  loads:
+    irrigation:
+      pump: {control_pin: 22}
+      guard: {input: pin, pin: 22}
+"""), KNOWN)
+    assert "GPIO22" in str(exc.value)
+
+
+def test_a_pin_written_as_a_string_is_refused(tmp_path):
+    """YAML will happily give a string where a pin number was meant, and the
+    comparison against another device's integer pin then never matches."""
+    with pytest.raises(config.ConfigError) as exc:
+        config.load(write(tmp_path, """
+site: s
+node: n
+measurement: m
+devices:
+  - {name: a, driver: dht, mode: poll, params: {pin: "4"}}
+"""), KNOWN)
+    assert "not a whole number" in str(exc.value)

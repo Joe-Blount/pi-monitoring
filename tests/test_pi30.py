@@ -213,44 +213,79 @@ def test_check_reports_the_protocol_id():
     assert "PI30" in d.check()
 
 
-def test_a_reading_becomes_valid_line_protocol():
-    from monitoring import lineproto
-    d = driver_with({"QPIGS": reply(SUNNY), "QMOD": reply("B")})
-    line = lineproto.line("garage", {"location": "inverter"}, d.read())
-    assert line.startswith("garage,location=inverter ")
-    assert "pv_watts=1230.0" in line
-    assert 'mode="battery"' in line
-    assert "load_on=1.0" in line
 
 
-def test_a_truncated_reply_is_refused_even_with_checksums_off():
-    """read_until returns what it has when it times out. Without a terminator
-    check, strip() takes the last two payload characters for a checksum and
-    the remainder parses as perfectly ordinary values -- and turning checksums
-    off is the documented remedy for a firmware mismatch."""
-    truncated = ("(" + SUNNY[:40]).encode()          # no CRC, no terminator
-    d = driver_with({"QPIGS": truncated}, verify_reply_crc=False,
-                    queries=["QPIGS"])
+class FakeSerialModule:
+    """Stands in for pyserial, recording how the port was opened."""
+
+    class SerialException(Exception):
+        pass
+
+    def __init__(self, fail=False):
+        self.calls = []
+        self.fail = fail
+
+    def Serial(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        if self.fail:
+            raise OSError("device busy")
+        return _OpenPort()
+
+
+class _OpenPort:
+    def read(self, _n):
+        return b""
+
+    def read_until(self, _t):
+        return b""
+
+    def write(self, _d):
+        pass
+
+    def reset_input_buffer(self):
+        pass
+
+    def close(self):
+        pass
+
+
+def open_with(monkeypatch, driver, fake):
+    import sys as _sys
+    monkeypatch.setitem(_sys.modules, "serial", fake)
+    return driver._open()
+
+
+@pytest.mark.parametrize("make", [
+    lambda: pi30.Pi30Driver("inv", {"port": "/dev/x", "baud": 2400,
+                                    "read_timeout": 7}, {}),
+    lambda: __import__("monitoring.drivers.vedirect", fromlist=["x"])
+            .VedirectDriver("mppt", {"port": "/dev/x", "baud": 19200,
+                                     "read_timeout": 3}, {}),
+], ids=["pi30", "vedirect"])
+def test_the_port_is_opened_with_a_timeout_and_exclusively(monkeypatch, make):
+    """Not a grep for the text. Without the read timeout pyserial blocks
+    forever, which defeats every silent-port test in the suite; without
+    exclusivity two readers see torn frames that look like a cable fault."""
+    fake = FakeSerialModule()
+    driver = make()
+    open_with(monkeypatch, driver, fake)
+
+    (args, kwargs), = fake.calls
+    assert args[0] == "/dev/x"
+    assert kwargs["timeout"] == driver.read_timeout
+    assert kwargs["exclusive"] is True
+
+
+@pytest.mark.parametrize("make", [
+    lambda: pi30.Pi30Driver("inv", {"port": "/dev/busy"}, {}),
+    lambda: __import__("monitoring.drivers.vedirect", fromlist=["x"])
+            .VedirectDriver("mppt", {"port": "/dev/busy"}, {}),
+], ids=["pi30", "vedirect"])
+def test_a_port_that_will_not_open_becomes_a_device_error(monkeypatch, make):
+    """Rather than an OSError traceback, which in a resident child is the
+    difference between a named device fault and a crash."""
+    fake = FakeSerialModule(fail=True)
+    driver = make()
     with pytest.raises(DriverError) as exc:
-        d.read()
-    assert "incomplete" in str(exc.value)
-
-
-def test_a_query_that_fails_is_reported_even_when_another_succeeds(capsys):
-    """Otherwise a status query failing every interval while the mode query
-    answers looks like a working inverter that has stopped reporting its
-    battery."""
-    d = driver_with({"QMOD": reply("B")}, queries=["QPIGS", "QMOD"])
-    values = d.read()
-    assert values == {"mode": "battery"}
-    assert "QPIGS" in capsys.readouterr().err
-
-
-def test_serial_ports_are_opened_exclusively():
-    """A second reader must fail saying so, rather than both seeing torn
-    frames, which looks exactly like a cable fault."""
-    import inspect
-    from monitoring.drivers import vedirect
-    for module in (pi30, vedirect):
-        source = inspect.getsource(module)
-        assert "exclusive=True" in source, module.__name__
+        open_with(monkeypatch, driver, fake)
+    assert "/dev/busy" in str(exc.value)

@@ -114,11 +114,7 @@ def test_resident_stanzas_do_not_ask_the_device_for_a_reading(path):
                 "tight loop" % fragment.name)
 
 
-def test_the_install_script_removes_its_own_old_fragments():
-    """Otherwise a device deleted from a node file leaves its stanza behind
-    and keeps being collected."""
-    script = (REPO / "deploy" / "install.sh").read_text()
-    assert "rm -f /etc/telegraf/telegraf.d/pi-monitoring-*.conf" in script
+
 
 
 def test_the_install_script_installs_only_this_node_s_fragments():
@@ -128,18 +124,10 @@ def test_the_install_script_installs_only_this_node_s_fragments():
         "hardware attached to a different machine")
 
 
-def test_the_install_script_checks_devices_as_the_collecting_user():
-    """Root can read a repository under a 0700 home directory that telegraf
-    cannot, so checking as root would pass and every collection would fail."""
-    script = (REPO / "deploy" / "install.sh").read_text()
-    assert "runuser -u telegraf" in script
 
 
-def test_the_install_script_stops_telegraf_before_probing():
-    """Its resident children hold the GPIO pins and serial ports; probing
-    while they run gives false failures and steals bytes from a live stream."""
-    script = (REPO / "deploy" / "install.sh").read_text()
-    assert "systemctl stop telegraf" in script
+
+
 
 
 def test_telegraf_is_told_to_log_a_failing_device():

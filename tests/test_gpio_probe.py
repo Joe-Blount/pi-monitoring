@@ -79,7 +79,14 @@ def test_a_commented_out_overlay_is_ignored(probe, tmp_path, monkeypatch):
 
 
 def test_a_pin_no_overlay_claims_is_allowed(probe, tmp_path, monkeypatch):
+    """The live-pin checks are stubbed out. Otherwise this runs raspi-gpio and
+    reads the kernel debug file on whatever machine happens to run the suite,
+    so on a real Pi the verdict would depend on that pin's current state."""
     boot_config(probe, monkeypatch, "dtoverlay=w1-gpio\n", tmp_path)
+    monkeypatch.setitem(probe["check_pin_is_safe"].__globals__,
+                        "debugfs_consumers", lambda: [])
+    monkeypatch.setitem(probe["check_pin_is_safe"].__globals__,
+                        "read_pin", lambda _pin: None)
     assert probe["check_pin_is_safe"](26) is True
 
 
@@ -179,3 +186,46 @@ def test_the_remedy_names_its_own_prerequisite(probe, capsys):
     probe["verdict"]({"after_kill": {"level": "1", "func": "OUTPUT"}})
     out = capsys.readouterr().out
     assert "Bullseye" in out or "gpiozero 2" in out
+
+
+def test_a_failed_probe_still_kills_the_process_holding_the_pin(probe, monkeypatch):
+    """Without this an exception between starting the holder and killing it
+    leaves the pin driven high until the machine reboots, with whatever is
+    attached to it energized. It is the only hardware-safety path here."""
+    killed = []
+
+    class FakeHolder:
+        def __init__(self):
+            self.alive = True
+
+        def poll(self):
+            return None if self.alive else 0
+
+        def kill(self):
+            killed.append(True)
+            self.alive = False
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setitem(probe["run_checks"].__globals__,
+                        "spawn_holder", lambda pin: FakeHolder())
+    monkeypatch.setitem(probe["run_checks"].__globals__,
+                        "read_pin", lambda pin: {"level": "1", "func": "OUTPUT"})
+
+    # Fail only after a holder is running. Raising on the baseline reading,
+    # before anything has been started, would prove nothing.
+    calls = []
+
+    def explode_after_the_holder_starts(*_args, **_kwargs):
+        calls.append(True)
+        if len(calls) > 1:
+            raise RuntimeError("the probe failed partway through")
+        return "level=0  func=INPUT"
+
+    monkeypatch.setitem(probe["run_checks"].__globals__, "describe",
+                        explode_after_the_holder_starts)
+
+    with pytest.raises(RuntimeError):
+        probe["run_checks"](26)
+    assert killed, "the holder was left running with the pin driven high"

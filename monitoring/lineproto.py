@@ -21,8 +21,22 @@ class LineProtocolError(ValueError):
     """A point that cannot be written as line protocol."""
 
 
+def _without_line_breaks(value):
+    """Line protocol has no escape for a line break: a newline ends the point.
+
+    So they are replaced wherever they can appear, rather than escaped. Tag
+    values are normally validated long before they reach here, which makes
+    this defence in depth rather than a routine path, but a point split in two
+    leaves an unterminated quote and telegraf fails the whole batch.
+    """
+    text = str(value)
+    for line_break in ("\r\n", "\n", "\r"):
+        text = text.replace(line_break, " ")
+    return text
+
+
 def _escape(value, specials):
-    out = str(value)
+    out = _without_line_breaks(value)
     for char in specials:
         out = out.replace(char, "\\" + char)
     return out
@@ -39,8 +53,14 @@ def escape_key(name):
 
 
 def escape_string_field(value):
-    """String field values are quoted, escaping backslash and double quote."""
-    return '"%s"' % str(value).replace("\\", "\\\\").replace('"', '\\"')
+    """String field values are quoted, escaping backslash and double quote.
+
+    Line breaks are removed rather than escaped: line protocol has no escape
+    for them, so one exception message containing a newline would split a
+    point in two and telegraf would fail the whole batch.
+    """
+    return '"%s"' % _without_line_breaks(value).replace(
+        "\\", "\\\\").replace('"', '\\"')
 
 
 def format_field(name, value):

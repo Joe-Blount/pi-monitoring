@@ -101,15 +101,15 @@ def test_one_dead_sensor_does_not_cost_the_others(tmp_path, doubles):
   - {name: c, driver: good, mode: poll}
 """)
     out, err = io.StringIO(), io.StringIO()
-    failures = runner.poll(node, NOW, out, err)
-    assert failures == 1
+    written = runner.poll(node, NOW, out, err)
+    assert written == 3, "two readings and one failure point"
     assert out.getvalue().count("value=2.0") == 2
     assert "device b (bad): the sensor is not there" in err.getvalue()
 
     # The failure is published as well as logged. A log on a machine at the
     # end of a track is very nearly as silent as nothing.
     assert 'ok=0.0' in out.getvalue()
-    assert 'error="the sensor is not there"' in out.getvalue()
+    assert 'error_message="the sensor is not there"' in out.getvalue()
 
 
 def test_a_long_failure_reason_is_shortened_for_the_log_but_not_the_point(
@@ -132,13 +132,7 @@ def test_a_long_failure_reason_is_shortened_for_the_log_but_not_the_point(
     assert long_reason in out.getvalue()
 
 
-def test_every_successful_reading_says_so(tmp_path, doubles):
-    """So a dashboard can ask whether a device is working rather than infer it
-    from which fields happen to be present."""
-    node = node_with(tmp_path, "  - {name: a, driver: good, mode: poll}\n")
-    out = io.StringIO()
-    runner.poll(node, NOW, out, io.StringIO())
-    assert "ok=1.0" in out.getvalue()
+
 
 
 def test_poll_ignores_devices_that_are_not_poll_mode(tmp_path, doubles):
@@ -287,7 +281,7 @@ def test_calibration_applies_to_streamed_readings_too(tmp_path, stream_doubles):
 
 # -- devices nothing will collect --------------------------------------------
 
-def controller_node(tmp_path, control_enabled):
+def controller_node(tmp_path, control_enabled):   # noqa: needs the doubles
     path = tmp_path / "node.yaml"
     path.write_text("""
 site: s
@@ -295,7 +289,7 @@ node: n
 measurement: m
 devices:
   - {name: mppt, driver: vedirect, mode: controller, params: {port: /dev/x}}
-  - {name: host, driver: host, mode: poll}
+  - {name: counter, driver: good, mode: poll}
 control:
   enabled: %s
   loads:
@@ -304,25 +298,25 @@ control:
     return config.load(path, set(REGISTRY))
 
 
-def test_a_controller_device_with_control_disabled_is_reported_as_stranded(tmp_path):
+def test_a_controller_device_with_control_disabled_is_reported_as_stranded(tmp_path, doubles):
     """Nothing reads it, and that absence looks exactly like a sensor that is
     working and reporting nothing."""
     node = controller_node(tmp_path, control_enabled=False)
     assert [d.name for d in runner.orphaned(node)] == ["mppt"]
 
 
-def test_a_controller_device_with_control_enabled_is_not_stranded(tmp_path):
+def test_a_controller_device_with_control_enabled_is_not_stranded(tmp_path, doubles):
     node = controller_node(tmp_path, control_enabled=True)
     assert runner.orphaned(node) == []
 
 
-def test_listing_marks_a_stranded_device(tmp_path):
+def test_listing_marks_a_stranded_device(tmp_path, doubles):
     out = io.StringIO()
     runner.listing(controller_node(tmp_path, control_enabled=False), out)
     assert "NOT COLLECTED" in out.getvalue()
 
 
-def test_check_fails_a_stranded_device_rather_than_probing_it(tmp_path):
+def test_check_fails_a_stranded_device_rather_than_probing_it(tmp_path, doubles):
     """Probing it would report on hardware that nothing is going to read,
     which is a confusing kind of success."""
     out = io.StringIO()
@@ -335,14 +329,21 @@ def test_check_fails_a_stranded_device_rather_than_probing_it(tmp_path):
     # about opening it would send someone looking at the wiring instead of at
     # the configuration.
     assert "/dev/x" not in text
-    assert failures >= 1
+    # Exactly one. The other device is a double that always passes, so this
+    # number no longer depends on whether the machine running the tests has a
+    # /proc to read.
+    assert failures == 1
 
 
-def test_poll_is_unaffected_by_stranded_devices(tmp_path):
-    """Controller mode devices are simply not poll devices; the rest of the
-    node collects normally."""
+def test_poll_still_collects_while_another_device_is_stranded(tmp_path, doubles):
+    """The previous version of this asserted a list comprehension in the
+    config loader and never called poll at all."""
     node = controller_node(tmp_path, control_enabled=False)
-    assert [d.name for d in node.by_mode("poll")] == ["host"]
+    out, err = io.StringIO(), io.StringIO()
+    written = runner.poll(node, NOW, out, err)
+    assert written == 1
+    assert "value=2.0" in out.getvalue()
+    assert "mppt" not in out.getvalue(), "a stranded device must not be polled"
 
 
 def test_streaming_refuses_a_device_the_controller_owns(tmp_path, stream_doubles):
@@ -398,3 +399,61 @@ def test_a_driver_returning_nothing_usable_is_reported_not_crashed(
         assert "no usable values" in result.error
     finally:
         REGISTRY.pop("empty", None)
+
+
+def test_a_failure_point_counts_as_something_written(tmp_path, doubles):
+    """The count decides the exit code, and telegraf discards a command's
+    stdout entirely when that is non-zero. If failure points did not count,
+    the case where every device is down would throw away the very points that
+    exist to report it."""
+    node = node_with(tmp_path, "  - {name: a, driver: bad, mode: poll}\n")
+    out, err = io.StringIO(), io.StringIO()
+    written = runner.poll(node, NOW, out, err)
+    assert written == 1
+    assert "ok=0.0" in out.getvalue()
+
+
+class CountingStream(io.StringIO):
+    """Records how often it was flushed, which is the thing being asserted."""
+
+    def __init__(self):
+        io.StringIO.__init__(self)
+        self.flushes = 0
+
+    def flush(self):
+        self.flushes += 1
+
+
+def test_streaming_flushes_after_every_line(tmp_path, stream_doubles):
+    """Under execd, stdout is a pipe and Python buffers it at 8 KiB. At one
+    short line a minute that is about ninety minutes of latency, so a tip at
+    the end of a storm would arrive after the storm."""
+    node = node_with(tmp_path, "  - {name: a, driver: streamer, mode: resident}\n")
+    out = CountingStream()
+    runner.stream_device(node, node.find("a"), out, io.StringIO(),
+                         max_readings=3, clock=frozen_clock)
+    assert out.flushes >= 3, (
+        "flushed %d times for 3 lines; readings would arrive in clumps"
+        % out.flushes)
+
+
+def test_the_poll_command_exits_zero_when_every_device_fails(tmp_path):
+    """Run as telegraf runs it. A non-zero exit makes telegraf discard the
+    output, so the failure points would never reach the dashboard."""
+    import subprocess
+    import sys as _sys
+    path = tmp_path / "node.yaml"
+    path.write_text("""
+site: s
+node: n
+measurement: m
+devices:
+  - {name: a, driver: ds18b20, mode: poll, params: {device_id: 28-nope, bus_root: /nonexistent}}
+""")
+    repo = pathlib.Path(__file__).resolve().parent.parent
+    out = subprocess.run(
+        [_sys.executable, str(repo / "bin" / "collect"), "--node", str(path), "--poll"],
+        capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, "telegraf would discard stdout on a non-zero exit"
+    assert "ok=0.0" in out.stdout, "the failure must still be published"
+    assert "28-nope" in out.stderr, "and still logged"

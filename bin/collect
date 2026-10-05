@@ -68,11 +68,13 @@ def main(argv=None):
     if args.poll:
         if args.device:
             parser.error("give a device name or --poll, not both")
-        devices = node.by_mode("poll")
-        failures = runner.poll(node)
-        # Exit non-zero only when nothing at all could be read. One dead
-        # sensor among several must not mark the whole collection failed.
-        return 1 if devices and failures == len(devices) else 0
+        written = runner.poll(node)
+        # Exit zero whenever anything was written, including points that
+        # report a failure. telegraf's exec input discards a command's stdout
+        # entirely when the exit code is non-zero, so failing here would throw
+        # away the failure points in exactly the case they exist for: every
+        # device down at once. The reasons still reach the log through stderr.
+        return 0 if written else 1
 
     if not args.device:
         parser.error("give a device name, or --poll, --list or --check")

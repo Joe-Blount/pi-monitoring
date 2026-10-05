@@ -115,13 +115,23 @@ def test_an_implausible_temperature_is_refused(tmp_path):
 
 
 def test_the_plausible_range_is_configurable(tmp_path):
+    """Using a bound the default would also accept proves nothing: the
+    parameter could be ignored entirely and the test would pass."""
     device = tmp_path / "iio:device0"
     device.mkdir()
     (device / "name").write_text("dht11")
     (device / "in_temp_input").write_text("-30000")      # -30 C, -22 F
     (device / "in_humidityrelative_input").write_text("50000")
-    assert DhtDriver("box", {"iio_root": str(tmp_path), "retries": 0,
-                             "min_temp_f": -40}, {}).read()["temp"] == -22.0
+
+    # The default floor is -40 F, so -22 F is accepted.
+    assert DhtDriver("box", {"iio_root": str(tmp_path), "retries": 0},
+                     {}).read()["temp"] == -22.0
+
+    # Raise the floor above it and the same reading must now be refused.
+    with pytest.raises(DriverError) as exc:
+        DhtDriver("box", {"iio_root": str(tmp_path), "retries": 0,
+                          "min_temp_f": 0.0}, {}).read()
+    assert "not plausible" in str(exc.value)
 
 
 def test_retries_are_attempted_and_the_waits_are_spaced(tmp_path, monkeypatch):
@@ -186,7 +196,3 @@ def test_check_reports_the_values_when_it_works():
     assert "79.0 F" in driver().check()
 
 
-def test_a_reading_becomes_valid_line_protocol():
-    from monitoring import lineproto
-    line = lineproto.line("blind1", {"location": "pi"}, driver().read())
-    assert "temp=79.0" in line and "humidity=50.1" in line

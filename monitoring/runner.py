@@ -42,6 +42,11 @@ def build_driver(device):
     return cls(device.name, device.params, device.tags)
 
 
+#: Field names the runner adds to every point. No driver may use one: the
+#: same name carrying a float from one device and a string from another is a
+#: type conflict, and InfluxDB rejects the second. A test enforces this.
+RESERVED_FIELDS = ("ok", "error_message", "enabled")
+
 #: Longest failure reason written to standard error. telegraf truncates a
 #: command's stderr at 512 bytes in total, so several long messages would push
 #: each other out. The full reason goes into the published point instead,
@@ -71,7 +76,7 @@ def failure_point(node, device, reason, now_ns):
     """
     return lineproto.line(
         node.measurement, device.tags,
-        {"ok": 0.0, "error": str(reason)}, now_ns)
+        {"ok": 0.0, "error_message": str(reason)}, now_ns)
 
 
 def disabled_point(node, device, now_ns):
@@ -121,29 +126,32 @@ def poll(node, now_ns=None, out=None, err=None):
     disturb a bit-banged sensor that is being read at the same moment, and the
     sensor is always the one that loses.
 
-    Returns the number of devices that failed.
+    Returns the number of lines written, which is what decides the exit
+    code: anything written is worth keeping, including a point that reports a
+    failure.
     """
     out = sys.stdout if out is None else out
     err = sys.stderr if err is None else err
     now_ns = _now_ns() if now_ns is None else now_ns
 
-    failures = 0
+    written = 0
     for device in node.by_mode("poll"):
         result = read_device(node, device, now_ns)
         if result.ok:
             for one in result.lines:
                 out.write(one + "\n")
+                written += 1
         else:
-            failures += 1
             # Both: the point so it reaches a dashboard, the log line so it
             # reaches whoever is reading journalctl at the time.
             out.write(failure_point(node, device, result.error, now_ns) + "\n")
+            written += 1
             err.write("device %s (%s): %s\n"
                       % (device.name, device.driver,
                          str(result.error)[:STDERR_REASON]))
     out.flush()
     err.flush()
-    return failures
+    return written
 
 
 def stream_device(node, device, out=None, err=None, max_readings=None,

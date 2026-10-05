@@ -40,14 +40,23 @@ def test_the_count_survives_a_restart(tmp_path):
     assert second.inches == 0.022
 
 
-def test_the_state_file_is_replaced_atomically(tmp_path):
-    """A power cut partway through writing would otherwise leave something
-    unparsable, and surviving power cuts is the entire point of the file."""
+def test_the_state_file_is_replaced_atomically(tmp_path, monkeypatch):
+    """The claim is that a failure partway through leaves the previous count
+    intact rather than something unparsable. Checking the content after a
+    successful save does not show that; a plain overwrite passes it too."""
     c = counter(tmp_path)
     c.tip()
-    saved = json.loads((tmp_path / "rain.json").read_text())
-    assert saved["tips"] == 1
-    # No temporary files are left behind.
+    assert json.loads((tmp_path / "rain.json").read_text())["tips"] == 1
+    assert [p.name for p in tmp_path.iterdir()] == ["rain.json"]
+
+    def fail_midway(src, dst):
+        raise OSError("interrupted")
+
+    monkeypatch.setattr("os.replace", fail_midway)
+    c.tip()
+
+    surviving = json.loads((tmp_path / "rain.json").read_text())
+    assert surviving["tips"] == 1, "the previous count must survive a failure"
     assert [p.name for p in tmp_path.iterdir()] == ["rain.json"]
 
 
@@ -109,13 +118,6 @@ def test_before_any_tip_there_is_no_time_since(tmp_path):
     assert "seconds_since_tip" not in counter(tmp_path).fields()
 
 
-def test_published_fields_are_numbers_suited_to_line_protocol(tmp_path):
-    from monitoring import lineproto
-    c = counter(tmp_path)
-    c.tip()
-    line = lineproto.line("blind1", {"location": "outdoor"}, c.fields())
-    assert "rain_inches=0.011" in line
-    assert "rain_tips=1.0" in line
 
 
 def test_the_bucket_size_is_configurable(tmp_path):
@@ -211,6 +213,26 @@ def tip_the_bucket(factory, pin=6):
     p.drive_high()
 
 
+def test_only_a_falling_edge_counts(mock_pins, tmp_path):
+    """The switch closes to ground against a pull-up, so a tip is the pin
+    going LOW. Driving low and high together hides the polarity entirely:
+    with the pull inverted the pin never falls, the gauge counts nothing
+    forever, and the dashboard shows a healthy flat line."""
+    driver = RainGaugeDriver("rain", {"pin": 6, "bounce_ms": 0,
+                                      "state_file": str(tmp_path / "r.json")}, {})
+    try:
+        driver.check()
+        pin = mock_pins.pin(6)
+
+        pin.drive_low()
+        assert driver.counter.tips == 1, "a falling edge is a tip"
+
+        pin.drive_high()
+        assert driver.counter.tips == 1, "the bucket righting itself is not"
+    finally:
+        driver.close()
+
+
 def test_a_real_tip_on_the_pin_is_counted(mock_pins, tmp_path):
     """Everything above this tests the counter. This tests the wiring to it:
     a falling edge on the pin must reach the count."""
@@ -229,7 +251,11 @@ def test_a_real_tip_on_the_pin_is_counted(mock_pins, tmp_path):
 
 def test_the_stream_publishes_when_the_bucket_tips(mock_pins, tmp_path):
     """The production loop. It had no test at all, despite being the only code
-    that runs for this device once installed."""
+    that runs for this device once installed.
+
+    The elapsed time is asserted, not just the value: without being woken by
+    the tip this still produces the right answer, a whole heartbeat later.
+    """
     driver = RainGaugeDriver("rain", {"pin": 6, "bounce_ms": 0,
                                       "emit_every": "30s",
                                       "state_file": str(tmp_path / "r.json")}, {})
@@ -238,10 +264,17 @@ def test_the_stream_publishes_when_the_bucket_tips(mock_pins, tmp_path):
         first = next(stream)                # the opening reading
         assert first["rain_tips"] == 0.0
 
+        import time as _time
         tip_the_bucket(mock_pins)
-        second = next(stream)               # woken by the tip, not by a timer
+        began = _time.time()
+        second = next(stream)
+        waited = _time.time() - began
+
         assert second["rain_tips"] == 1.0
         assert second["rain_inches"] == 0.011
+        assert waited < 1.0, (
+            "took %.1fs, so it waited for the heartbeat rather than being "
+            "woken by the tip" % waited)
     finally:
         driver.close()
 

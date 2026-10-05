@@ -59,6 +59,10 @@ def test_every_declared_device_can_actually_be_constructed(path):
     """
     node = load(path)
     for device in node.devices:
+        # Keep state files out of the real /var/lib. Constructing a device
+        # otherwise reads, and could create, the path a deployed machine uses.
+        if "state_file" in device.params:
+            device.params["state_file"] = None
         try:
             driver = runner.build_driver(device)
         except Exception as exc:
@@ -68,15 +72,7 @@ def test_every_declared_device_can_actually_be_constructed(path):
             driver.close()
 
 
-@pytest.mark.parametrize("path", NODE_FILES, ids=IDS)
-def test_every_device_is_in_a_mode_its_driver_supports(path):
-    node = load(path)
-    for device in node.devices:
-        supported = drivers.get(device.driver).modes
-        assert device.mode in supported, (
-            "%s: %r is %s but %s supports %s"
-            % (path.name, device.name, device.mode, device.driver,
-               ", ".join(supported)))
+
 
 
 @pytest.mark.parametrize("path", NODE_FILES, ids=IDS)
@@ -111,7 +107,11 @@ def test_measurement_and_site_names_are_safe_in_line_protocol(path):
 
 # -- what the drivers actually emit ------------------------------------------
 
-FIELD = re.compile(r'^[A-Za-z0-9_]+=(".*"|-?\d+\.\d+)$')
+#: A float as Python renders it, including the scientific notation it uses
+#: for small and large magnitudes. A calibration scale of 0.00001 produces
+#: 1e-05, which InfluxDB accepts and a digits-dot-digits pattern rejects, so
+#: the one authoritative test would fail on correct output.
+FIELD = re.compile(r'^[A-Za-z0-9_]+=(".*"|-?\d+\.\d+([eE][-+]?\d+)?|-?\d+[eE][-+]?\d+)$')
 
 
 def split_unescaped(text, sep):
@@ -174,6 +174,8 @@ def test_the_validator_rejects_what_it_should():
     with pytest.raises(AssertionError):
         assert_valid_line("m 1700000000")                # no fields
     assert_valid_line("m,a=b value=1.0 1700000000")      # and accepts a good one
+    assert_valid_line("m tiny=1e-05 1700000000")         # which InfluxDB accepts
+    assert_valid_line("m big=1.5e+16 1700000000")
 
 
 def test_every_driver_emits_lines_a_database_would_accept():
@@ -194,6 +196,8 @@ def test_every_driver_emits_lines_a_database_would_accept():
         ("dht", DhtDriver("box", {"iio_root": str(fixtures / "iio"),
                                   "retries": 0}, {}).read()),
         ("vedirect", vedirect.normalize(dict(fx.SUNNY))),
+        ("pi30", known_driver_fields()["pi30"]),
+        ("rain_gauge", known_driver_fields()["rain_gauge"]),
     ]
     for name, values in cases:
         line = lineproto.line("site", {"location": "x", "node": "n"},
@@ -212,3 +216,94 @@ def test_a_tag_value_needing_escapes_survives_the_round_trip():
     head = split_unescaped(line, " ")[0]
     assert "back\\ shed\\,\\ north" in head
     assert len(split_unescaped(head, ",")) == 2, "the escaped comma split a tag"
+
+
+# -- field names the runner reserves -----------------------------------------
+
+def known_driver_fields():
+    """Field names the drivers can actually produce, from the fixtures."""
+    from monitoring.drivers.ds18b20 import Ds18b20Driver
+    from monitoring.drivers.dht import DhtDriver
+    from monitoring.drivers.host import HostDriver
+    from monitoring.drivers.rain_gauge import RainCounter
+    from monitoring.drivers import pi30, vedirect
+    from tests import vedirect_fixtures as fx
+
+    fixtures = pathlib.Path(__file__).resolve().parent / "fixtures"
+    sunny = ("230.1 50.0 230.1 50.0 0800 0750 015 420 53.20 010 085 0045 "
+             "02.7 103.5 53.10 00000 00010101 00 02 01230")
+    return {
+        "host": HostDriver("h", {"sysfs_root": str(fixtures / "host")}, {}).read(),
+        "ds18b20": Ds18b20Driver("t", {"bus_root": str(fixtures / "w1"),
+                                       "device_id": "28-3ce1d44326bf"}, {}).read(),
+        "dht": DhtDriver("b", {"iio_root": str(fixtures / "iio"), "retries": 0},
+                         {}).read(),
+        "vedirect": vedirect.normalize(dict(fx.SUNNY)),
+        "pi30": pi30.parse_qpigs(sunny),
+        "rain_gauge": RainCounter(None, 0.011).fields(),
+    }
+
+
+@pytest.mark.parametrize("driver_name", sorted(known_driver_fields()))
+def test_no_driver_uses_a_field_name_the_runner_reserves(driver_name):
+    """The same name carrying a float from one device and a string from
+    another is a type conflict, and InfluxDB rejects the second. The point it
+    would reject is the one whose entire job is to report a failure."""
+    from monitoring.runner import RESERVED_FIELDS
+    clash = set(known_driver_fields()[driver_name]) & set(RESERVED_FIELDS)
+    assert not clash, (
+        "%s emits %s, which the runner also writes. One of them would be "
+        "rejected." % (driver_name, ", ".join(sorted(clash))))
+
+
+def test_the_runner_renders_its_reserved_fields_with_one_type_each(tmp_path):
+    """Across a reading, a failure and a disabled device."""
+    from monitoring import runner as mod
+    node = config.load(NODE_FILES[0], drivers.names())
+    device = node.devices[0]
+
+    rendered = {}
+    for line in (mod.point(node, device, {"v": 1.0}, 1),
+                 mod.failure_point(node, device, "a reason", 1),
+                 mod.disabled_point(node, device, 1)):
+        for field in split_unescaped(split_unescaped(line, " ")[1], ","):
+            name, _, value = field.partition("=")
+            kind = "string" if value.startswith('"') else "number"
+            if name in mod.RESERVED_FIELDS:
+                assert rendered.setdefault(name, kind) == kind, (
+                    "%s is written as both a %s and a %s"
+                    % (name, rendered[name], kind))
+
+
+@pytest.mark.parametrize("nasty", ["two\nlines", "carriage\rreturn",
+                                   "windows\r\nstyle"])
+def test_a_line_break_in_a_value_cannot_split_a_point(nasty):
+    """A newline ends a point. One exception message containing one would
+    leave an unterminated quote, and telegraf fails the whole batch on a
+    malformed line, costing every device its reading for that interval."""
+    line = lineproto.line("m", {"device": "d"},
+                          {"ok": 0.0, "error_message": nasty}, 1700000000)
+    assert len(line.splitlines()) == 1
+    assert_valid_line(line)
+
+
+def test_a_line_break_in_a_tag_value_cannot_split_a_point():
+    line = lineproto.line("m", {"device": "two\nlines"}, {"v": 1.0}, 1700000000)
+    assert len(line.splitlines()) == 1
+
+
+@pytest.mark.parametrize("site", sorted({p.parent.name for p in NODE_FILES}))
+def test_each_node_of_a_site_is_tagged_distinctly(site):
+    """Two machines at one site write the same measurement. Only the node tag
+    separates them, so a node file copied to make a third machine with that
+    line forgotten puts two Pis into one series, overwriting each other with
+    no error anywhere."""
+    seen = {}
+    for path in sorted((REPO / "sites" / site).glob("*.yaml")):
+        node = load(path)
+        tag = node.tags.get("node")
+        assert tag, "%s sets no node tag" % path.name
+        assert tag not in seen, (
+            "%s and %s both tag themselves %r; they would share every series"
+            % (seen[tag], path.name, tag))
+        seen[tag] = path.name

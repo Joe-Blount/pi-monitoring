@@ -139,16 +139,6 @@ def test_identity_fields_are_available_for_bring_up():
 
 # -- the whole path, reading to line protocol --------------------------------
 
-def test_a_frame_becomes_valid_line_protocol():
-    from monitoring import lineproto
-    values = vedirect.normalize(dict(fx.SUNNY))
-    line = lineproto.line("blind1", {"location": "solar"}, values, 1700000000000000000)
-    assert line.startswith("blind1,location=solar ")
-    assert "battery_volts=13.51" in line
-    assert 'charge_state="bulk"' in line
-    # Every number must be a float, including ones that happen to be whole.
-    assert "pv_watts=300.0" in line
-    assert "error=0.0" in line
 
 
 # -- the production paths: a port that is there but says nothing -------------
@@ -186,13 +176,8 @@ def test_a_silent_port_gives_up_rather_than_waiting_forever():
     emits nothing and never exits, so nothing restarts it."""
     with pytest.raises(DriverError) as exc:
         list(vedirect.frames(SilentPort(), idle_limit=5, clock=FakeClock()))
-    assert "no complete frame" in str(exc.value)
-
-
-def test_the_silent_port_message_names_the_two_likely_causes():
-    with pytest.raises(DriverError) as exc:
-        list(vedirect.frames(SilentPort(), idle_limit=1, clock=FakeClock()))
     message = str(exc.value)
+    assert "no complete frame" in message
     assert "controller may be off" in message and "port" in message
 
 
@@ -301,7 +286,9 @@ def test_streaming_emits_again_once_the_window_has_passed(monkeypatch):
 
     monkeypatch.setattr(vedirect.time, "time", advancing)
     emitted = drain(streaming_driver(fx.frame(fx.SUNNY) * 10))
-    assert len(emitted) > 1
+    # Exactly: the clock advances 20s per call against a 30s window, so every
+    # other frame publishes. "more than one" would hide an off-by-one.
+    assert len(emitted) == 5
 
 
 # -- the driver's own production paths ---------------------------------------
@@ -327,10 +314,15 @@ def test_read_skips_a_corrupt_frame_and_uses_the_next():
     assert values["pv_watts"] == 0.0
 
 
-def test_read_gives_up_when_every_frame_is_corrupt():
-    data = fx.corrupt(fx.frame(fx.SUNNY)) * 5
-    with pytest.raises(DriverError):
-        frame_source(data).read()
+def test_read_gives_up_on_a_line_that_talks_but_never_says_anything_valid():
+    """A port that runs dry stops through the idle limit, which is a different
+    path: the frame deadline this names was never reached at all."""
+    driver = vedirect.VedirectDriver("mppt", {"port": "/dev/fake",
+                                              "frame_timeout": 0.2}, {})
+    driver._serial = EndlessCorruptPort()
+    with pytest.raises(DriverError) as exc:
+        driver.read()
+    assert "failed the checksum" in str(exc.value)
 
 
 def test_check_reports_the_controller_identity():
