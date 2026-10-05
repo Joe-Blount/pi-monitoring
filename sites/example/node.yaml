@@ -83,13 +83,26 @@ battery:
 #                     fight over the port and the control loop loses.
 # ---------------------------------------------------------------------------
 
+# Two ways to turn something off, and they mean different things:
+#
+#   absent          this machine does not have that device. Nothing to say
+#                   about it. Irrigation on a sensors-only node is this case,
+#                   and so is the whole control block there.
+#   enabled: false  the device exists and is declared, but is out of service.
+#                   Pins, ids and calibration are kept, so re-enabling is a
+#                   one word change. A disabled device publishes enabled=0.0
+#                   and nothing else, every interval.
+#
+# That last part matters: every declared device publishes something every
+# interval, so SILENCE ALWAYS MEANS FAILURE, never intent.
+
 devices:
 
   - name: box                 # becomes part of the log line, not a tag
     driver: dht
     mode: poll
     interval: 30s
-    enabled: true
+    enabled: true             # the default; shown here for the example
     tags:
       location: box           # tags are per device, merged over the node tags
     params:
@@ -204,6 +217,9 @@ control:
     # -- DC branch: cameras and recorder ------------------------------------
     cameras:
       type: dc_branch
+      enabled: true           # same meaning as on a device: false keeps the
+                              # configuration but takes the load out of
+                              # service, and says so on the dashboard
       control_pin: 23
 
       # Verifying what the hardware actually did is OPTIONAL. Three sources:
@@ -285,6 +301,10 @@ control:
     # -- Sequenced AC: inverter and pump ------------------------------------
     irrigation:
       type: sequenced_ac
+      enabled: true           # the seasonal off switch. Set false when the
+                              # creek is dry; this is the manual dry-run
+                              # protection, and it is visible rather than
+                              # inferred from nothing happening
       on_stale_data: deny     # never start something on ignorance
 
       inverter:

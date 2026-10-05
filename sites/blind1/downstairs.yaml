@@ -104,6 +104,7 @@ control:
 
     cameras:
       type: dc_branch
+      enabled: true
       control_pin: 23                 # physical 16
       readback:
         source: load                  # derived from the shunt; no extra wiring
@@ -133,6 +134,7 @@ control:
 
     irrigation:
       type: sequenced_ac
+      enabled: true                   # set false when the creek is dry
       on_stale_data: deny
 
       inverter:

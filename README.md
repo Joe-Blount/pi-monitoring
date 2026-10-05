@@ -116,6 +116,10 @@ real problem.
   no extra wiring is needed. A dry contact on a GPIO is available where real
   independence is wanted. Restart behaviour never depends on it: the state
   after a released pin is determined by the relay polarity.
+- **Silence always means failure, never intent.** Every declared device
+  publishes something every interval; one that is `enabled: false` publishes
+  `enabled=0.0` and nothing else. A device this machine does not have is
+  absent from the configuration instead, which is a different statement.
 - **A failed write is logged, never discarded.**
 - **Counters persist.** Anything that accumulates, such as a rain total or a
   lockout counter, survives a restart in a state file, because the thing it
