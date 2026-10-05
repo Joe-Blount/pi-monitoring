@@ -3,6 +3,7 @@
 
     collect --node sites/garage/garage.yaml --poll     every poll-mode device
     collect host --node ...                            one device
+    collect mppt --node ... --stream                   a resident device, forever
     collect --node ... --list                          what this node declares
     collect --node ... --check                         probe without reading
     collect host --node ... --raw                      unparsed device output
@@ -38,6 +39,8 @@ def main(argv=None):
                         help="print what this node declares")
     parser.add_argument("--check", action="store_true",
                         help="probe every device without taking a reading")
+    parser.add_argument("--stream", action="store_true",
+                        help="run a resident device, printing readings as they arrive")
     parser.add_argument("--raw", action="store_true",
                         help="print the device's unparsed output")
     args = parser.parse_args(argv)
@@ -80,6 +83,12 @@ def main(argv=None):
                          % (args.node, args.device,
                             ", ".join(d.name for d in node.devices) or "none"))
         return 2
+
+    if args.stream:
+        if device.mode == "poll":
+            sys.stderr.write("device %r is poll mode; use --poll instead\n" % device.name)
+            return 2
+        return runner.stream_device(node, device)
 
     if args.raw:
         try:

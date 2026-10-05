@@ -148,6 +148,7 @@ collect --node sites/garage/garage.yaml --list     what this node declares
 collect --node ... --check                         probe devices, take no reading
 collect --node ... --poll                          every poll-mode device, once
 collect host --node ...                            one device
+collect mppt --node ... --stream                   a resident device, forever
 collect host --node ... --raw                      unparsed device output
 ```
 
@@ -182,10 +183,10 @@ No hardware, no network, no credentials.
 
 ## Status
 
-Telemetry: the core is written and tested. Line protocol, the configuration
-loader, calibration, the runner and the host driver, with the remaining
-drivers registered as stubs that fail loudly rather than silently returning
-nothing.
+Telemetry: the core is written and tested, in both poll and resident mode.
+Line protocol, the configuration loader, calibration, the runner, the host
+driver and the Victron VE.Direct driver. The remaining drivers are registered
+as stubs that fail loudly rather than silently returning nothing.
 
 Control: designed, not written, and waiting on a bench rig that must
 physically demonstrate four things before any contactor is bought. That a

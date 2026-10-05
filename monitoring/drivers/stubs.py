@@ -52,24 +52,6 @@ class RainGaugeDriver(NotWrittenYet):
     device = "rain_gauge"
 
 
-class VedirectDriver(NotWrittenYet):
-    """Victron VE.Direct text frames over a USB serial cable.
-
-    19200 8N1, read only; the controller transmits unprompted about once a
-    second and is never written to. A frame is label<TAB>value<CR><LF> lines
-    ending in a Checksum field, valid when every byte sums to 0 mod 256.
-
-    Parse byte-wise, not by lines. The checksum value is a single raw byte
-    that can itself be CR, LF or TAB, which breaks readline() on roughly one
-    frame in 85.
-
-    The `I` field is the charger's output current, not net battery current.
-    It reports production and reads zero at night while loads are running, so
-    it cannot be used to measure consumption.
-    """
-    device = "vedirect"
-
-
 class Pi30Driver(NotWrittenYet):
     """Voltronic PI30 ASCII protocol, as used by EG4 all-in-one inverters.
 

@@ -40,6 +40,25 @@ devices:
       inches_per_tip: 0.011
       state_file: /var/lib/monitoring/blind1-rain.json
 
+  # The charge controller lives here only until a second Pi exists downstairs.
+  # Today it is reached through a USB extension spanning 8 to 9 feet, which is
+  # a known source of intermittent enumeration failures; the downstairs node
+  # will reach it with the supplied cable and no extension.
+  #
+  # Moving it later is cut and paste: this entry goes into downstairs.yaml
+  # unchanged except for mode, which becomes "controller" once a controller
+  # exists to own the port. The measurement and the location tag do not
+  # change, so dashboards filtering on those are unaffected. Only the node tag
+  # changes.
+  - name: mppt
+    driver: vedirect
+    mode: resident
+    tags: {location: solar}
+    params:
+      port: /dev/serial/by-id/usb-VictronEnergy_BV_VE_Direct_cable_VEAWO3NQ-if00-port0
+      baud: 19200
+      emit_every: 30s
+
   - name: host
     driver: host
     mode: poll

@@ -1,0 +1,26 @@
+# Resident devices: one execd stanza each.
+#
+# Copy the block, one per device whose mode is "resident" in this node's file,
+# and name the device. Hand written and committed rather than generated: three
+# machines need a handful of stanzas between them, and a generator would be
+# more code than its output.
+#
+# telegraf restarts an execd child after restart_delay if it exits, which is
+# the retry logic, so the driver itself does not implement one.
+#
+# signal = "none" because these devices talk when they feel like it. telegraf
+# does not ask them for a reading; it reads whatever the child prints.
+
+# [[inputs.execd]]
+#   command = ["/opt/monitoring/bin/collect", "mppt",
+#              "--node", "/etc/monitoring/node.yaml", "--stream"]
+#   signal = "none"
+#   restart_delay = "10s"
+#   data_format = "influx"
+
+# [[inputs.execd]]
+#   command = ["/opt/monitoring/bin/collect", "rain",
+#              "--node", "/etc/monitoring/node.yaml", "--stream"]
+#   signal = "none"
+#   restart_delay = "10s"
+#   data_format = "influx"

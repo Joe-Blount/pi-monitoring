@@ -109,6 +109,71 @@ def poll(node, now_ns=None, out=None, err=None):
     return failures
 
 
+def stream_device(node, device, out=None, err=None, max_readings=None,
+                  sleep=time.sleep, clock=time.time):
+    """Run a resident driver, printing each reading as it arrives.
+
+    This is what telegraf's execd plugin runs: one long-lived process per
+    device, which is the right shape for anything that talks when it feels
+    like it rather than when it is asked.
+
+    Output is flushed per line. A buffered stream would hold readings until
+    the buffer filled, which on a sensor reporting every thirty seconds means
+    data arriving in clumps hours late.
+
+    A failure ends the process rather than being retried here. telegraf
+    restarts an execd child after its restart delay, so the retry logic
+    already exists and does not need writing twice. Returns an exit code.
+    """
+    out = sys.stdout if out is None else out
+    err = sys.stderr if err is None else err
+
+    if not device.enabled:
+        # A disabled resident device still reports, on the same cadence it
+        # would have used, so that an absence of data never means "somebody
+        # turned this off months ago".
+        interval = device.interval or 30.0
+        emitted = 0
+        while max_readings is None or emitted < max_readings:
+            out.write(disabled_point(node, device, int(clock() * 1e9)) + "\n")
+            out.flush()
+            emitted += 1
+            if max_readings is not None and emitted >= max_readings:
+                break
+            sleep(interval)
+        return 0
+
+    driver = None
+    try:
+        driver = build_driver(device)
+        emitted = 0
+        for fields in driver.stream():
+            out.write(point(node, device, fields, int(clock() * 1e9)) + "\n")
+            out.flush()
+            emitted += 1
+            if max_readings is not None and emitted >= max_readings:
+                return 0
+        err.write("device %s (%s): the device stopped sending\n"
+                  % (device.name, device.driver))
+        return 1
+    except DriverError as exc:
+        err.write("device %s (%s): %s\n" % (device.name, device.driver, exc))
+        return 1
+    except KeyboardInterrupt:
+        return 0
+    except Exception as exc:
+        err.write("device %s (%s): %s: %s\n"
+                  % (device.name, device.driver, type(exc).__name__, exc))
+        return 1
+    finally:
+        err.flush()
+        if driver is not None:
+            try:
+                driver.close()
+            except Exception:
+                pass
+
+
 def check(node, out=None):
     """Probe every declared device without taking a reading.
 
