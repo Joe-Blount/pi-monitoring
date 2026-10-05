@@ -207,3 +207,17 @@ hardware. Whether killing a process releases the GPIO line, which depends on
 the gpiozero backend and is what the fail-safe story rests on. And whether two
 processes can hold one input line, which decides whether the guard needs a pin
 of its own.
+
+`bin/gpio-probe` answers both on the machine that will run the control, with
+the operating system it will run, and needs nothing wired:
+
+```
+sudo ./bin/gpio-probe --pin 26 --node /etc/monitoring/node.yaml
+```
+
+It drives a pin, kills the process holding it, and reads the pin back without
+claiming the line, which is the only way to see what was left behind. It
+refuses a pin that a node file declares, that the board reserves, or that a
+device tree overlay has taken -- the last of those matters because a one-wire
+sensor is addressed by its id, so no node file ever mentions that GPIO4 is
+carrying a bus.

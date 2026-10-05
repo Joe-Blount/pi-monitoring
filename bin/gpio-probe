@@ -1,0 +1,399 @@
+#!/usr/bin/env python3
+"""Find out what a GPIO pin really does when software stops driving it.
+
+The whole fail-safe story depends on one claim: when the process driving a pin
+goes away, the pin stops driving and the relay de-energizes. That is true for
+the GPIO character device backend and false for the memory-mapped ones, which
+write the registers directly and leave a killed process's pin driving.
+
+Rather than argue about it, measure it on the machine that will run the
+control, with the operating system it will run.
+
+    sudo ./bin/gpio-probe --pin 26
+    sudo ./bin/gpio-probe --pin 26 --node /etc/monitoring/node.yaml
+
+Run it immediately after a reboot, before anything else touches the pin, to
+also learn the boot state:
+
+    sudo ./bin/gpio-probe --pin 26 --boot-state-only
+
+WIRING: this drives the pin high and low several times. Run it on a pin with
+nothing attached, or on one whose relay you are happy to hear click. It
+refuses any pin the node file declares.
+"""
+
+import argparse
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+DEBUGFS = "/sys/kernel/debug/gpio"
+
+
+# -- reading a pin without claiming it ---------------------------------------
+
+def raspi_gpio(pin):
+    """Read a pin through raspi-gpio, which does not claim the line."""
+    try:
+        out = subprocess.run(["raspi-gpio", "get", str(pin)],
+                             capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0 or not out.stdout.strip():
+        return None
+    text = out.stdout.strip()
+    found = dict(re.findall(r"(\w+)=(\w+)", text))
+    return {
+        "level": found.get("level"),
+        "func": found.get("func"),
+        "pull": found.get("pull"),
+        "raw": text,
+    }
+
+
+def debugfs_gpio(pin):
+    """Read a pin from the kernel's debug file, which also does not claim it."""
+    try:
+        with open(DEBUGFS) as handle:
+            text = handle.read()
+    except OSError:
+        return None
+    match = re.search(r"GPIO%d\s*\)\s*(\w+)\s+(\w+)" % pin, text)
+    if not match:
+        match = re.search(r"gpio-\d+\s+\(GPIO%d\s*\)\s+(\w+)\s+(\w+)" % pin, text)
+    if not match:
+        return None
+    direction, level = match.group(1), match.group(2)
+    return {
+        "level": "1" if level in ("hi", "high") else "0",
+        "func": "OUTPUT" if direction.startswith("out") else "INPUT",
+        "pull": None,
+        "raw": match.group(0),
+    }
+
+
+def read_pin(pin):
+    """Report a pin's state without disturbing it."""
+    return raspi_gpio(pin) or debugfs_gpio(pin)
+
+
+def describe(state):
+    if state is None:
+        return "unreadable"
+    bits = ["level=%s" % state.get("level"), "func=%s" % state.get("func")]
+    if state.get("pull"):
+        bits.append("pull=%s" % state["pull"])
+    return "  ".join(bits)
+
+
+# -- the child that holds the pin --------------------------------------------
+
+def hold_pin(pin):
+    """Drive the pin high and wait to be killed. Run as a child process."""
+    from gpiozero import LED
+    led = LED(pin)
+    led.on()
+    sys.stdout.write("holding\n")
+    sys.stdout.flush()
+    while True:
+        time.sleep(3600)
+
+
+def spawn_holder(pin):
+    child = subprocess.Popen(
+        [sys.executable, os.path.abspath(__file__), "--pin", str(pin), "--hold"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        line = child.stdout.readline()
+        if line.strip() == "holding":
+            return child
+        if child.poll() is not None:
+            raise RuntimeError("the holder exited: %s"
+                               % (child.stderr.read() or "").strip()[:300])
+        time.sleep(0.1)
+    child.kill()
+    raise RuntimeError("the holder never reported that it had the pin")
+
+
+# -- the checks --------------------------------------------------------------
+
+def report_environment():
+    print("== environment")
+    print("  python        : %s" % sys.version.split()[0])
+    try:
+        import gpiozero
+        print("  gpiozero      : %s" % gpiozero.__version__)
+    except ImportError:
+        print("  gpiozero      : NOT INSTALLED. apt install python3-gpiozero")
+        return False
+
+    factory = os.environ.get("GPIOZERO_PIN_FACTORY")
+    print("  factory wanted: %s" % (factory or "not set, gpiozero will choose"))
+    try:
+        from gpiozero import Device
+        Device.ensure_pin_factory()
+        name = type(Device.pin_factory).__name__
+        print("  factory in use: %s" % name)
+        if "lgpio" in name.lower() or "gpiod" in name.lower():
+            print("                  (character device: releases the line on exit)")
+        else:
+            print("                  (WARNING: this backend may write registers")
+            print("                   directly and leave a killed process's pin driving)")
+    except Exception as exc:
+        print("  factory in use: could not determine (%s)" % exc)
+
+    print("  raspi-gpio    : %s" % ("present" if raspi_gpio(2) else "absent"))
+    print("  debugfs       : %s" % ("readable" if os.access(DEBUGFS, os.R_OK)
+                                    else "not readable, run with sudo"))
+    return True
+
+
+#: Pins that are never safe to drive, whatever any configuration says.
+ALWAYS_RESERVED = {
+    0: "HAT identification EEPROM",
+    1: "HAT identification EEPROM",
+    14: "serial console transmit",
+    15: "serial console receive",
+}
+
+BOOT_CONFIGS = ("/boot/firmware/config.txt", "/boot/config.txt")
+
+
+def overlay_pins():
+    """Pins a device tree overlay has taken, which no node file mentions.
+
+    This is the gap that matters. A one-wire temperature sensor is addressed
+    by its own id rather than by a pin, so nothing in a node file says that
+    GPIO4 is carrying a bus. Driving it would disturb every sensor on that
+    wire.
+    """
+    taken = {}
+    for path in BOOT_CONFIGS:
+        try:
+            with open(path) as handle:
+                text = handle.read()
+        except OSError:
+            continue
+        for line in text.splitlines():
+            line = line.split("#", 1)[0].strip()
+            if line.startswith("dtoverlay=w1-gpio"):
+                pin = 4                      # the overlay's default
+                match = re.search(r"gpiopin=(\d+)", line)
+                if match:
+                    pin = int(match.group(1))
+                taken[pin] = "one-wire bus (%s)" % line
+            elif line.startswith("dtparam=i2c_arm=on"):
+                taken.setdefault(2, "I2C data")
+                taken.setdefault(3, "I2C clock")
+            elif line.startswith("dtparam=spi=on"):
+                for spi_pin, role in ((7, "SPI CE1"), (8, "SPI CE0"), (9, "SPI MISO"),
+                                      (10, "SPI MOSI"), (11, "SPI clock")):
+                    taken.setdefault(spi_pin, role)
+        break
+    return taken
+
+
+def check_pin_is_safe(pin):
+    """Refuse a pin that something other than a node file has claimed."""
+    if pin in ALWAYS_RESERVED:
+        print("  GPIO%d is reserved for the %s. Refusing."
+              % (pin, ALWAYS_RESERVED[pin]))
+        return False
+
+    for taken_pin, role in sorted(overlay_pins().items()):
+        if taken_pin == pin:
+            print("  GPIO%d is taken by the %s, per the boot configuration."
+                  % (pin, role))
+            print("  No node file mentions it, which is exactly why this check")
+            print("  exists. Refusing.")
+            return False
+
+    state = read_pin(pin)
+    if state and state.get("func") not in (None, "INPUT", "OUTPUT"):
+        print("  GPIO%d is currently in function %s, so a peripheral owns it."
+              % (pin, state.get("func")))
+        print("  Refusing.")
+        return False
+
+    return True
+
+
+def check_pin_is_free(pin, node_file):
+    """Refuse a pin the node file says is wired to something."""
+    if not node_file:
+        return True
+    try:
+        from monitoring import config
+        from monitoring import drivers
+        node = config.load(node_file, known_drivers=drivers.names())
+    except Exception as exc:
+        print("  could not read %s (%s); not checking pin use" % (node_file, exc))
+        return True
+
+    claimed = {}
+    for device in node.devices:
+        for key in ("pin", "data_pin", "control_pin", "readback_pin"):
+            if device.params.get(key) == pin:
+                claimed[pin] = device.name
+    for name, load in (node.control.get("loads") or {}).items():
+        if load.get("control_pin") == pin:
+            claimed[pin] = "load %s" % name
+    if pin in claimed:
+        print("  GPIO%d is declared in %s as %s. Refusing."
+              % (pin, node_file, claimed[pin]))
+        return False
+    print("  GPIO%d is not declared in %s" % (pin, node_file))
+    return True
+
+
+def run_checks(pin):
+    results = {}
+
+    print("\n== baseline, before anything drives it")
+    before = read_pin(pin)
+    print("  %s" % describe(before))
+    results["baseline"] = before
+
+    print("\n== while a process is driving it high")
+    child = spawn_holder(pin)
+    time.sleep(0.5)
+    driving = read_pin(pin)
+    print("  %s" % describe(driving))
+    if driving and driving.get("level") != "1":
+        print("  WARNING: the pin did not actually go high. Everything below")
+        print("           is meaningless until that is understood.")
+    results["driving"] = driving
+
+    print("\n== after that process is KILLED (kill -9, no cleanup runs)")
+    print("   This is the case the fail-safe design depends on.")
+    child.send_signal(signal.SIGKILL)
+    child.wait(timeout=10)
+    time.sleep(0.5)
+    after_kill = read_pin(pin)
+    print("  %s" % describe(after_kill))
+    results["after_kill"] = after_kill
+
+    print("\n== after a process exits CLEANLY")
+    child = spawn_holder(pin)
+    time.sleep(0.5)
+    child.send_signal(signal.SIGTERM)
+    child.wait(timeout=10)
+    time.sleep(0.5)
+    after_term = read_pin(pin)
+    print("  %s" % describe(after_term))
+    results["after_term"] = after_term
+
+    print("\n== can two processes hold one input line?")
+    print("   Decides whether the guard needs a pin of its own.")
+    try:
+        from gpiozero import Button
+        first = Button(pin, pull_up=True)
+        try:
+            second = Button(pin, pull_up=True)
+            second.close()
+            print("  yes, both opened it")
+            results["shared_input"] = True
+        except Exception as exc:
+            print("  no: %s" % str(exc).splitlines()[0][:120])
+            results["shared_input"] = False
+        finally:
+            first.close()
+    except Exception as exc:
+        print("  could not test: %s" % exc)
+        results["shared_input"] = None
+
+    return results
+
+
+def verdict(results):
+    print("\n== what this means")
+    killed = results.get("after_kill")
+    if killed is None:
+        print("  Could not read the pin after the kill, so the central question")
+        print("  is UNANSWERED. Install raspi-gpio, or run with sudo so the")
+        print("  kernel debug file is readable.")
+        return 2
+
+    released = killed.get("func") == "INPUT" or killed.get("level") == "0"
+    if released:
+        print("  PASS. A killed process left the pin at %s, %s."
+              % (killed.get("level"), killed.get("func")))
+        print("  Energize-to-connect holds: if the controller dies, the load")
+        print("  drops. The irrigation fail-safe is real rather than assumed.")
+    else:
+        print("  FAIL. A killed process left the pin still driving (%s)."
+              % describe(killed))
+        print("  Energize-to-connect does NOT hold on this machine. A crashed")
+        print("  controller would leave the inverter and pump energized.")
+        print("  Fix before wiring anything: install python3-lgpio and set")
+        print("  GPIOZERO_PIN_FACTORY=lgpio in the controller's unit file,")
+        print("  then run this again.")
+
+    shared = results.get("shared_input")
+    if shared is True:
+        print("\n  Two processes CAN share an input line here, so the guard may")
+        print("  read the same readback pin as the controller.")
+    elif shared is False:
+        print("\n  Two processes CANNOT share an input line, as expected. The")
+        print("  guard needs its own pin, or must take the value from the")
+        print("  controller rather than from the hardware.")
+
+    return 0 if released else 1
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--pin", type=int, required=True,
+                        help="BCM pin to test. Must have nothing attached, or a "
+                             "relay you are happy to hear click")
+    parser.add_argument("--node", help="node file, to refuse a pin already in use")
+    parser.add_argument("--boot-state-only", action="store_true",
+                        help="just report the pin's state and exit; run this "
+                             "first thing after a reboot")
+    parser.add_argument("--hold", action="store_true", help=argparse.SUPPRESS)
+    args = parser.parse_args()
+
+    if args.hold:
+        hold_pin(args.pin)
+        return 0
+
+    if args.boot_state_only:
+        print("GPIO%d at boot: %s" % (args.pin, describe(read_pin(args.pin))))
+        print("For an energize-to-connect load this must read level=0.")
+        return 0
+
+    print("GPIO probe on BCM pin %d" % args.pin)
+    print("This drives the pin high and low. Nothing should be attached to it,")
+    print("or only a relay you are content to hear click.\n")
+
+    # Safety first, and before anything that can fail for other reasons: a
+    # pin that is wired to a sensor must be refused whether or not the GPIO
+    # library happens to be installed.
+    print("== pin safety")
+    if not check_pin_is_safe(args.pin):
+        return 2
+    if not check_pin_is_free(args.pin, args.node):
+        return 2
+
+    print()
+    if not report_environment():
+        return 2
+
+    try:
+        results = run_checks(args.pin)
+    except Exception as exc:
+        print("\n  the probe failed: %s" % exc)
+        return 2
+
+    return verdict(results)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
