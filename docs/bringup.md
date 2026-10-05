@@ -74,6 +74,16 @@ on older systems), then **reboot**. None of it takes effect until you do.
 | DHT11, DHT22 or AM2302 | `dtoverlay=dht11,gpiopin=<pin>` | The overlay is called `dht11` whatever sensor you have. A DHT22 uses the same line. This is the commonest reason people think their sensor is unsupported. |
 | PCF8591 or other I2C | `dtparam=i2c_arm=on` | Also add `i2c-dev` to `/etc/modules`. |
 
+Bluetooth devices need no overlay, but they do need the stack:
+
+```
+apt-cache policy python3-bleak      # confirm it is available on this release
+sudo apt install python3-bleak
+```
+
+The install script does this for you when the node file declares a Bluetooth
+device, and skips it otherwise so a sensors-only machine stays small.
+
 After the reboot, confirm the kernel found them:
 
 ```
