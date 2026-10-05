@@ -33,25 +33,6 @@ class DhtDriver(NotWrittenYet):
     device = "dht"
 
 
-class Ds18b20Driver(NotWrittenYet):
-    """DS18B20 one-wire temperature.
-
-    Addressed by its `28-*` id under /sys/bus/w1/devices, never by position on
-    the bus. Needs `dtoverlay=w1-gpio` and a 4.7k pull-up to 3V3.
-    """
-    device = "ds18b20"
-
-
-class RainGaugeDriver(NotWrittenYet):
-    """Tipping bucket rain gauge: a reed switch closing to ground.
-
-    Must be resident, because it counts edges that arrive at unpredictable
-    times. The running total is persisted, since otherwise it silently resets
-    on every power event and the data looks like rainfall that stopped.
-    """
-    device = "rain_gauge"
-
-
 class Pi30Driver(NotWrittenYet):
     """Voltronic PI30 ASCII protocol, as used by EG4 all-in-one inverters.
 

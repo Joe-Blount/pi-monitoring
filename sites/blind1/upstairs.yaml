@@ -30,6 +30,10 @@ devices:
     params:
       device_id: 28-3ce1d44326bf
 
+  # rain_inches now counts up and is persisted, where the original script
+  # held it in memory and it silently reset on every power event. A dashboard
+  # panel should therefore ask for the increase over a window rather than
+  # expect the number itself to return to zero.
   - name: rain
     driver: rain_gauge
     mode: resident
@@ -38,6 +42,7 @@ devices:
       pin: 6
       bounce_ms: 1
       inches_per_tip: 0.011
+      emit_every: 60s
       state_file: /var/lib/monitoring/blind1-rain.json
 
   # The charge controller lives here only until a second Pi exists downstairs.

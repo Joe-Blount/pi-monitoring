@@ -185,8 +185,9 @@ No hardware, no network, no credentials.
 
 Telemetry: the core is written and tested, in both poll and resident mode.
 Line protocol, the configuration loader, calibration, the runner, the host
-driver and the Victron VE.Direct driver. The remaining drivers are registered
-as stubs that fail loudly rather than silently returning nothing.
+driver, the Victron VE.Direct driver, the DS18B20 and the rain gauge. The DHT
+sensor, the EG4 inverter and the two Bluetooth devices are registered as stubs
+that fail loudly rather than silently returning nothing.
 
 Control: designed, not written, and waiting on a bench rig that must
 physically demonstrate four things before any contactor is bought. That a

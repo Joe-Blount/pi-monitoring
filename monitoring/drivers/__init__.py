@@ -17,8 +17,8 @@ REGISTRY = {
     # file naming a planned device still validates, which keeps an unknown
     # driver a typo rather than a legitimate forward reference.
     "dht": ("monitoring.drivers.stubs", "DhtDriver"),
-    "ds18b20": ("monitoring.drivers.stubs", "Ds18b20Driver"),
-    "rain_gauge": ("monitoring.drivers.stubs", "RainGaugeDriver"),
+    "ds18b20": ("monitoring.drivers.ds18b20", "Ds18b20Driver"),
+    "rain_gauge": ("monitoring.drivers.rain_gauge", "RainGaugeDriver"),
     "vedirect": ("monitoring.drivers.vedirect", "VedirectDriver"),
     "pi30": ("monitoring.drivers.stubs", "Pi30Driver"),
     "ble_bms": ("monitoring.drivers.stubs", "BleBmsDriver"),
