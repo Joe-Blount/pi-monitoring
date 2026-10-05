@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""Read devices declared in a node file and print InfluxDB line protocol.
+
+    collect --node sites/garage/garage.yaml --poll     every poll-mode device
+    collect host --node ...                            one device
+    collect --node ... --list                          what this node declares
+    collect --node ... --check                         probe without reading
+    collect host --node ... --raw                      unparsed device output
+
+Nothing here writes to InfluxDB. Output goes to standard output and is picked
+up by telegraf, which owns scheduling, buffering, retry and credentials.
+"""
+
+import argparse
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from monitoring import config, runner                      # noqa: E402
+from monitoring import drivers as driver_registry          # noqa: E402
+from monitoring.drivers.base import DriverError            # noqa: E402
+
+DEFAULT_NODE = "/etc/monitoring/node.yaml"
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="collect", description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("device", nargs="?",
+                        help="read one device; omit with --poll, --list or --check")
+    parser.add_argument("--node", default=os.environ.get("MONITORING_NODE", DEFAULT_NODE),
+                        help="path to the node file (default: %s)" % DEFAULT_NODE)
+    parser.add_argument("--poll", action="store_true",
+                        help="read every poll-mode device, once")
+    parser.add_argument("--list", action="store_true",
+                        help="print what this node declares")
+    parser.add_argument("--check", action="store_true",
+                        help="probe every device without taking a reading")
+    parser.add_argument("--raw", action="store_true",
+                        help="print the device's unparsed output")
+    args = parser.parse_args(argv)
+
+    try:
+        node = config.load(args.node, known_drivers=driver_registry.names())
+    except config.ConfigError as exc:
+        sys.stderr.write("%s\n" % exc)
+        return 2
+
+    if args.list:
+        runner.listing(node)
+        return 0
+
+    if args.check:
+        sys.stdout.write("%s / %s\n" % (node.site, node.node))
+        failures = runner.check(node)
+        if failures:
+            sys.stdout.write("%d device(s) failed. This is a warning, not a refusal:\n"
+                             "a dead sensor must not block an update at a site nobody\n"
+                             "can reach. It will fail loudly at runtime instead.\n"
+                             % failures)
+        return 1 if failures else 0
+
+    if args.poll:
+        if args.device:
+            parser.error("give a device name or --poll, not both")
+        devices = node.by_mode("poll")
+        failures = runner.poll(node)
+        # Exit non-zero only when nothing at all could be read. One dead
+        # sensor among several must not mark the whole collection failed.
+        return 1 if devices and failures == len(devices) else 0
+
+    if not args.device:
+        parser.error("give a device name, or --poll, --list or --check")
+
+    device = node.find(args.device)
+    if device is None:
+        sys.stderr.write("%s declares no device named %r. Known: %s\n"
+                         % (args.node, args.device,
+                            ", ".join(d.name for d in node.devices) or "none"))
+        return 2
+
+    if args.raw:
+        try:
+            driver = runner.build_driver(device)
+            sys.stdout.write(str(driver.raw()) + "\n")
+            return 0
+        except DriverError as exc:
+            sys.stderr.write("%s\n" % exc)
+            return 1
+
+    result = runner.read_device(node, device)
+    if not result.ok:
+        sys.stderr.write("device %s (%s): %s\n"
+                         % (device.name, device.driver, result.error))
+        return 1
+    for line in result.lines:
+        sys.stdout.write(line + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

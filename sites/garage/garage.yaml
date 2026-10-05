@@ -8,15 +8,17 @@ tags:
 
 devices:
 
-  - name: box
-    driver: dht
-    mode: poll
-    interval: 30s
-    tags: {location: box}
-    params:
-      model: DHT22
-      pin: 4
-      retries: 3
+  # The DHT22 deliberately stays on its existing compiled telegraf plugin for
+  # now. It works, and replacing it would mean adopting a GPIO library this
+  # project does not trust yet. Swapping the one thing that works for the one
+  # library we distrust is a poor first move; this comes later, or never.
+  #
+  # - name: box
+  #   driver: dht
+  #   mode: poll
+  #   interval: 30s
+  #   tags: {location: box}
+  #   params: {model: DHT22, pin: 4, retries: 3}
 
   - name: host
     driver: host

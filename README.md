@@ -141,14 +141,55 @@ Nothing in the test suite needs hardware, a network or credentials.
   weather.
 - Relay sequencing is tested against gpiozero's mock pin factory.
 
+## Running it
+
+```
+collect --node sites/garage/garage.yaml --list     what this node declares
+collect --node ... --check                         probe devices, take no reading
+collect --node ... --poll                          every poll-mode device, once
+collect host --node ...                            one device
+collect host --node ... --raw                      unparsed device output
+```
+
+`--poll` is what telegraf runs. Exit codes: 0 on success, 1 when a device
+failed, 2 when the node file itself is wrong. A single dead sensor among
+several does not mark the collection failed, because one broken sensor must
+not stop a site reporting.
+
+## Installing on a machine
+
+```
+sudo deploy/install.sh <site> <node>
+sudo deploy/install.sh garage garage
+```
+
+Idempotent, so updating is `git pull` and run it again. It installs a telegraf
+**input** only and never touches the output, so a machine that already writes
+to InfluxDB keeps its existing configuration and its existing credentials.
+
+A device that fails its check produces a warning, not a refusal. A dead five
+dollar sensor must never block a software update at a site nobody can reach.
+
+## Development
+
+```
+python3 -m venv .venv
+.venv/bin/pip install -e ".[dev]"
+.venv/bin/python -m pytest
+```
+
+No hardware, no network, no credentials.
+
 ## Status
 
-Early. Configuration schema first, for review, before the code that depends on
-it.
+Telemetry: the core is written and tested. Line protocol, the configuration
+loader, calibration, the runner and the host driver, with the remaining
+drivers registered as stubs that fail loudly rather than silently returning
+nothing.
 
-The telemetry side is ready to build. The control side is designed but waits on
-a bench rig that must physically demonstrate four things before any contactor
-is bought: that a relay stays off through a cold boot, that killing a process
-driving a pin actually drops the relay, which gpiozero pin factory is in use,
-and whether two processes can read one input line. Those results decide the
-safety argument, which is currently a paragraph rather than a test.
+Control: designed, not written, and waiting on a bench rig that must
+physically demonstrate four things before any contactor is bought. That a
+relay stays off through a cold boot. That killing a process driving a pin
+actually drops the relay. Which gpiozero pin factory is in use. And whether
+two processes can read one input line. Those results decide the safety
+argument, which is currently a paragraph rather than a test.
