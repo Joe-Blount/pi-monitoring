@@ -111,6 +111,11 @@ real problem.
   which is the safe direction. A condition with no fresh reading is dropped
   from the test rather than counted as false, so one stale Bluetooth value
   cannot make a restore permanently impossible.
+- **Verifying what the hardware did is optional.** It can be derived from the
+  measured DC load, since the switched loads differ by orders of magnitude, so
+  no extra wiring is needed. A dry contact on a GPIO is available where real
+  independence is wanted. Restart behaviour never depends on it: the state
+  after a released pin is determined by the relay polarity.
 - **A failed write is logged, never discarded.**
 - **Counters persist.** Anything that accumulates, such as a rain total or a
   lockout counter, survives a restart in a state file, because the thing it

@@ -205,7 +205,28 @@ control:
     cameras:
       type: dc_branch
       control_pin: 23
-      readback_pin: 24        # contactor auxiliary contact
+
+      # Verifying what the hardware actually did is OPTIONAL. Three sources:
+      #
+      #   load   infer from measured DC load. Free, because the shunt is
+      #          already there and the loads differ by orders of magnitude:
+      #          cameras a couple of amps, inverter idle one or two, pump
+      #          around 130. Cannot see a welded contactor masked by another
+      #          load, and goes blind when the shunt reading is stale.
+      #   pin    a dry contact on a GPIO: a contactor auxiliary block, or an
+      #          AC current switch, which is better because it reports that
+      #          current is really flowing rather than that an armature moved.
+      #          Truly independent, costs hardware.
+      #   none   no verification. Still safe, because the restart behaviour
+      #          comes from the polarity rather than from a sensor.
+      #
+      # Do NOT press a spare power pole into service as a readback. Power
+      # contacts switching milliamps grow an oxide film and start failing
+      # intermittently months later.
+      readback:
+        source: load
+        pin: null             # only when source is pin
+        expect_amps: {min: 1.5, max: 6.0}   # only when source is load
 
       # energize_to_shed means NORMALLY CLOSED contacts: the load runs unless
       # the Pi deliberately opens them.
@@ -268,17 +289,30 @@ control:
 
       inverter:
         control_pin: 25
-        readback_pin: 16      # senses AC actually present, not what was
-                              # commanded. Needs an isolated sensing module;
-                              # 120 V does not go to a GPIO pin.
         polarity: energize_to_connect
         settle_after_on: 10s  # let the inverter stabilize before any load
+        # Worth having in some form, because the relay is wired in parallel
+        # with the inverter's own panel switch, so the Pi cannot command it off
+        # while that switch is on. Derived from load, a standing idle draw
+        # while commanded off reveals exactly that, which is the drain this
+        # whole design exists to remove.
+        #
+        # As a pin this is not an auxiliary contact: it senses whether AC is
+        # really present. A small pilot relay with a 120 VAC coil across the
+        # output, dry contacts to the GPIO. Mains never reaches a GPIO pin.
+        readback:
+          source: load
+          pin: null
+          expect_amps: {min: 0.8, max: 3.0}
 
       pump:
         control_pin: 22
-        readback_pin: 13      # contactor auxiliary contact
         polarity: energize_to_connect
         settle_before_inverter_off: 3s
+        readback:
+          source: load
+          pin: null
+          expect_amps: {min: 90, max: 180}
 
       # Where a request comes from. A decision may not depend on the network,
       # but a request is not a decision: the file is read locally like any
@@ -339,8 +373,19 @@ control:
                                     # flaky radio stops the watering.
 
       guard:
-        # Enforced by a separate systemd unit that reads only the pump
-        # readback and kills the controller. Killing releases the output pins,
-        # which drops the contactor. Deliberately longer than max_run, so the
-        # two limits do not share a failure mode.
+        # A separate systemd unit that stops the controller when the pump has
+        # run too long. Stopping releases the output pins, which drops the
+        # contactor. The cap is deliberately longer than max_run so the two
+        # limits do not share a failure mode.
         absolute_max_run: 60m
+
+        # What the guard watches:
+        #
+        #   state_file  the file the controller rewrites each loop. Catches a
+        #               hung controller and a controller that is simply wrong,
+        #               which is what the guard is for. Cannot see a welded
+        #               contactor. Needs no hardware.
+        #   pin         a dry contact. Fully independent of the controller.
+        input: state_file
+        pin: null
+        stale_after: 60s      # state file older than this counts as hung
