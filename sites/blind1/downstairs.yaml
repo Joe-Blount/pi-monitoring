@@ -3,15 +3,27 @@
 # NOT BUILT YET. This machine does not exist. The file is here so the schema
 # can be reviewed and so the design has somewhere concrete to live.
 #
-# Before any of the control section is enabled, a bench rig must prove four
-# things that the safety argument rests on:
+# Control is commissioned in place rather than on a bench, which is how
+# everything else here was built. What makes that reasonable is that the
+# run-time cap and the guard are in force from the first live run, so a relay
+# that sticks on is bounded rather than unbounded. Have those working before
+# the first live test.
 #
-#   1. the relay stays off through a cold boot with the gpio= line in place
-#   2. kill -9 of a process driving a pin high actually drops the relay
-#   3. which gpiozero pin factory is in use (must be the character device)
-#   4. whether two processes can read one input line
+# Two questions that a bench would have answered are software rather than
+# hardware, and are settled remotely with nothing wired:
 #
-# Until then, treat every threshold below as a placeholder.
+#   1. does killing a process actually release the GPIO line? That depends on
+#      which gpiozero backend is installed, not on any relay, and the whole
+#      fail-safe story rests on the answer being yes.
+#   2. can two processes hold one input line? They cannot, under the GPIO
+#      character device, which decides whether the guard needs its own pin.
+#
+# The third is genuinely hardware and is settled when the part is bought: a
+# relay module that triggers on a LOW input carries its own pull-up, which
+# beats the Pi's weak internal pull-down and energizes the relay during every
+# boot. Buy active-high.
+#
+# Every threshold below is a placeholder until the loads are characterized.
 
 site: blind1
 node: downstairs

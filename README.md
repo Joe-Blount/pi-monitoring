@@ -198,9 +198,12 @@ Five of eight drivers are written. The PI30 driver is tested against the
 protocol's published frames but has not yet met the inverter, which is waiting
 on a serial adapter. The Bluetooth drivers wait on knowing their protocols.
 
-Control: designed, not written, and waiting on a bench rig that must
-physically demonstrate four things before any contactor is bought. That a
-relay stays off through a cold boot. That killing a process driving a pin
-actually drops the relay. Which gpiozero pin factory is in use. And whether
-two processes can read one input line. Those results decide the safety
-argument, which is currently a paragraph rather than a test.
+Control: designed, not written. It is commissioned in place rather than on a
+bench, with the run-time cap and the guard in force from the first live run so
+that a relay which sticks on is bounded rather than unbounded.
+
+Two preconditions are settled before then, and both are software rather than
+hardware. Whether killing a process releases the GPIO line, which depends on
+the gpiozero backend and is what the fail-safe story rests on. And whether two
+processes can hold one input line, which decides whether the guard needs a pin
+of its own.
