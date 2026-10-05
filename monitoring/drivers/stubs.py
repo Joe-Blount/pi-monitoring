@@ -35,6 +35,7 @@ class BleBmsDriver(NotWrittenYet):
     look like a hang, so this must never run inside a watchdog-fed loop.
     """
     device = "ble_bms"
+    needs_bluetooth = True
 
 
 class BleShuntDriver(NotWrittenYet):
@@ -47,3 +48,4 @@ class BleShuntDriver(NotWrittenYet):
     derived from it is trusted.
     """
     device = "ble_shunt"
+    needs_bluetooth = True

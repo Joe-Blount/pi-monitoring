@@ -30,21 +30,9 @@ if [[ "$(id -u)" != "0" ]]; then
 fi
 
 echo "==> packages"
-# python3-yaml is the only hard requirement. Drivers that need more pull their
-# own packages in as they are written, so a sensors-only node stays small.
-# Bluetooth drivers need bleak, which is packaged on both releases in use, so
-# it installs like everything else rather than needing a virtual environment.
-# Only when this node actually declares a Bluetooth device: a sensors-only
-# machine should not carry a Bluetooth stack it never uses.
-if grep -qE "driver:\s*ble_" "$NODE_FILE"; then
-    if python3 -c "import bleak" 2>/dev/null; then
-        echo "    python3-bleak already present"
-    else
-        apt-get install -y --no-install-recommends python3-bleak >/dev/null \
-            || echo "    WARNING: could not install python3-bleak; Bluetooth devices will fail"
-    fi
-fi
-
+# python3-yaml is the only hard requirement, and it comes first because the
+# steps after it read the node file. Drivers that need more pull their own
+# packages in as they are written, so a sensors-only node stays small.
 if python3 -c "import yaml" 2>/dev/null; then
     echo "    python3-yaml already present"
 else
@@ -52,6 +40,30 @@ else
     # to take a code update.
     apt-get install -y --no-install-recommends python3-yaml >/dev/null \
         || echo "    WARNING: could not install python3-yaml. Nothing will run"
+fi
+
+# Bluetooth drivers need bleak, which is packaged on both releases in use, so
+# it installs like everything else rather than needing a virtual environment.
+# Only when this node actually declares an enabled Bluetooth device: a
+# sensors-only machine should not carry a Bluetooth stack it never uses.
+#
+# The node file is loaded rather than searched, and each driver says for itself
+# whether it needs a radio. Matching the text instead was wrong twice over: it
+# skipped bleak for a Bluetooth driver not named after its transport, and it
+# matched devices that were commented out.
+if (cd "$REPO" && python3 -c '
+import sys
+from monitoring import config, drivers
+node = config.load(sys.argv[1], drivers.names())
+sys.exit(0 if any(
+    getattr(drivers.get(d.driver), "needs_bluetooth", False)
+    for d in node.devices if d.enabled) else 1)' "$NODE_FILE" 2>/dev/null); then
+    if python3 -c "import bleak" 2>/dev/null; then
+        echo "    python3-bleak already present"
+    else
+        apt-get install -y --no-install-recommends python3-bleak >/dev/null \
+            || echo "    WARNING: could not install python3-bleak; Bluetooth devices will fail"
+    fi
 fi
 
 echo "==> directories"

@@ -24,6 +24,12 @@ class Driver:
     #: Set by subclasses. Used in error messages and by --list.
     description = ""
 
+    #: Whether this driver needs a Bluetooth stack. Declared here rather
+    #: than guessed from the driver's name by the install script, which once
+    #: matched only names beginning "ble_" and therefore skipped bleak for a
+    #: Bluetooth driver named after its protocol.
+    needs_bluetooth = False
+
     #: Modes this driver can actually work in. A rain gauge in poll mode
     #: validates, lists, checks and publishes a total that never changes,
     #: because nothing is watching the pin between polls.

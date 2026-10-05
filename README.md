@@ -205,13 +205,14 @@ No hardware, no network, no credentials.
 Telemetry: the core is written and tested, in both poll and resident mode.
 Line protocol, the configuration loader, calibration, the runner, the host
 driver, the Victron VE.Direct driver, the DS18B20, the rain gauge, the DHT
-family, the Voltronic PI30 inverter and the SOK ABC-BMS battery pack.
+family, the Voltronic PI30 inverter and the ABC-BMS battery pack.
 
 Seven of nine drivers are written. The two that remain are Bluetooth, and they
 wait on knowing their protocols, which needs a scan at the site.
 
 Two written drivers have not yet met their hardware. The PI30 inverter driver
-waits on a serial adapter. The SOK driver is complete for everything the
+waits on a serial adapter. The ABC-BMS driver, which reads SOK and other
+packs, is complete for everything the
 protocol documents with confidence, which is the transport, the framing, the
 checksum, the command set and the scalar values. The layout of the cell-voltage
 entries is the one part taken on trust, so that reader checks its own result
@@ -241,3 +242,41 @@ refuses a pin that a node file declares, that the board reserves, or that a
 device tree overlay has taken -- the last of those matters because a one-wire
 sensor is addressed by its id, so no node file ever mentions that GPIO4 is
 carrying a bus.
+
+## Protocols, credit and scope
+
+Every device here is read over a local link to hardware the owner owns: a
+serial cable, a GPIO pin, or Bluetooth. Nothing talks to a vendor's cloud
+service, and nothing needs an account.
+
+Every driver is read-only. Several of these battery modules accept
+unauthenticated commands that can switch their charge and discharge paths, and
+this project sends none of them. Switching is done with relays on circuits the
+owner wired, never by asking a battery to disconnect itself.
+
+Some of these protocols are published by the vendor, and those are the pleasant
+ones. Victron documents VE.Direct, JK publishes its RS485 protocol, and EG4
+sends its protocol document to anyone who asks support. Others were worked out
+by people reading their own traffic, and this project reimplements what they
+documented rather than copying their code. No vendor document is redistributed
+here; where one exists, it is cited and left where the vendor put it.
+
+The ABC-BMS driver owes its resolution of the cell-voltage paging to two
+projects worth reading if you are adding a battery: batmon-ha, under the MIT
+license, and aiobmsble, under Apache-2.0.
+
+A driver is named after the protocol, not the brand. The same protocol appears
+under many brands, and one brand can ship two unrelated protocols across its
+range, so a brand name on a driver is wrong as soon as the range grows. Where a
+brand name was used first, it stays as an alias so that existing node files keep
+working.
+
+## License
+
+MIT. See LICENSE.
+
+This software reads batteries and switches loads, and it is offered with no
+warranty of any kind. Do not rely on it for anything where a missed reading or
+a stuck relay would be unsafe. Treat every protective device in the system as
+the thing that keeps you safe, and treat this as the thing that tells you what
+happened.

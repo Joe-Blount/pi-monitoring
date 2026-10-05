@@ -144,3 +144,39 @@ def test_the_poll_command_has_room_for_a_retrying_sensor():
     conf = (REPO / "deploy" / "telegraf.d" / "monitoring.conf").read_text()
     match = re.search(r'timeout\s*=\s*"(\d+)s"', conf)
     assert match and int(match.group(1)) >= 15
+
+
+INSTALL = (REPO / "deploy" / "install.sh").read_text()
+
+
+def test_the_install_script_decides_on_bluetooth_from_the_drivers():
+    """Matching the node file's text for a name prefix was wrong twice: it
+    skipped a Bluetooth driver named after its protocol, and it matched a
+    device that was commented out. The script must load the file and ask each
+    driver."""
+    assert "needs_bluetooth" in INSTALL
+    assert "config.load" in INSTALL
+    assert "python3-bleak" in INSTALL
+
+
+def test_a_driver_needing_a_radio_is_reachable_through_that_declaration():
+    """If no driver declares it, the install script's check is dead code and
+    silently stops installing bleak for anything."""
+    declaring = {name for name in drivers.names()
+                 if getattr(drivers.get(name), "needs_bluetooth", False)}
+    assert declaring, "no driver declares needs_bluetooth"
+    assert "abc_bms" in declaring
+
+
+def test_no_driver_that_needs_a_radio_is_named_for_its_transport_only():
+    """A name prefix is not a reliable signal of a Bluetooth driver, which is
+    why the install script stopped using one."""
+    declaring = {name for name in drivers.canonical()
+                 if getattr(drivers.get(name), "needs_bluetooth", False)}
+    assert any(not name.startswith("ble_") for name in declaring)
+
+
+def test_the_install_script_installs_yaml_before_it_reads_a_node_file():
+    """The Bluetooth check loads the node file, which needs yaml. On a fresh
+    machine the package must already be in place."""
+    assert INSTALL.index("python3-yaml") < INSTALL.index("needs_bluetooth")

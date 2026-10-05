@@ -7,16 +7,16 @@ a value one byte out of place.
 
 import struct
 
-from monitoring.drivers import sok
+from monitoring.drivers import abc_bms
 
 
 def frame(message_id, payload):
     """One twenty-byte reply carrying `payload`, padded and checksummed."""
-    body = bytearray([sok.RESPONSE_HEAD, message_id])
-    body += bytes(payload)[:sok.FRAME_LENGTH - 3]
-    body += b"\x00" * (sok.FRAME_LENGTH - 1 - len(body))
-    body.append(sok.crc8(bytes(body)))
-    assert len(body) == sok.FRAME_LENGTH
+    body = bytearray([abc_bms.RESPONSE_HEAD, message_id])
+    body += bytes(payload)[:abc_bms.FRAME_LENGTH - 3]
+    body += b"\x00" * (abc_bms.FRAME_LENGTH - 1 - len(body))
+    body.append(abc_bms.crc8(bytes(body)))
+    assert len(body) == abc_bms.FRAME_LENGTH
     return bytes(body)
 
 
@@ -51,7 +51,7 @@ def cell_frames(millivolts, per_frame=4):
         payload = bytearray()
         for offset, value in enumerate(millivolts[start:start + per_frame]):
             payload += struct.pack("<HH", start + offset + 1, value)
-        out.append(frame(sok.CELL_MESSAGE, payload))
+        out.append(frame(abc_bms.CELL_MESSAGE, payload))
     return out
 
 

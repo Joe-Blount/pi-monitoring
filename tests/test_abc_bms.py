@@ -1,9 +1,9 @@
 import pytest
 
 from monitoring import drivers, lineproto
-from monitoring.drivers import sok
+from monitoring.drivers import abc_bms
 from monitoring.drivers.base import DriverError
-from tests import sok_fixtures as fx
+from tests import abc_bms_fixtures as fx
 
 
 class FakeTransport:
@@ -26,8 +26,8 @@ class FakeTransport:
             raise DriverError(self.fail)
         messages = {}
         for frame in self.frames:
-            if not sok.frame_is_valid(frame):
-                sok.collect(messages, frame)
+            if not abc_bms.frame_is_valid(frame):
+                abc_bms.collect(messages, frame)
         return messages
 
     def close(self):
@@ -38,7 +38,7 @@ def driver(frames=(), **params):
     params.setdefault("address", "AA:BB:CC:DD:EE:FF")
     transport = FakeTransport(frames)
     params["transport"] = transport
-    return sok.SokDriver("pack1", params, {}), transport
+    return abc_bms.AbcBmsDriver("pack1", params, {}), transport
 
 
 def full_pack(cells=fx.SIXTEEN_CELLS):
@@ -48,35 +48,35 @@ def full_pack(cells=fx.SIXTEEN_CELLS):
 # --- framing and checksums -------------------------------------------------
 
 def test_a_command_is_six_bytes_and_carries_its_own_checksum():
-    built = sok.command(0xC1)
+    built = abc_bms.command(0xC1)
     assert len(built) == 6
-    assert built[0] == sok.COMMAND_HEAD and built[1] == 0xC1
-    assert sok.crc8(built[:-1]) == built[-1]
+    assert built[0] == abc_bms.COMMAND_HEAD and built[1] == 0xC1
+    assert abc_bms.crc8(built[:-1]) == built[-1]
 
 
 def test_each_command_differs_so_a_swap_cannot_go_unnoticed():
-    built = {code: sok.command(code) for code, _ in sok.READ_COMMANDS}
+    built = {code: abc_bms.command(code) for code, _ in abc_bms.READ_COMMANDS}
     assert len(set(built.values())) == len(built)
 
 
 def test_a_well_formed_reply_is_accepted():
-    assert sok.frame_is_valid(fx.status_frame()) is None
+    assert abc_bms.frame_is_valid(fx.status_frame()) is None
 
 
 def test_a_reply_whose_checksum_fails_is_rejected():
-    reason = sok.frame_is_valid(fx.corrupt(fx.status_frame()))
+    reason = abc_bms.frame_is_valid(fx.corrupt(fx.status_frame()))
     assert reason and "checksum" in reason
 
 
 def test_a_reply_of_the_wrong_length_is_rejected():
-    reason = sok.frame_is_valid(fx.status_frame()[:-1])
+    reason = abc_bms.frame_is_valid(fx.status_frame()[:-1])
     assert reason and "bytes" in reason
 
 
 def test_a_reply_not_starting_with_the_response_head_is_rejected():
     stray = bytearray(fx.status_frame())
     stray[0] = 0xEE
-    reason = sok.frame_is_valid(bytes(stray))
+    reason = abc_bms.frame_is_valid(bytes(stray))
     assert reason and "starts with" in reason
 
 
@@ -84,8 +84,8 @@ def test_a_reply_not_starting_with_the_response_head_is_rejected():
 
 def test_the_scalar_values_decode_to_what_was_sent():
     messages = {}
-    sok.collect(messages, fx.status_frame())
-    out = sok.parse(messages)
+    abc_bms.collect(messages, fx.status_frame())
+    out = abc_bms.parse(messages)
     assert out["pack_volts"] == pytest.approx(53.2)
     assert out["design_capacity_ah"] == pytest.approx(100.0)
     assert out["remaining_capacity_ah"] == pytest.approx(78.0)
@@ -97,20 +97,20 @@ def test_a_discharging_pack_reports_negative_current():
     """Current is signed over three bytes, where an unsigned read gives a
     large positive number that is still inside any plausible range."""
     messages = {}
-    sok.collect(messages, fx.status_frame(amps=-12.5))
-    assert sok.parse(messages)["pack_amps"] == pytest.approx(-12.5)
+    abc_bms.collect(messages, fx.status_frame(amps=-12.5))
+    assert abc_bms.parse(messages)["pack_amps"] == pytest.approx(-12.5)
 
 
 def test_a_charging_pack_reports_positive_current():
     messages = {}
-    sok.collect(messages, fx.status_frame(amps=18.25))
-    assert sok.parse(messages)["pack_amps"] == pytest.approx(18.25)
+    abc_bms.collect(messages, fx.status_frame(amps=18.25))
+    assert abc_bms.parse(messages)["pack_amps"] == pytest.approx(18.25)
 
 
 def test_every_published_value_is_a_float():
     """InfluxDB refuses a field whose type changes between writes, so a value
     that happens to be whole must not be published as an integer."""
-    out = sok.parse({0xF0: fx.status_frame(cycles=42, soc=100)})
+    out = abc_bms.parse({0xF0: fx.status_frame(cycles=42, soc=100)})
     numbers = [v for v in out.values() if not isinstance(v, str)]
     assert numbers and all(isinstance(value, float) for value in numbers)
 
@@ -118,7 +118,7 @@ def test_every_published_value_is_a_float():
 def test_a_value_outside_its_plausible_range_is_withheld_and_named():
     """A wrong offset reads a neighbouring byte. The reading must not carry
     the number it got; it must say which field it distrusted."""
-    out = sok.parse({0xF0: fx.status_frame(volts=53.2, soc=200)})
+    out = abc_bms.parse({0xF0: fx.status_frame(volts=53.2, soc=200)})
     assert "state_of_charge_pct" not in out
     assert "state_of_charge_pct" in out["rejected_fields"]
     assert out["pack_volts"] == pytest.approx(53.2)
@@ -129,18 +129,18 @@ def test_a_status_frame_of_pure_noise_is_a_failure_not_a_resting_pack():
     does read near zero. So a frame of ones leaves one plausible-looking value
     behind. Voltage is the anchor: a pack that answers always has one."""
     with pytest.raises(DriverError) as raised:
-        sok.parse({0xF0: fx.frame(0xF0, b"\xff" * 17)})
+        abc_bms.parse({0xF0: fx.frame(0xF0, b"\xff" * 17)})
     assert "pack_volts" in str(raised.value)
 
 
 def test_a_reading_with_no_plausible_voltage_is_a_failure():
     with pytest.raises(DriverError):
-        sok.parse({0xF0: fx.status_frame(volts=900.0)})
+        abc_bms.parse({0xF0: fx.status_frame(volts=900.0)})
 
 
 def test_a_reading_with_no_frames_at_all_is_a_failure():
     with pytest.raises(DriverError):
-        sok.parse({})
+        abc_bms.parse({})
 
 
 # --- cell voltages ---------------------------------------------------------
@@ -150,20 +150,20 @@ def test_a_sixteen_cell_pack_reports_all_sixteen_cells():
     would report the first frame and lose three quarters of the pack."""
     messages = {}
     for frame in fx.cell_frames(fx.SIXTEEN_CELLS):
-        sok.collect(messages, frame)
-    assert sok.cell_voltages(messages[sok.CELL_MESSAGE]) == fx.SIXTEEN_CELLS
+        abc_bms.collect(messages, frame)
+    assert abc_bms.cell_voltages(messages[abc_bms.CELL_MESSAGE]) == fx.SIXTEEN_CELLS
 
 
 def test_a_four_cell_pack_reports_four_cells_from_the_same_reader():
     messages = {}
     for frame in fx.cell_frames(fx.FOUR_CELLS):
-        sok.collect(messages, frame)
-    assert sok.cell_voltages(messages[sok.CELL_MESSAGE]) == fx.FOUR_CELLS
+        abc_bms.collect(messages, frame)
+    assert abc_bms.cell_voltages(messages[abc_bms.CELL_MESSAGE]) == fx.FOUR_CELLS
 
 
 def test_the_published_cell_summary_follows_the_cells():
-    out = sok.parse({0xF0: fx.status_frame(),
-                     sok.CELL_MESSAGE: _joined(fx.SIXTEEN_CELLS)})
+    out = abc_bms.parse({0xF0: fx.status_frame(),
+                     abc_bms.CELL_MESSAGE: _joined(fx.SIXTEEN_CELLS)})
     assert out["cell_count"] == 16.0
     assert out["cell_min_volts"] == pytest.approx(min(fx.SIXTEEN_CELLS) / 1000.0)
     assert out["cell_max_volts"] == pytest.approx(max(fx.SIXTEEN_CELLS) / 1000.0)
@@ -175,14 +175,14 @@ def test_cell_frames_are_joined_while_other_messages_are_replaced():
     """Status is a snapshot, so the newest wins. Cell voltages are pages of
     one answer, so they must accumulate instead."""
     messages = {}
-    sok.collect(messages, fx.status_frame(soc=50))
-    sok.collect(messages, fx.status_frame(soc=60))
-    assert sok.parse(messages)["state_of_charge_pct"] == 60.0
+    abc_bms.collect(messages, fx.status_frame(soc=50))
+    abc_bms.collect(messages, fx.status_frame(soc=60))
+    assert abc_bms.parse(messages)["state_of_charge_pct"] == 60.0
 
-    before = len(messages.get(sok.CELL_MESSAGE, b""))
+    before = len(messages.get(abc_bms.CELL_MESSAGE, b""))
     for frame in fx.cell_frames(fx.SIXTEEN_CELLS):
-        sok.collect(messages, frame)
-    assert len(messages[sok.CELL_MESSAGE]) > before
+        abc_bms.collect(messages, frame)
+    assert len(messages[abc_bms.CELL_MESSAGE]) > before
 
 
 def test_a_repeated_cell_frame_does_not_invent_extra_cells():
@@ -190,8 +190,8 @@ def test_a_repeated_cell_frame_does_not_invent_extra_cells():
     frames = fx.cell_frames(fx.FOUR_CELLS)
     messages = {}
     for frame in frames + frames:
-        sok.collect(messages, frame)
-    assert sok.cell_voltages(messages[sok.CELL_MESSAGE]) == fx.FOUR_CELLS
+        abc_bms.collect(messages, frame)
+    assert abc_bms.cell_voltages(messages[abc_bms.CELL_MESSAGE]) == fx.FOUR_CELLS
 
 
 def test_cells_are_ordered_by_index_not_by_arrival():
@@ -199,8 +199,8 @@ def test_cells_are_ordered_by_index_not_by_arrival():
     per-cell voltages would, and the order is the pack's own numbering."""
     messages = {}
     for frame in reversed(fx.cell_frames(fx.SIXTEEN_CELLS)):
-        sok.collect(messages, frame)
-    assert sok.cell_voltages(messages[sok.CELL_MESSAGE]) == fx.SIXTEEN_CELLS
+        abc_bms.collect(messages, frame)
+    assert abc_bms.cell_voltages(messages[abc_bms.CELL_MESSAGE]) == fx.SIXTEEN_CELLS
 
 
 def test_cells_whose_indices_do_not_form_a_complete_run_are_discarded():
@@ -210,18 +210,18 @@ def test_cells_whose_indices_do_not_form_a_complete_run_are_discarded():
     import struct
     body = b"".join(struct.pack("<HH", index, 3300 + index)
                     for index in (1, 2, 3, 5))
-    assert sok.cell_voltages(b"\xcc\xf4" + body) == []
+    assert abc_bms.cell_voltages(b"\xcc\xf4" + body) == []
 
 
 def test_cells_numbered_from_one_without_gaps_are_kept():
     import struct
     body = b"".join(struct.pack("<HH", index, 3300 + index)
                     for index in (1, 2, 3, 4))
-    assert sok.cell_voltages(b"\xcc\xf4" + body) == [3301, 3302, 3303, 3304]
+    assert abc_bms.cell_voltages(b"\xcc\xf4" + body) == [3301, 3302, 3303, 3304]
 
 
 def test_a_field_with_a_whole_number_scale_still_reads_as_a_float():
-    field = sok.Field("probe", 0xF0, 2, 1, scale=1)
+    field = abc_bms.Field("probe", 0xF0, 2, 1, scale=1)
     assert isinstance(field.read(b"\xcc\xf0\x05"), float)
 
 
@@ -231,27 +231,27 @@ def test_a_cell_layout_that_does_not_fit_yields_nothing_rather_than_garbage():
     forming a complete run, and no cell data must be published at all."""
     good = _joined(fx.SIXTEEN_CELLS)
     shifted = good[:2] + b"\x00" + good[2:]
-    assert sok.cell_voltages(shifted) == []
+    assert abc_bms.cell_voltages(shifted) == []
 
 
 def test_a_reading_without_cell_voltages_still_publishes_the_pack():
     """Cell voltages are the uncertain part. They must not be able to take
     the certain values down with them."""
-    out = sok.parse({0xF0: fx.status_frame()})
+    out = abc_bms.parse({0xF0: fx.status_frame()})
     assert out["pack_volts"] == pytest.approx(53.2)
     assert "cell_count" not in out
 
 
 def test_an_empty_cell_message_reports_no_cells():
-    assert sok.cell_voltages(b"") == []
-    assert sok.cell_voltages(None) == []
+    assert abc_bms.cell_voltages(b"") == []
+    assert abc_bms.cell_voltages(None) == []
 
 
 # --- the driver ------------------------------------------------------------
 
 def test_the_driver_needs_an_address():
     with pytest.raises(DriverError) as raised:
-        sok.SokDriver("pack1", {}, {})
+        abc_bms.AbcBmsDriver("pack1", {}, {})
     assert "address" in str(raised.value)
 
 
@@ -267,10 +267,10 @@ def test_reading_asks_for_every_message_a_full_picture_needs():
 
 def test_the_commands_between_them_cover_every_message_a_field_needs():
     covered = set()
-    for _, expected in sok.READ_COMMANDS:
+    for _, expected in abc_bms.READ_COMMANDS:
         covered.update(expected)
-    assert {field.message for field in sok.FIELDS} <= covered
-    assert sok.CELL_MESSAGE in covered
+    assert {field.message for field in abc_bms.FIELDS} <= covered
+    assert abc_bms.CELL_MESSAGE in covered
 
 
 def test_reading_a_pack_produces_the_expected_values():
@@ -290,7 +290,7 @@ def test_a_check_reports_the_pack_answering():
     device, transport = driver([identity])
     message = device.check()
     assert "AA:BB:CC:DD:EE:FF" in message and "SOK-48100" in message
-    assert transport.asked == [sok.IDENTITY_COMMAND[0]]
+    assert transport.asked == [abc_bms.IDENTITY_COMMAND[0]]
 
 
 def test_a_check_against_a_silent_pack_names_the_likely_cause():
@@ -320,12 +320,26 @@ def test_a_transport_failure_reaches_the_caller_as_a_driver_error():
 def test_the_driver_does_not_offer_a_resident_mode():
     """A resident reader would hold the pack's single connection open and lock
     the owner out of the vendor's application."""
-    assert "resident" not in sok.SokDriver.modes
-    assert "poll" in sok.SokDriver.modes
+    assert "resident" not in abc_bms.AbcBmsDriver.modes
+    assert "poll" in abc_bms.AbcBmsDriver.modes
 
 
 def test_the_driver_is_registered_under_its_configuration_name():
-    assert drivers.get("sok") is sok.SokDriver
+    assert drivers.get("abc_bms") is abc_bms.AbcBmsDriver
+
+
+def test_the_older_brand_name_still_resolves_to_the_same_driver():
+    """A node file is edited standing next to the hardware it describes, so a
+    rename that breaks one strands a machine until somebody drives out."""
+    assert drivers.get("sok") is drivers.get("abc_bms")
+    assert "sok" in drivers.names()
+    assert "sok" not in drivers.canonical()
+
+
+def test_the_driver_declares_that_it_needs_a_radio():
+    """The install script reads this to decide whether to fetch a Bluetooth
+    stack. Guessing from the driver's name skipped it once already."""
+    assert abc_bms.AbcBmsDriver.needs_bluetooth is True
 
 
 def test_every_value_a_reading_produces_can_be_written():
@@ -341,5 +355,5 @@ def test_every_value_a_reading_produces_can_be_written():
 def _joined(cells):
     messages = {}
     for frame in fx.cell_frames(cells):
-        sok.collect(messages, frame)
-    return messages[sok.CELL_MESSAGE]
+        abc_bms.collect(messages, frame)
+    return messages[abc_bms.CELL_MESSAGE]

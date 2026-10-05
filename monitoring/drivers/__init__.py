@@ -18,7 +18,7 @@ REGISTRY = {
     "rain_gauge": ("monitoring.drivers.rain_gauge", "RainGaugeDriver"),
     "vedirect": ("monitoring.drivers.vedirect", "VedirectDriver"),
     "pi30": ("monitoring.drivers.pi30", "Pi30Driver"),
-    "sok": ("monitoring.drivers.sok", "SokDriver"),
+    "abc_bms": ("monitoring.drivers.abc_bms", "AbcBmsDriver"),
     # Registered without an implementation, so that a node file naming a
     # planned device still validates. An unknown driver stays a typo rather
     # than becoming a legitimate forward reference.
@@ -27,15 +27,31 @@ REGISTRY = {
 }
 
 
-def names():
-    """Every driver name a node file may use."""
+#: Older names kept working, mapped to the name now preferred. A node file is
+#: edited while standing next to the hardware it describes, so a rename that
+#: breaks one is a rename that strands a machine.
+ALIASES = {
+    # Named after the battery brand before it was clear that the protocol
+    # belongs to the BMS maker: one brand ships two unrelated protocols across
+    # its range, and this protocol appears under several brands.
+    "sok": "abc_bms",
+}
+
+
+def canonical():
+    """The preferred name for each driver, with no aliases."""
     return set(REGISTRY)
+
+
+def names():
+    """Every driver name a node file may use, aliases included."""
+    return set(REGISTRY) | set(ALIASES)
 
 
 def get(name):
     """Return the driver class registered under `name`."""
     try:
-        module_name, class_name = REGISTRY[name]
+        module_name, class_name = REGISTRY[ALIASES.get(name, name)]
     except KeyError:
         raise DriverError(
             "unknown driver %r; known drivers are %s"

@@ -1,4 +1,9 @@
-"""SOK and other ABC-BMS battery packs over Bluetooth low energy.
+"""ABC-BMS battery packs over Bluetooth low energy.
+
+SOK and others. The protocol belongs to the BMS maker rather than to the
+battery brand, so this is named after the protocol: one brand can ship two
+unrelated protocols across its range, and one protocol appears under many
+brands.
 
 The protocol was reverse engineered from the ABC-BMS Android application by
 others, and this is an independent implementation of what they documented
@@ -249,10 +254,11 @@ def parse(messages):
     return out
 
 
-class SokDriver(Driver):
-    """A SOK or other ABC-BMS pack, read over Bluetooth."""
+class AbcBmsDriver(Driver):
+    """A pack whose BMS speaks ABC-BMS, read over Bluetooth."""
 
-    description = "SOK / ABC-BMS battery pack over Bluetooth"
+    description = "ABC-BMS battery pack over Bluetooth (SOK and others)"
+    needs_bluetooth = True
     # Connect, read and disconnect each time rather than holding the link:
     # these modules accept one connection at a time, so a held connection
     # locks the vendor's phone application out of the battery.
@@ -319,7 +325,7 @@ class _BleakTransport:
             from bleak import BleakClient
         except ImportError:
             raise DriverError(
-                "the sok driver needs bleak (apt install python3-bleak)")
+                "the abc_bms driver needs bleak (apt install python3-bleak)")
 
         import asyncio
 

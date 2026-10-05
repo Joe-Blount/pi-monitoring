@@ -41,14 +41,14 @@ devices:
   # and two readers starting together contend for the one radio on the Pi.
   #
   # - name: pack1
-  #   driver: sok
+  #   driver: abc_bms
   #   mode: poll
   #   interval: 300s
   #   tags: {location: rack}
   #   params: {address: "XX:XX:XX:XX:XX:XX"}
   #
   # - name: pack2
-  #   driver: sok
+  #   driver: abc_bms
   #   mode: poll
   #   interval: 300s
   #   tags: {location: rack}
