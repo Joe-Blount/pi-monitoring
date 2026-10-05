@@ -159,6 +159,11 @@ not stop a site reporting.
 
 ## Installing on a machine
 
+Step by step, including the kernel overlays each sensor needs and how to
+confirm data is arriving: **[docs/bringup.md](docs/bringup.md)**.
+
+In short:
+
 ```
 sudo deploy/install.sh <site> <node>
 sudo deploy/install.sh garage garage
