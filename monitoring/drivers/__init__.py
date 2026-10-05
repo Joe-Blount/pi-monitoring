@@ -13,14 +13,15 @@ from .base import Driver, DriverError  # noqa: F401  (re-exported)
 #: Driver name as written in a node file, mapped to module and class.
 REGISTRY = {
     "host": ("monitoring.drivers.host", "HostDriver"),
-    # Declared but not implemented yet. They are registered so that a node
-    # file naming a planned device still validates, which keeps an unknown
-    # driver a typo rather than a legitimate forward reference.
     "dht": ("monitoring.drivers.dht", "DhtDriver"),
     "ds18b20": ("monitoring.drivers.ds18b20", "Ds18b20Driver"),
     "rain_gauge": ("monitoring.drivers.rain_gauge", "RainGaugeDriver"),
     "vedirect": ("monitoring.drivers.vedirect", "VedirectDriver"),
     "pi30": ("monitoring.drivers.pi30", "Pi30Driver"),
+    "sok": ("monitoring.drivers.sok", "SokDriver"),
+    # Registered without an implementation, so that a node file naming a
+    # planned device still validates. An unknown driver stays a typo rather
+    # than becoming a legitimate forward reference.
     "ble_bms": ("monitoring.drivers.stubs", "BleBmsDriver"),
     "ble_shunt": ("monitoring.drivers.stubs", "BleShuntDriver"),
 }

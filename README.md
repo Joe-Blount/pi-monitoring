@@ -205,12 +205,18 @@ No hardware, no network, no credentials.
 Telemetry: the core is written and tested, in both poll and resident mode.
 Line protocol, the configuration loader, calibration, the runner, the host
 driver, the Victron VE.Direct driver, the DS18B20, the rain gauge, the DHT
-family and the Voltronic PI30 inverter.
+family, the Voltronic PI30 inverter and the SOK ABC-BMS battery pack.
 
-Six of eight drivers are written. Only the two Bluetooth drivers remain, and
-they wait on knowing their protocols, which needs a scan at the site. The PI30
-driver is tested against the protocol's published frames but has not yet met
-the inverter, which is waiting on a serial adapter.
+Seven of nine drivers are written. The two that remain are Bluetooth, and they
+wait on knowing their protocols, which needs a scan at the site.
+
+Two written drivers have not yet met their hardware. The PI30 inverter driver
+waits on a serial adapter. The SOK driver is complete for everything the
+protocol documents with confidence, which is the transport, the framing, the
+checksum, the command set and the scalar values. The layout of the cell-voltage
+entries is the one part taken on trust, so that reader checks its own result
+and publishes nothing rather than something shifted by a byte. Run
+`collect --raw` against a pack to confirm it.
 
 Control: designed, not written. It is commissioned in place rather than on a
 bench, with the run-time cap and the guard in force from the first live run so

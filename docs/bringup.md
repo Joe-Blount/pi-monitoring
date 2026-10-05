@@ -180,6 +180,8 @@ reason. Common ones:
 | `no DHT sensor found` | The `dht11` overlay is missing. It prints the exact line to add. |
 | `cannot open /dev/serial/by-id/…` | The adapter is unplugged, or the path contains a different cable's serial number. |
 | `needs pyserial` | `sudo apt install python3-serial` |
+| `needs bleak` | `sudo apt install python3-bleak` |
+| `did not identify itself` | A Bluetooth pack out of range, asleep, or already connected to a phone. Most packs accept one connection at a time. Close the vendor application and try again. |
 
 **Does it produce data?**
 
@@ -268,6 +270,19 @@ a temperature. It usually means a missing or wrong pull-up resistor.
 **A reading is occasionally missing.** Normal for DHT sensors, whose protocol
 has no error correction beyond a checksum. The driver retries, spaced by the
 sensor's own minimum sampling interval.
+
+**A Bluetooth device reads once and then stops.** Most battery modules accept
+one connection at a time. The vendor's phone application takes that connection
+and holds it, which locks this software out, and the reverse is also true. Poll
+Bluetooth devices slowly for that reason, and expect a gap in the data whenever
+you use the application.
+
+**A Bluetooth pack reports fewer cells than it has, or none.** Cell voltages
+arrive in several parts, and the reader checks that the cell numbers it decoded
+form a complete run from one. If they do not, it publishes no cell data at all
+rather than voltages that are shifted by a byte. The pack voltage, current and
+state of charge are unaffected and keep reporting. Run `collect --raw` against
+the pack and compare the frames against the field table in the driver.
 
 **The clock is wrong after a power cut.** A Pi has no real-time clock and boots
 with whatever was last saved, which can be days out. Points written before time

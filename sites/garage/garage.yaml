@@ -26,6 +26,34 @@ devices:
     interval: 30s
     tags: {location: pi}
 
+  # The two SOK rack packs, read over Bluetooth. These are the version without
+  # a wired communication port, so Bluetooth is the only way in.
+  #
+  # Each needs its own address, which is not knowable from here. On the Pi:
+  #
+  #     bluetoothctl scan on
+  #
+  # and watch for the names the packs advertise. Then put each address below
+  # and confirm with `collect --check`.
+  #
+  # Polled slowly and staggered on purpose. A pack accepts one connection at a
+  # time, so a reading locks the phone application out for as long as it runs,
+  # and two readers starting together contend for the one radio on the Pi.
+  #
+  # - name: pack1
+  #   driver: sok
+  #   mode: poll
+  #   interval: 300s
+  #   tags: {location: rack}
+  #   params: {address: "XX:XX:XX:XX:XX:XX"}
+  #
+  # - name: pack2
+  #   driver: sok
+  #   mode: poll
+  #   interval: 300s
+  #   tags: {location: rack}
+  #   params: {address: "YY:YY:YY:YY:YY:YY"}
+
 # The EG4 inverter is waiting on one cable: a USB-to-RS232 adapter with a DB9
 # male end, which mates with the RJ45-to-DB9 cable that came with the inverter.
 # That goes into the jack printed RS232 or COM.
