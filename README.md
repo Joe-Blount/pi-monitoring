@@ -190,13 +190,13 @@ No hardware, no network, no credentials.
 
 Telemetry: the core is written and tested, in both poll and resident mode.
 Line protocol, the configuration loader, calibration, the runner, the host
-driver, the Victron VE.Direct driver, the DS18B20, the rain gauge and the
-Voltronic PI30 inverter. The DHT sensor and the two Bluetooth devices are
-registered as stubs that fail loudly rather than silently returning nothing.
+driver, the Victron VE.Direct driver, the DS18B20, the rain gauge, the DHT
+family and the Voltronic PI30 inverter.
 
-Five of eight drivers are written. The PI30 driver is tested against the
-protocol's published frames but has not yet met the inverter, which is waiting
-on a serial adapter. The Bluetooth drivers wait on knowing their protocols.
+Six of eight drivers are written. Only the two Bluetooth drivers remain, and
+they wait on knowing their protocols, which needs a scan at the site. The PI30
+driver is tested against the protocol's published frames but has not yet met
+the inverter, which is waiting on a serial adapter.
 
 Control: designed, not written. It is commissioned in place rather than on a
 bench, with the run-time cap and the guard in force from the first live run so

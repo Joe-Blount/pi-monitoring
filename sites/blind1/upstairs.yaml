@@ -12,6 +12,17 @@ tags:
 
 devices:
 
+  # Read through the kernel's own driver rather than by bit-banging the pin
+  # from Python, so the microsecond timing is protected from the scheduler.
+  # Needs this in /boot/firmware/config.txt, and a reboot:
+  #
+  #     dtoverlay=dht11,gpiopin=17
+  #
+  # The overlay is called dht11 whatever sensor is attached. A DHT22 uses the
+  # same line, which is the commonest reason people think it is unsupported.
+  #
+  # The pin here is documentation: the overlay is what binds the sensor, and
+  # the driver finds it on the industrial I/O bus rather than by pin.
   - name: box
     driver: dht
     mode: poll

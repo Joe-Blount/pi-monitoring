@@ -23,16 +23,6 @@ class NotWrittenYet(Driver):
             "the %s driver is declared but not implemented yet" % type(self).device)
 
 
-class DhtDriver(NotWrittenYet):
-    """DHT11 or DHT22 temperature and humidity on one GPIO pin.
-
-    A bit-banged protocol with microsecond timing, so single reads fail often
-    on a busy machine and retries are normal rather than exceptional. Reports
-    Celsius natively; this project publishes Fahrenheit, converted here.
-    """
-    device = "dht"
-
-
 class BleBmsDriver(NotWrittenYet):
     """Battery management system over Bluetooth low energy.
 

@@ -106,9 +106,21 @@ devices:
     tags:
       location: box           # tags are per device, merged over the node tags
     params:
-      model: DHT22            # DHT11 or DHT22
-      pin: 4                  # BCM numbering everywhere in this project
-      retries: 3              # bit-banged protocol; single reads fail often
+      model: DHT22            # DHT11, DHT22 or AM2302; informational only
+      pin: 4                  # documentation: the overlay binds the sensor,
+                              # and the driver finds it on the industrial I/O
+                              # bus rather than by pin
+      retries: 3              # a single failed reading is routine for these
+                              # sensors, not exceptional
+      # Needs a boot configuration line and a reboot:
+      #     dtoverlay=dht11,gpiopin=4
+      # The overlay is named dht11 whatever sensor is attached.
+      #
+      # Optional, and rarely needed:
+      # iio_device: "iio:device0"   # when more than one DHT is present
+      # max_humidity: 100.0         # implausible readings are retried rather
+      # max_temp_f: 160.0           # than published, because the sensor's
+      # min_temp_f: -40.0           # checksum cannot catch a wrong value
     calibration:
       temp: {scale: 1.0, offset: 0.0}
       humidity: {scale: 1.0, offset: 0.0}

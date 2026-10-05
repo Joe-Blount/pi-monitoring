@@ -16,7 +16,7 @@ REGISTRY = {
     # Declared but not implemented yet. They are registered so that a node
     # file naming a planned device still validates, which keeps an unknown
     # driver a typo rather than a legitimate forward reference.
-    "dht": ("monitoring.drivers.stubs", "DhtDriver"),
+    "dht": ("monitoring.drivers.dht", "DhtDriver"),
     "ds18b20": ("monitoring.drivers.ds18b20", "Ds18b20Driver"),
     "rain_gauge": ("monitoring.drivers.rain_gauge", "RainGaugeDriver"),
     "vedirect": ("monitoring.drivers.vedirect", "VedirectDriver"),
