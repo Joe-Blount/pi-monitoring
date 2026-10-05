@@ -105,6 +105,12 @@ real problem.
 - **No secrets in this repository.** Credentials live in
   `/etc/monitoring/influx.env`, mode 600, owned by root. See
   `influx.env.example`.
+- **Any condition turns a load off; all conditions must agree to turn it on.**
+  The asymmetry is deliberate: state of charge drifts high and would
+  under-protect alone, while voltage sags under load and would shed early,
+  which is the safe direction. A condition with no fresh reading is dropped
+  from the test rather than counted as false, so one stale Bluetooth value
+  cannot make a restore permanently impossible.
 - **A failed write is logged, never discarded.**
 - **Counters persist.** Anything that accumulates, such as a rain total or a
   lockout counter, survives a restart in a state file, because the thing it

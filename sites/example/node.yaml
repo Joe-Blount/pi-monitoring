@@ -224,14 +224,35 @@ control:
       # comes over a wire rather than over Bluetooth.
       on_stale_data: permit
 
+      # How several conditions combine, which is the same rule everywhere in
+      # this project:
+      #
+      #   ANY single condition is enough to turn a load OFF.
+      #   ALL conditions must agree to turn a load ON.
+      #
+      # The asymmetry is deliberate, because the two measurements fail in
+      # opposite directions. State of charge drifts HIGH, which is the
+      # self-heating problem, so alone it would under-protect; voltage catches
+      # what it misses. Voltage sags transiently under load, so alone it would
+      # shed early, which is the safe direction and is handled by the dwell
+      # rather than by acting on one sample.
+      #
+      # A condition with no fresh reading is DROPPED from the test, never
+      # counted as false. Otherwise one stale Bluetooth reading would mean the
+      # restore test can never pass and the cameras stay off forever. When
+      # every term is stale, on_stale_data decides.
       shed:
-        below_soc_pct: 12
-        restore_above_soc_pct: 25
-        voltage_floor: 12.4   # loaded volts. LiFePO4 is nearly flat from
-                              # about 15 to 95 percent, so voltage is only
-                              # useful near the bottom
-        voltage_restore: 12.9
-        dwell: 5m             # the condition must hold this long
+        shed_if_any:
+          soc_below_pct: 12
+          volts_below: 12.4   # loaded volts. LiFePO4 is nearly flat from
+                              # about 15 to 95 percent, so voltage is useful
+                              # only near the bottom
+        restore_if_all:
+          soc_above_pct: 25
+          volts_above: 12.9   # a resting bank reads higher than a loaded one,
+                              # so this is deliberately well clear of the floor
+        shed_dwell: 5m        # the condition must hold this long
+        restore_dwell: 15m    # longer, because recovery is easier to fake
         min_off: 30m          # no chatter around the threshold
 
       conservation:

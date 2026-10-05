@@ -109,12 +109,17 @@ control:
       polarity: energize_to_shed      # normally closed: a failed Pi leaves
                                       # the cameras running, as today
       on_stale_data: permit
+      # Any condition sheds; all conditions must agree to restore. A term with
+      # no fresh reading is dropped from the test rather than counted false.
       shed:
-        below_soc_pct: 12
-        restore_above_soc_pct: 25
-        voltage_floor: 12.4
-        voltage_restore: 12.9
-        dwell: 5m
+        shed_if_any:
+          soc_below_pct: 12
+          volts_below: 12.4
+        restore_if_all:
+          soc_above_pct: 25
+          volts_above: 12.9
+        shed_dwell: 5m
+        restore_dwell: 15m
         min_off: 30m
       conservation:
         enabled: false                # turn on once the shed behaviour is
