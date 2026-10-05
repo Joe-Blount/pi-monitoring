@@ -231,3 +231,63 @@ def test_calibration_applies_to_streamed_readings_too(tmp_path, stream_doubles):
     runner.stream_device(node, node.find("a"), out, io.StringIO(),
                          max_readings=1, clock=frozen_clock)
     assert out.getvalue().strip() == "m value=101.0 1700000000"
+
+
+# -- devices nothing will collect --------------------------------------------
+
+def controller_node(tmp_path, control_enabled):
+    path = tmp_path / "node.yaml"
+    path.write_text("""
+site: s
+node: n
+measurement: m
+devices:
+  - {name: mppt, driver: vedirect, mode: controller, params: {port: /dev/x}}
+  - {name: host, driver: host, mode: poll}
+control:
+  enabled: %s
+  loads:
+    cameras: {control_pin: 23}
+""" % ("true" if control_enabled else "false"))
+    return config.load(path, set(REGISTRY))
+
+
+def test_a_controller_device_with_control_disabled_is_reported_as_stranded(tmp_path):
+    """Nothing reads it, and that absence looks exactly like a sensor that is
+    working and reporting nothing."""
+    node = controller_node(tmp_path, control_enabled=False)
+    assert [d.name for d in runner.orphaned(node)] == ["mppt"]
+
+
+def test_a_controller_device_with_control_enabled_is_not_stranded(tmp_path):
+    node = controller_node(tmp_path, control_enabled=True)
+    assert runner.orphaned(node) == []
+
+
+def test_listing_marks_a_stranded_device(tmp_path):
+    out = io.StringIO()
+    runner.listing(controller_node(tmp_path, control_enabled=False), out)
+    assert "NOT COLLECTED" in out.getvalue()
+
+
+def test_check_fails_a_stranded_device_rather_than_probing_it(tmp_path):
+    """Probing it would report on hardware that nothing is going to read,
+    which is a confusing kind of success."""
+    out = io.StringIO()
+    failures = runner.check(controller_node(tmp_path, control_enabled=False), out)
+    text = out.getvalue()
+
+    assert "FAIL  mppt" in text
+    assert "nothing will read it" in text
+    # It must not have been probed: the port does not exist, and an error
+    # about opening it would send someone looking at the wiring instead of at
+    # the configuration.
+    assert "/dev/x" not in text
+    assert failures >= 1
+
+
+def test_poll_is_unaffected_by_stranded_devices(tmp_path):
+    """Controller mode devices are simply not poll devices; the rest of the
+    node collects normally."""
+    node = controller_node(tmp_path, control_enabled=False)
+    assert [d.name for d in node.by_mode("poll")] == ["host"]
