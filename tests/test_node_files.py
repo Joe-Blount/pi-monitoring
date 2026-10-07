@@ -307,3 +307,57 @@ def test_each_node_of_a_site_is_tagged_distinctly(site):
             "%s and %s both tag themselves %r; they would share every series"
             % (seen[tag], path.name, tag))
         seen[tag] = path.name
+
+
+def battery_heating_loads():
+    """Every battery heating load declared by any node file."""
+    found = []
+    for path in NODE_FILES:
+        node = load(path)
+        for name, spec in (node.control.get("loads") or {}).items():
+            if spec.get("type") == "battery_heating":
+                found.append(("%s/%s" % (path.parent.name, name), spec))
+    return found
+
+
+def test_battery_heating_fails_off():
+    """A dead Pi leaving cameras on costs a flat battery, which the BMS
+    bounds. A dead Pi leaving a heater on against a battery has no bound."""
+    for label, spec in battery_heating_loads():
+        assert spec.get("polarity") == "energize_to_connect", label
+
+
+def test_battery_heating_refuses_to_act_without_a_temperature():
+    """Not heating only delays charging until the day warms, which is what
+    happens with no controller at all. Heating blind has no such floor."""
+    for label, spec in battery_heating_loads():
+        assert spec.get("on_stale_data") == "deny", label
+
+
+def test_battery_heating_has_a_hard_upper_limit():
+    """The working thresholds aim at a target. This one is the stop that does
+    not care what the target was."""
+    for label, spec in battery_heating_loads():
+        assert (spec.get("stop_if_any") or {}).get("any_sensor_above_f"), label
+
+
+def test_battery_heating_thresholds_are_not_inverted():
+    """Stop warmer than start, or the load either never runs or never stops.
+    The gap is the deadband, and the thermal loop is slow enough to need a
+    wide one."""
+    for label, spec in battery_heating_loads():
+        start = (spec.get("heat_if_all") or {})["coldest_below_f"]
+        stop = (spec.get("stop_if_any") or {})["coldest_above_f"]
+        assert stop > start, "%s: stops at %s, starts at %s" % (label, stop, start)
+        assert stop - start >= 5.0, "%s: deadband is only %s F" % (label, stop - start)
+
+
+def test_battery_heating_waits_on_production_not_on_charge_current():
+    """A pack too cold to charge accepts nothing, so charge current is zero
+    exactly when heating is needed. Gating on it would make the condition
+    unsatisfiable. Production is measured before the battery has a say."""
+    for label, spec in battery_heating_loads():
+        source = ((spec.get("require_production") or {}).get("source") or {})
+        field = source.get("field", "")
+        assert "amps" not in field and "current" not in field, "%s: %s" % (label, field)
+        assert field, label

@@ -424,3 +424,89 @@ control:
         input: state_file
         pin: null
         stale_after: 60s      # state file older than this counts as hung
+
+    # -- Battery heating ----------------------------------------------------
+    #
+    # Optional. For packs with no heater of their own, which cannot be charged
+    # below freezing. The pack's own BMS already refuses charge when it is too
+    # cold, so this does not protect the battery: it exists to let a winter
+    # day's sun actually reach the cells instead of being refused.
+    #
+    # The crude version of this is a heater on a low-voltage disconnect, which
+    # heats whenever something is charging. It works. Driving it from measured
+    # pack temperature is better because it heats only when heat is the thing
+    # standing in the way.
+    battery_heating:
+      type: battery_heating
+      enabled: false          # off until the heater and its relay are wired
+      control_pin: 24
+
+      # Energize to heat, the opposite of the camera branch and for the
+      # opposite reason. A dead Pi that leaves cameras running costs a flat
+      # battery, which the BMS bounds. A dead Pi that leaves a heater running
+      # against a battery has no such bound.
+      polarity: energize_to_connect
+
+      # Never heat on ignorance. Without a temperature there is nothing to
+      # decide, and not heating only means no charging until the day warms,
+      # which is what happens today anyway.
+      on_stale_data: deny
+
+      temperature:
+        # Which readings to believe, coldest first. The COLDEST sensor
+        # governs, because the coldest pack is the one refusing charge and
+        # warming the average does not help it.
+        #
+        # Prefer a wired sensor on the pack case over the BMS reading. Not
+        # because the BMS is wrong, but because a Bluetooth pack answers every
+        # few minutes and a one-wire probe answers in a second, and a control
+        # loop should not wait on a radio. Keep the BMS reading as a
+        # cross-check: two sensors disagreeing by a lot means one has fallen
+        # off the case.
+        sources:
+          - {device: pack_probe, field: temperature_f}
+          - {device: pack1, field: temperature_f}
+        max_disagreement_f: 15      # warn, do not act, when they diverge
+        stale_after: 10m
+
+      # Wide deadband on purpose. The loop is slow: heat tape warms a case,
+      # the case warms cells through their own thermal mass, and nothing moves
+      # in seconds. Narrow thresholds would chatter and achieve nothing.
+      heat_if_all:
+        coldest_below_f: 41.0       # 5 C, so about 5 degrees above freezing
+      stop_if_any:
+        coldest_above_f: 50.0       # 10 C, comfortably charging
+        any_sensor_above_f: 104.0   # 40 C. A hard stop, not a target.
+      heat_dwell: 5m
+      stop_dwell: 5m
+      min_off: 15m
+
+      # Heat only when the sun can pay for it. A heater is a large load, and
+      # heating at night warms a pack with nothing to charge it.
+      #
+      # Do NOT gate this on charge current. A pack too cold to charge accepts
+      # nothing, so charge current is zero exactly when heating is needed, and
+      # the condition could never become true. Gate on what the panels are
+      # producing, which is measured before the battery has any say.
+      require_production:
+        enabled: true
+        source: {device: inverter, field: pv_watts}
+        above_watts: 300            # above the heater's own draw, so it is
+                                    # paid for by sun rather than by the bank
+        stale_after: 10m
+
+      limits:
+        max_run_per_day: 6h
+        cooldown: 15m
+
+      readback:
+        # A heater that is commanded on and draws nothing has failed, and in
+        # winter that failure is silent until the charging never starts.
+        source: none
+        pin: null
+
+      # The heater here is mains, run from the inverter, so the Pi switches a
+      # relay that switches the outlet. Keep any existing low-voltage
+      # disconnect in the circuit as a backstop, and put a mechanical
+      # over-temperature cutout in series with the heater. Software must not
+      # be the only thing between a heater and a battery.

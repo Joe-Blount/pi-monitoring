@@ -75,3 +75,79 @@ devices:
 #     port: /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_XXXXXXXX-if00-port0
 #     baud: 2400
 #     queries: [QPIGS, QMOD]
+
+# A one-wire probe taped to a pack case, for the battery heating below. Wired
+# rather than Bluetooth on purpose: a control loop should not wait on a radio
+# that answers every few minutes.
+#
+# Needs dtoverlay=w1-gpio in /boot/firmware/config.txt and a reboot, plus a
+# 4.7k pull-up from data to 3V3. Read the id from /sys/bus/w1/devices after
+# the reboot and put it below.
+#
+# - name: pack_probe
+#   driver: ds18b20
+#   mode: poll
+#   interval: 60s
+#   tags: {location: rack}
+#   params: {id: 28-xxxxxxxxxxxx}
+
+# Battery heating. These SOK rack packs have no heater of their own and cannot
+# be charged below freezing, so a cold sunny morning is refused until the day
+# warms up on its own.
+#
+# What exists today is plumbing heat tape on a switched outlet behind a
+# low-voltage disconnect, which heats whenever something is charging. It works.
+# This replaces the trigger, not the heater: heat when the packs are actually
+# cold enough to be the thing standing in the way, and only when the sun can
+# pay for it.
+#
+# Leave control disabled until the relay is wired and the probe reads. Turning
+# it on with no heater attached does nothing useful and makes the dashboard
+# claim a load exists.
+control:
+  enabled: false
+  state_file: /var/lib/monitoring/garage-control.json
+  loop_interval: 30s
+  publish_as:
+    location: control
+
+  loads:
+
+    battery_heating:
+      type: battery_heating
+      enabled: false
+      control_pin: 24
+      polarity: energize_to_connect   # a dead Pi must not leave a heater on
+      on_stale_data: deny             # never heat without a temperature
+
+      temperature:
+        sources:
+          - {device: pack_probe, field: temperature_f}
+        max_disagreement_f: 15
+        stale_after: 10m
+
+      heat_if_all:
+        coldest_below_f: 41.0         # 5 C
+      stop_if_any:
+        coldest_above_f: 50.0         # 10 C
+        any_sensor_above_f: 104.0     # 40 C hard stop
+      heat_dwell: 5m
+      stop_dwell: 5m
+      min_off: 15m
+
+      # The EG4 is the only source of production here, so this waits on the
+      # serial adapter. Until then the heating stays disabled rather than
+      # running on a guess about the weather.
+      require_production:
+        enabled: true
+        source: {device: inverter, field: pv_watts}
+        above_watts: 300
+        stale_after: 10m
+
+      limits:
+        max_run_per_day: 6h
+        cooldown: 15m
+
+      readback:
+        source: none
+        pin: null
