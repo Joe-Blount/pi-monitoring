@@ -374,3 +374,48 @@ def test_battery_heating_waits_on_production_not_on_charge_current():
         field = source.get("field", "")
         assert "amps" not in field and "current" not in field, "%s: %s" % (label, field)
         assert field, label
+
+
+def vent_fan_loads():
+    found = []
+    for path in NODE_FILES:
+        node = load(path)
+        for name, spec in (node.control.get("loads") or {}).items():
+            if spec.get("type") == "vent_fan":
+                found.append(("%s/%s" % (path.parent.name, name), spec))
+    return found
+
+
+def test_a_vent_fan_fails_off():
+    """A fan is indifferent to power cycling, so the reason the camera branch
+    is normally closed does not apply. Left stuck on it costs half an amp
+    through winter nights, taken from the bank in the season it can least
+    afford."""
+    for label, spec in vent_fan_loads():
+        assert spec.get("polarity") == "energize_to_connect", label
+
+
+def test_a_vent_fan_compares_two_different_sensors():
+    """Inside and outside pointed at one sensor gives a differential that is
+    always zero, so the fan never runs and nothing reports an error."""
+    for label, spec in vent_fan_loads():
+        inside, outside = spec["inside"], spec["outside"]
+        assert inside["device"] != outside["device"], label
+
+
+def test_a_vent_fan_has_hysteresis_on_both_conditions():
+    """Either condition without a deadband chatters around its threshold, and
+    a fan switching every loop is both useless and loud."""
+    for label, spec in vent_fan_loads():
+        run, stop = spec["run_if_all"], spec["stop_if_any"]
+        assert stop["inside_below_f"] < run["inside_above_f"], label
+        assert (stop["outside_cooler_by_less_than_f"]
+                < run["outside_cooler_by_f"]), label
+
+
+def test_a_vent_fan_only_runs_when_outside_is_cooler():
+    """Moving air warmer than the air it replaces heats the building and spends
+    power to do it. This is the condition a timer cannot express, and running
+    all summer gets it wrong on every humid night."""
+    for label, spec in vent_fan_loads():
+        assert spec["run_if_all"]["outside_cooler_by_f"] > 0, label

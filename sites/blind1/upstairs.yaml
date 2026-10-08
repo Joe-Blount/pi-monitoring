@@ -85,3 +85,79 @@ devices:
 # absent. It exists only to measure battery voltage, which the charge
 # controller reports more accurately on the downstairs node, and the two
 # disagreed by about 0.3 V. Retiring it frees the I2C pins.
+
+# The vent fan. Control lives on this node because the fan, the inside sensor
+# and the outside sensor are all here. A decision must not depend on the
+# network, so a controller reads its own machine's sensors and nothing else.
+#
+# Enable once the relay is wired. The fan runs continuously today, so leaving
+# this disabled is the current behaviour rather than a regression.
+control:
+  enabled: false
+  state_file: /var/lib/monitoring/blind1-upstairs-control.json
+  loop_interval: 30s
+  publish_as:
+    location: control
+
+  loads:
+
+    # A tiny fan, half an amp. This is the one load that needs no second relay
+    # stage: half an amp on a contact printed 10 A is five percent of rating.
+    vent_fan:
+      type: vent_fan
+      enabled: true
+      control_pin: 26               # physical 37
+
+      # Energize to run, so a dead Pi leaves the fan off.
+      #
+      # Opposite of the camera branch, and the difference is what each failure
+      # costs. The cameras are normally closed because a recorder power cycled
+      # on every Pi reboot is the real risk there. A fan does not care about
+      # cycling at all. What a fan would cost, left stuck on, is half an amp
+      # through a winter night, which is 12 Ah a day taken from the bank in
+      # the season it can least afford it. Stuck off costs a warm blind in a
+      # month with surplus sun.
+      polarity: energize_to_connect
+
+      # No temperature, no fan. The cost of refusing is a warm blind for an
+      # afternoon, which is nothing like the cost of refusing to heat a
+      # battery, so this one can simply decline.
+      on_stale_data: deny
+
+      inside: {device: box, field: temperature_f}
+      outside: {device: outdoor_temp, field: temperature_f}
+      stale_after: 10m
+
+      # Two conditions, and the second is what makes this better than a timer.
+      # A fan moving air that is warmer than the air it replaces heats the
+      # building and spends power to do it. Running all summer gets this wrong
+      # on every humid night.
+      run_if_all:
+        inside_above_f: 80.0
+        outside_cooler_by_f: 10.0
+
+      stop_if_any:
+        inside_below_f: 77.0
+        outside_cooler_by_less_than_f: 6.0
+
+        # Optional, and null here on purpose. The batteries are downstairs, so
+        # venting this space cannot chill them. Set a floor if that ever stops
+        # being true, because cold air on a pack works against the charging.
+        outside_below_f: null
+
+      run_dwell: 2m
+      stop_dwell: 5m
+      min_run: 5m
+      min_off: 5m
+
+      # There is no reason to move air when the bank is struggling, even for
+      # half an amp. Voltage rather than state of charge, because the battery
+      # monitor is downstairs and this node measures volts at the controller
+      # over a wire.
+      require_battery:
+        volts_above: 12.3
+        stale_after: 10m
+
+      readback:
+        source: none
+        pin: null

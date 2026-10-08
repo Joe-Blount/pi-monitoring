@@ -90,9 +90,38 @@ def test_a_pin_no_overlay_claims_is_allowed(probe, tmp_path, monkeypatch):
     assert probe["check_pin_is_safe"](26) is True
 
 
+def unclaimed_pin(node_path):
+    """A pin that `node_path` does not claim.
+
+    Derived rather than written down. A test that names a pin passes until
+    somebody adds a device or a load on it, and then fails for a reason that
+    has nothing to do with what the test is checking.
+    """
+    from monitoring import config, drivers
+    node = config.load(node_path, drivers.names())
+    claimed = set(config.claimed_pins(node.devices, node.control))
+    for pin in range(5, 28):
+        if pin not in claimed:
+            return pin
+    raise AssertionError("%s claims every pin" % node_path)
+
+
 def test_an_unused_pin_is_allowed(probe, capsys):
-    assert probe["check_pin_is_free"](26, str(REPO / "sites/blind1/upstairs.yaml"))
+    node_path = str(REPO / "sites/blind1/upstairs.yaml")
+    assert probe["check_pin_is_free"](unclaimed_pin(node_path), node_path)
     assert "not declared" in capsys.readouterr().out
+
+
+def test_every_pin_a_node_file_claims_is_refused(probe):
+    """Whatever the node files grow to claim, the probe must refuse all of it.
+    Spelling one pin out would leave the rest untested as the files change."""
+    from monitoring import config, drivers
+    for node_path in sorted((REPO / "sites").glob("*/*.yaml")):
+        node = config.load(node_path, drivers.names())
+        for pin, owner in config.claimed_pins(node.devices, node.control).items():
+            assert probe["check_pin_is_free"](pin, str(node_path)) is False, (
+                "%s: GPIO%d is %s but the probe would drive it"
+                % (node_path.name, pin, owner))
 
 
 def test_a_control_pin_is_refused_too(probe, capsys):

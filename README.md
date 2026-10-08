@@ -233,7 +233,7 @@ of its own.
 the operating system it will run, and needs nothing wired:
 
 ```
-sudo ./bin/gpio-probe --pin 26 --node /etc/monitoring/node.yaml
+sudo ./bin/gpio-probe --pin <an unused pin> --node /etc/monitoring/node.yaml
 ```
 
 It drives a pin, kills the process holding it, and reads the pin back without
