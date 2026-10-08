@@ -147,6 +147,8 @@ def test_the_poll_command_has_room_for_a_retrying_sensor():
 
 
 INSTALL = (REPO / "deploy" / "install.sh").read_text()
+INSTALL_FAST = (REPO / "deploy" / "telegraf.d" / "monitoring.conf").read_text()
+INSTALL_SLOW = (REPO / "deploy" / "telegraf.d" / "monitoring-slow.conf").read_text()
 
 
 def test_the_install_script_has_a_fallback_for_bleak():
@@ -194,3 +196,53 @@ def test_the_install_script_installs_yaml_before_it_reads_a_node_file():
     """The Bluetooth check loads the node file, which needs yaml. On a fresh
     machine the package must already be in place."""
     assert INSTALL.index("python3-yaml") < INSTALL.index("needs_bluetooth")
+
+
+@pytest.mark.parametrize("path", NODE_FILES, ids=lambda p: "%s/%s" % (p.parent.name, p.name))
+def test_the_two_collectors_cover_every_poll_device_exactly_once(path):
+    """Two inputs read this node. A device in neither is never read and
+    nothing says so; a device in both is read twice, which for a Bluetooth
+    pack means two readers contending for one connection."""
+    from monitoring import runner
+
+    node = load(path)
+    every = {d.name for d in runner.poll_devices(node, "all")}
+    fast = {d.name for d in runner.poll_devices(node, "fast")}
+    slow = {d.name for d in runner.poll_devices(node, "slow")}
+
+    assert fast | slow == every, "missed: %s" % sorted(every - (fast | slow))
+    assert not fast & slow, "read twice: %s" % sorted(fast & slow)
+
+
+def test_the_fast_collector_asks_only_for_fast_devices():
+    """Without the flag it would read the Bluetooth packs too, on the fast
+    schedule and the short timeout, which is the failure this split exists to
+    prevent."""
+    assert "--poll --speed fast" in INSTALL_FAST
+
+
+def test_the_slow_collector_allows_far_longer_than_the_fast_one():
+    """A cold Bluetooth connect alone can take most of a minute."""
+    fast = int(re.search(r'timeout = "(\d+)s"', INSTALL_FAST).group(1))
+    slow = int(re.search(r'timeout = "(\d+)s"', INSTALL_SLOW).group(1))
+    assert slow >= fast * 4, "slow timeout %ds is not enough above %ds" % (slow, fast)
+
+
+def test_the_slow_collector_runs_far_less_often():
+    """These packs allow one connection at a time, so every read locks the
+    owner's phone application out for as long as it lasts."""
+    fast = int(re.search(r'interval = "(\d+)s"', INSTALL_FAST).group(1))
+    slow = int(re.search(r'interval = "(\d+)s"', INSTALL_SLOW).group(1))
+    assert slow >= fast * 5
+
+
+def test_the_slow_collector_is_installed_only_where_it_is_needed():
+    assert "has_slow_devices" in INSTALL
+    assert "monitoring-slow.conf" in INSTALL
+
+
+def test_both_collectors_keep_stderr():
+    """telegraf discards a command's stderr when the exit code is zero, which
+    is the normal case when one device fails and the others succeed."""
+    for text in (INSTALL_FAST, INSTALL_SLOW):
+        assert "log_stderr = true" in text

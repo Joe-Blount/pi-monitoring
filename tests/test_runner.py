@@ -457,3 +457,31 @@ devices:
     assert out.returncode == 0, "telegraf would discard stdout on a non-zero exit"
     assert "ok=0.0" in out.stdout, "the failure must still be published"
     assert "28-nope" in out.stderr, "and still logged"
+
+
+class FlushCounter(io.StringIO):
+    """Records how often it was flushed, which is the behaviour under test."""
+
+    def __init__(self):
+        io.StringIO.__init__(self)
+        self.flushes = 0
+
+    def flush(self):
+        self.flushes += 1
+        io.StringIO.flush(self)
+
+
+def test_poll_flushes_after_each_device(tmp_path, doubles):
+    """Standard output to a pipe is block buffered. Flushing only at the end
+    means a process killed on timeout while reading a later device loses every
+    reading already taken, including the points reporting the failures. That
+    turns one slow device into silence for the whole node."""
+    node = node_with(tmp_path,
+                     "  - {name: a, driver: good, mode: poll}\n"
+                     "  - {name: b, driver: good, mode: poll}\n"
+                     "  - {name: c, driver: bad, mode: poll}\n")
+    out = FlushCounter()
+    written = runner.poll(node, out=out, err=io.StringIO())
+    assert written >= 2
+    assert out.flushes >= written, (
+        "flushed %d times for %d devices" % (out.flushes, written))

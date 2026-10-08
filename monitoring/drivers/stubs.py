@@ -36,6 +36,7 @@ class BleBmsDriver(NotWrittenYet):
     """
     device = "ble_bms"
     needs_bluetooth = True
+    slow_read = True
 
 
 class BleShuntDriver(NotWrittenYet):
@@ -49,3 +50,4 @@ class BleShuntDriver(NotWrittenYet):
     """
     device = "ble_shunt"
     needs_bluetooth = True
+    slow_read = True

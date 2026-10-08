@@ -160,6 +160,33 @@ rm -f /etc/telegraf/telegraf.d/monitoring.conf
 install -m 0644 "$REPO/deploy/telegraf.d/monitoring.conf" \
     /etc/telegraf/telegraf.d/pi-monitoring.conf
 
+# A second collector for devices whose single read can take tens of seconds,
+# installed only when this node declares one. Sharing the fast input would let
+# one unreachable battery silence the whole node every cycle.
+has_slow_devices() {
+    ( cd "$REPO" && python3 - "$NODE_FILE" <<'PYEOF'
+import sys
+try:
+    from monitoring import config, drivers, runner
+    node = config.load(sys.argv[1], drivers.names())
+except Exception as exc:
+    sys.stderr.write("%s\n" % exc)
+    sys.exit(2)
+sys.exit(0 if runner.poll_devices(node, "slow") else 1)
+PYEOF
+    )
+}
+
+if has_slow_devices; then
+    install -m 0644 "$REPO/deploy/telegraf.d/monitoring-slow.conf" \
+        /etc/telegraf/telegraf.d/pi-monitoring-slow.conf
+    echo "    installed the slow-device collector"
+elif [ $? -ne 1 ]; then
+    echo "    WARNING: could not tell whether this node has slow devices."
+    echo "             Not installing the slow collector. If a Bluetooth"
+    echo "             device never reports, that is why."
+fi
+
 # Resident devices: one execd stanza each, committed per node. A node with
 # none is normal and the loop simply finds nothing.
 # Per NODE, not per site. A site's nodes have different devices: installing

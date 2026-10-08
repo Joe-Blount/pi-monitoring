@@ -33,6 +33,12 @@ def main(argv=None):
                         help="read one device; omit with --poll, --list or --check")
     parser.add_argument("--node", default=os.environ.get("MONITORING_NODE", DEFAULT_NODE),
                         help="path to the node file (default: %s)" % DEFAULT_NODE)
+    parser.add_argument("--speed", choices=("all", "fast", "slow"),
+                        default="all",
+                        help="with --poll: which devices to read. Slow devices "
+                             "(Bluetooth) get their own collector so one "
+                             "unreachable pack cannot take the node's "
+                             "telemetry down with it")
     parser.add_argument("--poll", action="store_true",
                         help="read every poll-mode device, once")
     parser.add_argument("--list", action="store_true",
@@ -68,7 +74,7 @@ def main(argv=None):
     if args.poll:
         if args.device:
             parser.error("give a device name or --poll, not both")
-        written = runner.poll(node)
+        written = runner.poll(node, speed=args.speed)
         # Exit zero whenever anything was written, including points that
         # report a failure. telegraf's exec input discards a command's stdout
         # entirely when the exit code is non-zero, so failing here would throw

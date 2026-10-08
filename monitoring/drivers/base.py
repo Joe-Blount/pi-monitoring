@@ -24,6 +24,18 @@ class Driver:
     #: Set by subclasses. Used in error messages and by --list.
     description = ""
 
+    #: Whether one read can take tens of seconds.
+    #:
+    #: Poll devices are read by one process on one schedule, and telegraf
+    #: kills that process at its timeout. So a slow device sharing a schedule
+    #: with fast ones can take the whole node's telemetry down: the kill
+    #: discards every reading taken before it, including the points that would
+    #: have reported the failure.
+    #:
+    #: Slow devices therefore get their own collector, with its own interval
+    #: and its own much longer timeout.
+    slow_read = False
+
     #: Whether this driver needs a Bluetooth stack. Declared here rather
     #: than guessed from the driver's name by the install script, which once
     #: matched only names beginning "ble_" and therefore skipped bleak for a

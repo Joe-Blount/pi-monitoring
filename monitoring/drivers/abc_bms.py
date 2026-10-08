@@ -287,6 +287,9 @@ class AbcBmsDriver(Driver):
 
     description = "ABC-BMS battery pack over Bluetooth (SOK and others)"
     needs_bluetooth = True
+    # A cold Bluetooth connect alone takes 10 to 40 seconds, and each reading
+    # sends three commands and waits for quiet after each.
+    slow_read = True
     # Connect, read and disconnect each time rather than holding the link:
     # these modules accept one connection at a time, so a held connection
     # locks the vendor's phone application out of the battery.

@@ -118,8 +118,34 @@ def read_device(node, device, now_ns=None):
                 pass
 
 
-def poll(node, now_ns=None, out=None, err=None):
-    """Read every poll-mode device in this one process.
+def poll_devices(node, speed="all"):
+    """The poll devices a collector should read.
+
+    Slow devices are separated because they share a process and a timeout with
+    the fast ones. A Bluetooth pack that cannot be reached holds the process
+    until telegraf kills it, and the kill discards every reading taken before
+    it.
+
+    "all" keeps the old behaviour for a node with nothing slow on it.
+    """
+    from . import drivers as _registry
+
+    def is_slow(device):
+        try:
+            return bool(_registry.get(device.driver).slow_read)
+        except Exception:
+            return False
+
+    devices = node.by_mode("poll")
+    if speed == "fast":
+        return [d for d in devices if not is_slow(d)]
+    if speed == "slow":
+        return [d for d in devices if is_slow(d)]
+    return devices
+
+
+def poll(node, now_ns=None, out=None, err=None, speed="all"):
+    """Read poll-mode devices in this one process.
 
     One process per interval rather than one per device. Several interpreters
     starting on the same tick is enough load on a single-board computer to
@@ -135,7 +161,7 @@ def poll(node, now_ns=None, out=None, err=None):
     now_ns = _now_ns() if now_ns is None else now_ns
 
     written = 0
-    for device in node.by_mode("poll"):
+    for device in poll_devices(node, speed):
         result = read_device(node, device, now_ns)
         if result.ok:
             for one in result.lines:
@@ -149,6 +175,14 @@ def poll(node, now_ns=None, out=None, err=None):
             err.write("device %s (%s): %s\n"
                       % (device.name, device.driver,
                          str(result.error)[:STDERR_REASON]))
+
+        # Flushed per device, not once at the end. Standard output to a pipe
+        # is block buffered, so a process killed on timeout while reading a
+        # later device would otherwise lose every reading already taken,
+        # including the points reporting the failures.
+        out.flush()
+        err.flush()
+
     out.flush()
     err.flush()
     return written
