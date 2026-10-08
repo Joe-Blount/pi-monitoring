@@ -122,6 +122,16 @@ FIELDS = (
     Field("charge_mosfet_on", 0xF2, 2, 1, low=0.0, high=1.0),
     Field("discharge_mosfet_on", 0xF2, 3, 1, low=0.0, high=1.0),
     Field("temperature_sensors", 0xF2, 4, 1, low=0.0, high=16.0),
+    # Temperatures are reported, and the vendor application shows about two per
+    # pack. They are not decoded here yet because neither reference documents
+    # their offsets, and unlike the cell voltages there is no structural check
+    # that would catch a wrong one: any single byte read as a temperature looks
+    # plausible, so a guess would publish a believable wrong number.
+    #
+    # Where to look, with --raw against a pack: message F2, immediately after
+    # the sensor count at offset 4. A count of two followed by two values is
+    # the obvious layout. Compare against what the application displays at the
+    # same moment, then add Field entries here.
     Field("heater_on", 0xF3, 8, 1, low=0.0, high=1.0),
 )
 

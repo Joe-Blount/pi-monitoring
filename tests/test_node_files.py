@@ -327,11 +327,16 @@ def test_battery_heating_fails_off():
         assert spec.get("polarity") == "energize_to_connect", label
 
 
-def test_battery_heating_refuses_to_act_without_a_temperature():
-    """Not heating only delays charging until the day warms, which is what
-    happens with no controller at all. Heating blind has no such floor."""
+def test_battery_heating_declares_what_to_do_without_a_temperature():
+    """Either answer is defensible and they need different hardware, so the
+    file must say which. Falling back reproduces a plain thermostatic heater,
+    which is safe only because a mechanical cutout sits in series; refusing
+    costs a winter of charging whenever the radio is unreliable."""
     for label, spec in battery_heating_loads():
-        assert spec.get("on_stale_data") == "deny", label
+        choice = spec.get("on_stale_data")
+        assert choice in ("fallback", "deny"), "%s: %r" % (label, choice)
+        if choice == "fallback":
+            assert (spec.get("temperature") or {}).get("fallback_sources"), label
 
 
 def test_battery_heating_has_a_hard_upper_limit():
@@ -350,6 +355,14 @@ def test_battery_heating_thresholds_are_not_inverted():
         stop = (spec.get("stop_if_any") or {})["coldest_above_f"]
         assert stop > start, "%s: stops at %s, starts at %s" % (label, stop, start)
         assert stop - start >= 5.0, "%s: deadband is only %s F" % (label, stop - start)
+
+
+def test_battery_heating_reads_more_than_one_temperature():
+    """The coldest sensor governs, which needs more than one to mean anything.
+    These packs report about two sensors each."""
+    for label, spec in battery_heating_loads():
+        sources = (spec.get("temperature") or {}).get("sources") or []
+        assert len(sources) >= 2, "%s: %d source(s)" % (label, len(sources))
 
 
 def test_battery_heating_waits_on_production_not_on_charge_current():

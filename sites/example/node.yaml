@@ -447,10 +447,17 @@ control:
       # against a battery has no such bound.
       polarity: energize_to_connect
 
-      # Never heat on ignorance. Without a temperature there is nothing to
-      # decide, and not heating only means no charging until the day warms,
-      # which is what happens today anyway.
-      on_stale_data: deny
+      # What to do with no temperature. Unlike the pump, where acting on
+      # ignorance destroys a pump, heating on ignorance only reproduces the
+      # dumb heater this replaces: heat whenever the sun is charging. That ran
+      # for seasons without harm, and a mechanical over-temperature cutout in
+      # series bounds the worst case.
+      #
+      # So refusing is the wrong default here. Refusing would mean a flaky
+      # radio costs a whole winter of charging, which is worse than today.
+      #   fallback  try the fallback sources, then heat on production alone
+      #   deny      refuse. Correct only with no over-temperature cutout.
+      on_stale_data: fallback
 
       temperature:
         # Which readings to believe, coldest first. The COLDEST sensor
@@ -463,9 +470,25 @@ control:
         # loop should not wait on a radio. Keep the BMS reading as a
         # cross-check: two sensors disagreeing by a lot means one has fallen
         # off the case.
+        # The packs' own sensors, about two per pack. Prefer these over any
+        # probe stuck to a case: they sit against the cells, which is what
+        # actually refuses charge, and they need no wiring.
+        #
+        # A radio that answers every few minutes is fast enough here, because
+        # the thermal loop below is slower than that. This would be the wrong
+        # choice for anything that has to react in seconds.
         sources:
-          - {device: pack_probe, field: temperature_f}
-          - {device: pack1, field: temperature_f}
+          - {device: pack1, field: temperature_1_f}
+          - {device: pack1, field: temperature_2_f}
+          - {device: pack2, field: temperature_1_f}
+          - {device: pack2, field: temperature_2_f}
+
+        # Used only when every source above is stale. Ambient is not pack
+        # temperature, but a cold room means cold packs, and it is a far better
+        # guess than heating regardless of the weather.
+        fallback_sources:
+          - {device: box, field: temperature_f}
+
         max_disagreement_f: 15      # warn, do not act, when they diverge
         stale_after: 10m
 

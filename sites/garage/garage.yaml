@@ -76,21 +76,6 @@ devices:
 #     baud: 2400
 #     queries: [QPIGS, QMOD]
 
-# A one-wire probe taped to a pack case, for the battery heating below. Wired
-# rather than Bluetooth on purpose: a control loop should not wait on a radio
-# that answers every few minutes.
-#
-# Needs dtoverlay=w1-gpio in /boot/firmware/config.txt and a reboot, plus a
-# 4.7k pull-up from data to 3V3. Read the id from /sys/bus/w1/devices after
-# the reboot and put it below.
-#
-# - name: pack_probe
-#   driver: ds18b20
-#   mode: poll
-#   interval: 60s
-#   tags: {location: rack}
-#   params: {id: 28-xxxxxxxxxxxx}
-
 # Battery heating. These SOK rack packs have no heater of their own and cannot
 # be charged below freezing, so a cold sunny morning is refused until the day
 # warms up on its own.
@@ -118,11 +103,31 @@ control:
       enabled: false
       control_pin: 24
       polarity: energize_to_connect   # a dead Pi must not leave a heater on
-      on_stale_data: deny             # never heat without a temperature
+
+      # Falls back rather than refusing. Heating without a temperature is just
+      # the existing dumb heater, which has run for seasons, and the snap-disc
+      # cutout in series bounds it. Refusing would let a flaky radio cost a
+      # whole winter of charging.
+      on_stale_data: fallback
 
       temperature:
+        # The packs' own sensors, about two per pack. They sit against the
+        # cells rather than on a case, and they need no wiring.
+        #
+        # The exact field names wait on finding the temperature offsets in the
+        # ABC-BMS reply, which is a --raw job on site. Until then this load
+        # stays disabled.
         sources:
-          - {device: pack_probe, field: temperature_f}
+          - {device: pack1, field: temperature_1_f}
+          - {device: pack1, field: temperature_2_f}
+          - {device: pack2, field: temperature_1_f}
+          - {device: pack2, field: temperature_2_f}
+
+        # The existing DHT22 in the box. Not pack temperature, but a cold room
+        # means cold packs, and a better guess than ignoring the weather.
+        fallback_sources:
+          - {device: box, field: temperature_f}
+
         max_disagreement_f: 15
         stale_after: 10m
 
