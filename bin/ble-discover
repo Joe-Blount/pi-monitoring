@@ -1,0 +1,354 @@
+#!/usr/bin/env python3
+"""Find out what a Bluetooth battery actually says, without a phone.
+
+A pack whose protocol nobody has written down is a chicken and egg problem: a
+driver cannot be written until the service and command identifiers are known,
+and they are usually learned by watching the vendor's phone application. That
+needs a second phone, a capture log and a laptop.
+
+The Pi can do most of it alone. Bluetooth low energy devices describe
+themselves: every service and every characteristic is enumerable, and the ones
+that send unprompted data can be subscribed to. That is enough to identify a
+pack, and often enough to recognise which published protocol family it belongs
+to without capturing anything.
+
+    ./bin/ble-discover --scan
+    ./bin/ble-discover --address AA:BB:CC:DD:EE:FF
+    ./bin/ble-discover --address AA:BB:CC:DD:EE:FF --listen 60
+    ./bin/ble-discover --address AA:BB:CC:DD:EE:FF --try abc_bms
+
+Nothing here writes to a battery unless you pass --try or --write, and neither
+of those sends anything but a read request from a published command set.
+
+This is a diagnostic. It is not imported by any driver and it collects no
+metrics.
+"""
+
+import argparse
+import binascii
+import sys
+import time
+
+# Published read-only command sets worth trying against an unknown pack.
+#
+# Each entry is a protocol family, the characteristic to write to, and the
+# commands to send. A pack that answers one of these is very likely that
+# family, which turns writing its driver into a half hour rather than a
+# weekend.
+#
+# Read commands only. Nothing here can change a setting or switch a MOSFET,
+# which several of these protocols will happily do unauthenticated.
+FAMILIES = {
+    "abc_bms": {
+        "description": "SOK and other ABC-BMS packs",
+        "write": "0000ffe2-0000-1000-8000-00805f9b34fb",
+        "notify": "0000ffe1-0000-1000-8000-00805f9b34fb",
+        # EE <command> 00 00 00 plus a Dallas CRC-8, same as the driver builds.
+        "commands": ["c0", "c1", "c2", "c4"],
+        "builder": "abc_bms",
+    },
+    "jbd": {
+        "description": "JBD, Jiabaida, Overkill Solar, many rebadges",
+        "write": "0000ff02-0000-1000-8000-00805f9b34fb",
+        "notify": "0000ff01-0000-1000-8000-00805f9b34fb",
+        # DD A5 <register> 00 FF <checksum> 77
+        "commands": ["03", "04", "05"],
+        "builder": "jbd",
+    },
+}
+
+#: Characteristic identifiers seen carrying battery traffic. Used only to
+#: point a human at the interesting rows, never to decide anything.
+KNOWN_INTERESTING = {
+    "ffe0": "ABC-BMS service (SOK)",
+    "ffe1": "ABC-BMS notify",
+    "ffe2": "ABC-BMS write",
+    "ff00": "JBD service",
+    "ff01": "JBD notify",
+    "ff02": "JBD write",
+    "fff0": "JK BMS service",
+    "6e400001": "Nordic UART service, used by several packs",
+    "0000fd00": "Renogy",
+}
+
+
+def crc8_dallas(data):
+    """The Dallas and Maxim CRC-8, used by ABC-BMS."""
+    crc = 0
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            crc = (crc >> 1) ^ 0x8C if crc & 1 else crc >> 1
+    return crc
+
+
+def build_abc_bms(command):
+    """EE <command> 00 00 00 plus a Dallas CRC-8."""
+    frame = bytes([0xEE, command, 0x00, 0x00, 0x00])
+    return frame + bytes([crc8_dallas(frame)])
+
+
+def build_jbd(register):
+    """DD A5 <register> 00 FF <two byte checksum> 77.
+
+    The checksum is the two's complement of the sum of the length and the
+    payload, high byte first.
+    """
+    body = bytes([register, 0x00])
+    checksum = (0x10000 - sum(body)) & 0xFFFF
+    return bytes([0xDD, 0xA5]) + body + bytes([checksum >> 8, checksum & 0xFF, 0x77])
+
+
+BUILDERS = {"abc_bms": build_abc_bms, "jbd": build_jbd}
+
+
+def commands_for(family):
+    """Every probe frame for one family, as bytes."""
+    spec = FAMILIES[family]
+    build = BUILDERS[spec["builder"]]
+    return [build(int(code, 16)) for code in spec["commands"]]
+
+
+def short_uuid(uuid):
+    """The distinguishing part of a Bluetooth identifier.
+
+    Standard ones are a fixed 128-bit pattern with a 16-bit value in the
+    middle, and that value is the only part anybody quotes.
+    """
+    text = str(uuid).lower()
+    if text.endswith("-0000-1000-8000-00805f9b34fb"):
+        return text.split("-")[0].lstrip("0") or "0"
+    return text
+
+
+def annotate(uuid):
+    """A note about a characteristic, or an empty string."""
+    text = str(uuid).lower()
+    stem = short_uuid(uuid)
+    for key, note in KNOWN_INTERESTING.items():
+        if stem == key.lstrip("0") or text.startswith(key):
+            return note
+    return ""
+
+
+def describe_tree(services):
+    """Render a GATT tree as lines of text.
+
+    `services` is a list of (service_uuid, [(characteristic_uuid, properties)]).
+    Separated from the Bluetooth stack so that the formatting is testable with
+    no radio and no pack.
+    """
+    lines = []
+    for service_uuid, characteristics in services:
+        note = annotate(service_uuid)
+        lines.append("service %s%s" % (
+            short_uuid(service_uuid), ("   <- %s" % note) if note else ""))
+        for char_uuid, properties in characteristics:
+            note = annotate(char_uuid)
+            lines.append("  char %-10s %-28s%s" % (
+                short_uuid(char_uuid), ",".join(sorted(properties)),
+                ("   <- %s" % note) if note else ""))
+    return lines
+
+
+def notifying(services):
+    """Every characteristic that can send unprompted data.
+
+    These are what a driver subscribes to, so they are the ones worth
+    listening on before guessing at anything.
+    """
+    out = []
+    for _, characteristics in services:
+        for char_uuid, properties in characteristics:
+            if "notify" in properties or "indicate" in properties:
+                out.append(char_uuid)
+    return out
+
+
+def writable(services):
+    """Every characteristic a command could be written to."""
+    out = []
+    for _, characteristics in services:
+        for char_uuid, properties in characteristics:
+            if "write" in properties or "write-without-response" in properties:
+                out.append(char_uuid)
+    return out
+
+
+def guess_family(services):
+    """Protocol families whose characteristics are all present.
+
+    A guess, and labelled as one. It narrows the search; it does not decide.
+    """
+    present = {short_uuid(c) for _, chars in services for c, _ in chars}
+    found = []
+    for name, spec in FAMILIES.items():
+        if {short_uuid(spec["write"]), short_uuid(spec["notify"])} <= present:
+            found.append(name)
+    return found
+
+
+def format_frame(when, char_uuid, data):
+    """One received frame, with enough context to match it to a command."""
+    return "%8.3f  %-8s  %s" % (
+        when, short_uuid(char_uuid), binascii.hexlify(bytes(data), " ").decode())
+
+
+def _fail(message):
+    print("ERROR: %s" % message, file=sys.stderr)
+    return 2
+
+
+def run(address, listen_seconds, family, write_to, write_hex):
+    """Talk to a pack. Everything above this line needs no Bluetooth stack."""
+    import asyncio
+
+    try:
+        from bleak import BleakClient, BleakScanner      # noqa: F401
+    except ImportError:
+        return _fail("needs bleak: sudo apt install python3-bleak")
+
+    async def main():
+        from bleak import BleakClient
+
+        print("connecting to %s, which can take 30 seconds on a cold pack" % address)
+        async with BleakClient(address, timeout=40.0) as client:
+            services = [
+                (s.uuid, [(c.uuid, list(c.properties)) for c in s.characteristics])
+                for s in client.services
+            ]
+
+            print()
+            for line in describe_tree(services):
+                print(line)
+
+            guesses = guess_family(services)
+            print()
+            if guesses:
+                print("looks like: %s" % ", ".join(
+                    "%s (%s)" % (g, FAMILIES[g]["description"]) for g in guesses))
+            else:
+                print("no known protocol family matched. The notify "
+                      "characteristics below are where to look.")
+
+            channels = notifying(services)
+            print("notify characteristics: %s" % (
+                ", ".join(short_uuid(c) for c in channels) or "none"))
+            print("writable characteristics: %s" % (
+                ", ".join(short_uuid(c) for c in writable(services)) or "none"))
+
+            if not channels:
+                print("\nnothing to subscribe to, so nothing more to learn here")
+                return 0
+
+            started = time.monotonic()
+            received = []
+
+            def on_notify(sender, data):
+                received.append(format_frame(
+                    time.monotonic() - started, getattr(sender, "uuid", sender), data))
+
+            for channel in channels:
+                try:
+                    await client.start_notify(channel, on_notify)
+                except Exception as exc:                 # noqa: BLE001
+                    print("  cannot subscribe to %s: %s" % (short_uuid(channel), exc))
+
+            print("\nlistening %ds. Unprompted frames appear below." % listen_seconds)
+            print("%8s  %-8s  %s" % ("seconds", "char", "bytes"))
+
+            if write_hex:
+                await client.write_gatt_char(
+                    write_to, bytes.fromhex(write_hex.replace(" ", "")),
+                    response=False)
+                print("  wrote %s to %s" % (write_hex, short_uuid(write_to)))
+
+            if family:
+                spec = FAMILIES[family]
+                target = write_to or spec["write"]
+                for frame in commands_for(family):
+                    print("  sending %s to %s" % (
+                        binascii.hexlify(frame, " ").decode(), short_uuid(target)))
+                    try:
+                        await client.write_gatt_char(target, frame, response=False)
+                    except Exception as exc:             # noqa: BLE001
+                        print("    write failed: %s" % exc)
+                    await asyncio.sleep(2.0)
+
+            deadline = time.monotonic() + listen_seconds
+            while time.monotonic() < deadline:
+                await asyncio.sleep(0.25)
+                while received:
+                    print(received.pop(0))
+
+            for channel in channels:
+                try:
+                    await client.stop_notify(channel)
+                except Exception:                        # noqa: BLE001
+                    pass
+
+            while received:
+                print(received.pop(0))
+        return 0
+
+    try:
+        return asyncio.run(main())
+    except Exception as exc:                             # noqa: BLE001
+        return _fail("cannot talk to %s: %s. The pack may be out of range, "
+                     "asleep, or already connected to a phone, which locks "
+                     "everything else out." % (address, exc))
+
+
+def scan(seconds):
+    """List what is advertising nearby, so an address can be found."""
+    import asyncio
+
+    try:
+        from bleak import BleakScanner
+    except ImportError:
+        return _fail("needs bleak: sudo apt install python3-bleak")
+
+    async def main():
+        print("scanning %ds" % seconds)
+        devices = await BleakScanner.discover(timeout=float(seconds))
+        if not devices:
+            print("nothing advertising. A pack asleep or already connected to "
+                  "a phone does not advertise.")
+            return 0
+        print("%-20s %-28s %s" % ("address", "name", "rssi"))
+        for d in sorted(devices, key=lambda d: (d.name or "~", d.address)):
+            print("%-20s %-28s %s" % (d.address, d.name or "(no name)",
+                                      getattr(d, "rssi", "")))
+        return 0
+
+    return asyncio.run(main())
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--scan", action="store_true",
+                        help="list advertising devices and exit")
+    parser.add_argument("--address", help="pack to connect to")
+    parser.add_argument("--listen", type=int, default=30, metavar="SECONDS",
+                        help="how long to report unprompted frames (default 30)")
+    parser.add_argument("--try", dest="family", choices=sorted(FAMILIES),
+                        help="send one published read-only command set")
+    parser.add_argument("--write", dest="write_to", metavar="UUID",
+                        help="characteristic to write to, if not the family default")
+    parser.add_argument("--hex", dest="write_hex", metavar="BYTES",
+                        help="one frame to write, as hex")
+    args = parser.parse_args()
+
+    if args.scan:
+        return scan(args.listen)
+    if not args.address:
+        parser.error("give --address, or --scan to find one")
+    if args.write_hex and not args.write_to:
+        parser.error("--hex needs --write to say where to send it")
+
+    return run(args.address, args.listen, args.family, args.write_to, args.write_hex)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
