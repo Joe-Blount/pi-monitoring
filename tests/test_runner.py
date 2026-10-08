@@ -293,7 +293,7 @@ devices:
 control:
   enabled: %s
   loads:
-    cameras: {control_pin: 23}
+    cameras: {type: dc_branch, control_pin: 23}
 """ % ("true" if control_enabled else "false"))
     return config.load(path, set(REGISTRY))
 
@@ -360,7 +360,7 @@ devices:
 control:
   enabled: true
   loads:
-    cameras: {control_pin: 23}
+    cameras: {type: dc_branch, control_pin: 23}
 """)
     repo = pathlib.Path(__file__).resolve().parent.parent
     out = subprocess.run(

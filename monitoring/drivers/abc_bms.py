@@ -49,6 +49,7 @@ Use ``--raw`` against a real pack to see the frames before trusting a field.
 """
 
 import struct
+import sys
 
 from .base import Driver, DriverError, required
 
@@ -66,6 +67,15 @@ IDENTITY_COMMAND = (0xC0, (0xF1,))
 
 #: The message carrying cell voltages, which arrives in several parts.
 CELL_MESSAGE = 0xF4
+
+#: Fewer cells than this is a coincidence rather than a pack. One byte pair
+#: that happens to fall inside the plausible range would otherwise decode as
+#: a one cell battery.
+MIN_CELLS = 2
+
+#: Key under which the transport records commands that brought no reply. Not
+#: a message identifier: no pack sends this.
+UNANSWERED = "unanswered"
 
 
 class Field:
@@ -202,16 +212,22 @@ def cell_voltages(message, entry_size=4):
     for start in range(0, len(body) - entry_size + 1, entry_size):
         index = int.from_bytes(body[start:start + 2], "little")
         millivolts = int.from_bytes(body[start + 2:start + 4], "little")
-        if 1 <= index <= 64 and 1000 <= millivolts <= 5000:
+        if 0 <= index <= 64 and 1000 <= millivolts <= 5000:
             found.setdefault(index, millivolts)
 
-    if not found:
+    if len(found) < MIN_CELLS:
         return []
 
-    # Self-check: a pack numbers its cells from one without gaps. Anything
-    # else means the entries were not where this expected them.
-    expected = set(range(1, len(found) + 1))
-    if set(found) != expected:
+    # Self-check: a pack numbers its cells consecutively with no gaps. The
+    # references disagree about whether the first cell is zero or one, so both
+    # are accepted and nothing else is.
+    #
+    # Reading a zero-based pack as one-based is not a harmless off-by-one. It
+    # drops the first cell, and the remaining indices still form a complete
+    # run, so the count, the minimum and the spread all come out plausible and
+    # wrong. That is the one outcome this reader exists to prevent.
+    if set(found) not in (set(range(1, len(found) + 1)),
+                          set(range(0, len(found)))):
         return []
 
     return [found[index] for index in sorted(found)]
@@ -226,6 +242,8 @@ def parse(messages):
     """
     out = {}
     rejected = []
+
+    unanswered = messages.get(UNANSWERED) or []
 
     for field in FIELDS:
         frame = messages.get(field.message)
@@ -249,10 +267,9 @@ def parse(messages):
     # zero, so a frame of noise leaves a plausible-looking current behind and
     # the reading would claim success on the strength of it. A pack that
     # answers at all has a voltage inside its own chemistry's range.
-    if messages.get(0xF0) and "pack_volts" not in out:
+    if "pack_volts" not in out:
         raise DriverError(
-            "frame F0 arrived but pack_volts was not plausible, so nothing in "
-            "it is trusted%s" % (
+            "no plausible pack voltage, so nothing read is trusted%s" % (
                 "; out of range: " + ", ".join(rejected) if rejected else ""))
 
     if not out:
@@ -261,6 +278,7 @@ def parse(messages):
                 "; out of range: " + ", ".join(rejected) if rejected else ""))
     if rejected:
         out["rejected_fields"] = ", ".join(rejected)
+    out["commands_unanswered"] = float(len(unanswered))
     return out
 
 
@@ -340,6 +358,7 @@ class _BleakTransport:
         import asyncio
 
         messages = {}
+        unanswered = []
         arrived = asyncio.Event()
 
         def on_notify(_sender, data):
@@ -352,17 +371,20 @@ class _BleakTransport:
         try:
             async with BleakClient(self.address, timeout=self.timeout) as client:
                 await client.start_notify(NOTIFY_UUID, on_notify)
-                for code, expected in wanted:
+                for code, _ in wanted:
+                    # What arrived before this command, so the reply to this
+                    # one can be told apart. Comparing against the whole set
+                    # instead meant that once any command had answered, a
+                    # later silent one could never be noticed, and the reading
+                    # looked complete with a third of the fields missing.
+                    before = set(messages)
                     await client.write_gatt_char(WRITE_UUID, command(code),
                                                  response=False)
                     # Cell voltages arrive as several frames, so waiting for
                     # the first reply is not enough. Wait for quiet instead.
                     await self._wait_for_quiet(arrived)
-                    missing = [m for m in expected if m not in messages]
-                    if missing and not messages:
-                        raise DriverError(
-                            "no reply to command %#04x from %s"
-                            % (code, self.address))
+                    if not set(messages) - before:
+                        unanswered.append(code)
                 await client.stop_notify(NOTIFY_UUID)
         except DriverError:
             raise
@@ -374,6 +396,16 @@ class _BleakTransport:
                 "%s connected but sent nothing. The pack may be asleep, or "
                 "another device may hold the one connection it allows"
                 % self.address)
+
+        if unanswered:
+            # Published as a field rather than only logged, so that a pack
+            # answering some commands and not others is visible on a dashboard
+            # instead of looking healthy with fields quietly absent.
+            messages[UNANSWERED] = unanswered
+            sys.stderr.write(
+                "%s did not answer command(s) %s\n"
+                % (self.address, ", ".join("%#04x" % c for c in unanswered)))
+
         return messages
 
     async def _wait_for_quiet(self, arrived):

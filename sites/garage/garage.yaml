@@ -40,41 +40,53 @@ devices:
   # time, so a reading locks the phone application out for as long as it runs,
   # and two readers starting together contend for the one radio on the Pi.
   #
-  # - name: pack1
-  #   driver: abc_bms
-  #   mode: poll
-  #   interval: 300s
-  #   tags: {location: rack}
-  #   params: {address: "XX:XX:XX:XX:XX:XX"}
+  # Declared and disabled rather than commented out, which is this project's
+  # own rule and matters more here than usual: the battery heating block below
+  # names these devices, and a name that resolves to nothing produces a load
+  # that never runs with nothing reporting why.
   #
-  # - name: pack2
-  #   driver: abc_bms
-  #   mode: poll
-  #   interval: 300s
-  #   tags: {location: rack}
-  #   params: {address: "YY:YY:YY:YY:YY:YY"}
+  # On site: run bin/ble-discover --scan, put the real addresses in, and set
+  # enabled: true. One word each rather than re-indenting a block in a garage.
+  - name: pack1
+    driver: abc_bms
+    mode: poll
+    enabled: false
+    tags: {location: rack}
+    params: {address: "XX:XX:XX:XX:XX:XX"}
 
-# The EG4 inverter is waiting on one cable: a USB-to-RS232 adapter with a DB9
-# male end, which mates with the RJ45-to-DB9 cable that came with the inverter.
-# That goes into the jack printed RS232 or COM.
-#
-# NOT the jack printed RS485, which is the battery channel where the inverter
-# is the master and never answers a query. Not the USB-B port either, which is
-# documented as unusable for monitoring on this model. Both were tried.
-#
-# Uncomment when the adapter arrives. If the first read fails its checksum,
-# this firmware computes it differently from the specification; set
-# verify_reply_crc: false rather than assuming the wiring is wrong.
-#
-# - name: inverter
-#   driver: pi30
-#   mode: poll
-#   interval: 30s
-#   tags: {location: inverter}
-#   params:
-#     port: /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_XXXXXXXX-if00-port0
-#     baud: 2400
-#     queries: [QPIGS, QMOD]
+  - name: pack2
+    driver: abc_bms
+    mode: poll
+    enabled: false
+    tags: {location: rack}
+    params: {address: "YY:YY:YY:YY:YY:YY"}
+
+  # The EG4, waiting on one cable: a USB-to-RS232 adapter with a DB9 male end,
+  # which mates with the RJ45-to-DB9 cable that came with the inverter. That
+  # goes into the jack printed RS232 or COM.
+  #
+  # NOT the jack printed RS485, which is the battery channel where the
+  # inverter is the master and never answers a query. Not the USB-B port
+  # either, which is documented as unusable for monitoring on this model.
+  # Both were tried.
+  #
+  # Measure before plugging anything in: black lead on DB9 pin 5, then read
+  # pins 2 and 3. Whichever is negative is the inverter's transmit pin. Pin 2
+  # means plug straight in; pin 3 means insert the null modem.
+  #
+  # On site: put the real by-id path in and set enabled: true. If the first
+  # read fails its checksum, this firmware computes it differently from the
+  # specification; set verify_reply_crc: false rather than assuming the
+  # wiring is wrong.
+  - name: inverter
+    driver: pi30
+    mode: poll
+    enabled: false
+    tags: {location: inverter}
+    params:
+      port: /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_XXXXXXXX-if00-port0
+      baud: 2400
+      queries: [QPIGS, QMOD]
 
 # Battery heating. These SOK rack packs have no heater of their own and cannot
 # be charged below freezing, so a cold sunny morning is refused until the day
@@ -118,15 +130,17 @@ control:
         # ABC-BMS reply, which is a --raw job on site. Until then this load
         # stays disabled.
         sources:
-          - {device: pack1, field: temperature_1_f}
-          - {device: pack1, field: temperature_2_f}
-          - {device: pack2, field: temperature_1_f}
-          - {device: pack2, field: temperature_2_f}
+          - {device: pack1, field: temp_1}
+          - {device: pack1, field: temp_2}
+          - {device: pack2, field: temp_1}
+          - {device: pack2, field: temp_2}
 
-        # The existing DHT22 in the box. Not pack temperature, but a cold room
-        # means cold packs, and a better guess than ignoring the weather.
-        fallback_sources:
-          - {device: box, field: temperature_f}
+        # No ambient fallback on this node. The garage DHT22 deliberately
+        # stays on its old compiled telegraf plugin, so this software does not
+        # read it, and naming it here would be a source that never resolves.
+        # With no fallback, a stale pack reading degrades to heating on
+        # production alone, which is what the existing dumb heater does.
+        fallback_sources: []
 
         max_disagreement_f: 15
         stale_after: 10m
@@ -145,8 +159,12 @@ control:
       # running on a guess about the weather.
       require_production:
         enabled: true
-        source: {device: inverter, field: pv_watts}
-        above_watts: 300
+        # Panel voltage, not watts. A cold pack makes the BMS refuse charge,
+        # the EG4 curtails, and watts fall to the house load. A watts gate
+        # would read low on the cold clear morning this exists for. Panel
+        # voltage is set by the sun and cannot be suppressed by the battery.
+        source: {device: inverter, field: pv_volts}
+        above_volts: 80
         stale_after: 10m
 
       limits:

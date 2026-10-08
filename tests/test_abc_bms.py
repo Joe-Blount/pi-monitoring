@@ -357,3 +357,64 @@ def _joined(cells):
     for frame in fx.cell_frames(cells):
         abc_bms.collect(messages, frame)
     return messages[abc_bms.CELL_MESSAGE]
+
+
+# --- cell numbering, which the references disagree about -------------------
+
+def _cell_message(indices, millivolts=3300):
+    import struct
+    body = b"".join(struct.pack("<HH", i, millivolts + i) for i in indices)
+    return b"\xcc\xf4" + body
+
+
+def test_a_pack_numbering_its_cells_from_zero_reports_every_cell():
+    """Read as one-based, a zero-based pack loses its first cell and the rest
+    still form a complete run, so the count, the minimum and the spread all
+    come out plausible and wrong. That is the failure this reader exists to
+    prevent, so both numberings are accepted."""
+    cells = abc_bms.cell_voltages(_cell_message(range(0, 16)))
+    assert len(cells) == 16
+    assert cells[0] == 3300
+
+
+def test_a_pack_numbering_its_cells_from_one_reports_every_cell():
+    cells = abc_bms.cell_voltages(_cell_message(range(1, 17)))
+    assert len(cells) == 16
+    assert cells[0] == 3301
+
+
+def test_indices_that_start_at_two_are_refused():
+    """Neither numbering starts there, so the entries are not where this
+    expected them and every value read out is suspect."""
+    assert abc_bms.cell_voltages(_cell_message(range(2, 18))) == []
+
+
+def test_a_single_plausible_entry_is_not_a_one_cell_battery():
+    """One byte pair falling inside the plausible range is a coincidence. A
+    pack of one cell does not exist."""
+    assert abc_bms.cell_voltages(_cell_message([1])) == []
+
+
+# --- a pack that answers some commands and not others ---------------------
+
+def test_a_command_that_brought_no_reply_is_counted():
+    """Comparing against every message gathered so far meant that once any
+    command had answered, a later silent one could never be noticed. The
+    reading then looked complete with a third of its fields missing."""
+    out = abc_bms.parse({0xF0: fx.status_frame(),
+                         abc_bms.UNANSWERED: [0xC2, 0xC4]})
+    assert out["commands_unanswered"] == 2.0
+
+
+def test_a_fully_answered_reading_says_so_explicitly():
+    """Published even when it is zero, so that a dashboard can alert on the
+    field rising rather than on a field appearing."""
+    out = abc_bms.parse({0xF0: fx.status_frame()})
+    assert out["commands_unanswered"] == 0.0
+
+
+def test_mosfet_states_without_a_voltage_are_not_a_reading():
+    """A pack whose F0 frames all fail their checksum while F2 passes would
+    otherwise publish switch states and claim the pack was read."""
+    with pytest.raises(DriverError):
+        abc_bms.parse({0xF2: fx.frame(0xF2, b"\x01\x01\x02")})

@@ -309,15 +309,42 @@ def test_each_node_of_a_site_is_tagged_distinctly(site):
         seen[tag] = path.name
 
 
-def battery_heating_loads():
-    """Every battery heating load declared by any node file."""
+#: How many loads of each type the deployed node files are expected to
+#: declare. Spelled out so that losing one is a failure rather than a quietly
+#: smaller test run. Update it deliberately when a load is added or removed.
+#: Counts include the example site, which documents every option and so
+#: declares one of most things.
+EXPECTED_LOADS = {"battery_heating": 2, "vent_fan": 1,
+                  "dc_branch": 2, "sequenced_ac": 2}
+
+
+def loads_of_type(kind):
+    """Every load of one type across the deployed node files.
+
+    Asserts it found as many as expected. A collector that silently returns
+    nothing makes every test built on it pass by having nothing to check,
+    which is how a typo in a load type survived review.
+    """
     found = []
     for path in NODE_FILES:
         node = load(path)
         for name, spec in (node.control.get("loads") or {}).items():
-            if spec.get("type") == "battery_heating":
+            if spec.get("type") == kind:
                 found.append(("%s/%s" % (path.parent.name, name), spec))
+    assert len(found) == EXPECTED_LOADS[kind], (
+        "expected %d %s load(s) across the node files, found %d"
+        % (EXPECTED_LOADS[kind], kind, len(found)))
     return found
+
+
+def test_every_expected_load_is_present():
+    """The one test that fails when a load is renamed, removed or retyped."""
+    for kind in EXPECTED_LOADS:
+        assert loads_of_type(kind)
+
+
+def battery_heating_loads():
+    return loads_of_type("battery_heating")
 
 
 def test_battery_heating_fails_off():
@@ -336,7 +363,11 @@ def test_battery_heating_declares_what_to_do_without_a_temperature():
         choice = spec.get("on_stale_data")
         assert choice in ("fallback", "deny"), "%s: %r" % (label, choice)
         if choice == "fallback":
-            assert (spec.get("temperature") or {}).get("fallback_sources"), label
+            # Present, which may be an empty list. Empty is a real answer: it
+            # means degrade straight to heating on production alone, which is
+            # what the dumb heater this replaces already does. What must not
+            # happen is the key being absent, because then nobody decided.
+            assert "fallback_sources" in (spec.get("temperature") or {}), label
 
 
 def test_battery_heating_has_a_hard_upper_limit():
@@ -377,13 +408,7 @@ def test_battery_heating_waits_on_production_not_on_charge_current():
 
 
 def vent_fan_loads():
-    found = []
-    for path in NODE_FILES:
-        node = load(path)
-        for name, spec in (node.control.get("loads") or {}).items():
-            if spec.get("type") == "vent_fan":
-                found.append(("%s/%s" % (path.parent.name, name), spec))
-    return found
+    return loads_of_type("vent_fan")
 
 
 def test_a_vent_fan_fails_off():
@@ -419,3 +444,80 @@ def test_a_vent_fan_only_runs_when_outside_is_cooler():
     all summer gets it wrong on every humid night."""
     for label, spec in vent_fan_loads():
         assert spec["run_if_all"]["outside_cooler_by_f"] > 0, label
+
+
+# -- control references must resolve ----------------------------------------
+
+def control_references(node):
+    """Every {device, field} pair a control block names, with its location.
+
+    Control blocks are a specification for a controller that is not written
+    yet, so nothing executes them and a wrong name produces no error. The
+    consequence arrives later as a load that never runs, and the one state the
+    specification says to handle silently is a reading that is never fresh.
+    """
+    found = []
+    for load_name, load in (node.control.get("loads") or {}).items():
+        def walk(value, path):
+            if isinstance(value, dict):
+                if "device" in value and "field" in value:
+                    found.append(("%s.%s" % (load_name, path), value))
+                    return
+                for key, inner in value.items():
+                    walk(inner, "%s.%s" % (path, key) if path else key)
+            elif isinstance(value, list):
+                for index, inner in enumerate(value):
+                    walk(inner, "%s[%d]" % (path, index))
+        walk(load, "")
+    return found
+
+
+@pytest.mark.parametrize("path", NODE_FILES, ids=IDS)
+def test_control_names_a_device_the_node_actually_declares(path):
+    """A load reading a device that lives on another machine breaks the rule
+    that a decision never depends on the network, and it cannot work."""
+    node = load(path)
+    declared = {d.name for d in node.devices}
+    for where, ref in control_references(node):
+        assert ref["device"] in declared, (
+            "%s: %s names device %r, which this node does not declare. "
+            "It has: %s" % (path.name, where, ref["device"],
+                            ", ".join(sorted(declared)) or "none"))
+
+
+@pytest.mark.parametrize("path", NODE_FILES, ids=IDS)
+def test_control_names_a_field_its_driver_really_emits(path):
+    """The failure this exists for: a threshold on a field no driver produces.
+    The reading is never fresh, the load never runs, and nothing reports it,
+    because an absent reading is a state the specification handles quietly."""
+    node = load(path)
+    fields = known_driver_fields()
+    for where, ref in control_references(node):
+        device = node.find(ref["device"])
+        if device is None:
+            continue                      # the test above reports this
+        emitted = fields.get(device.driver)
+        if emitted is None:
+            continue                      # no fixture for this driver yet
+        assert ref["field"] in emitted, (
+            "%s: %s wants %r from the %s driver, which emits: %s"
+            % (path.name, where, ref["field"], device.driver,
+               ", ".join(sorted(emitted))))
+
+
+def test_the_reference_walker_finds_nested_and_listed_references():
+    """The walker is the test's own machinery. If it silently found nothing,
+    both tests above would pass by checking nothing, which is the failure
+    mode they exist to prevent."""
+    spec = {"type": "vent_fan",
+            "inside": {"device": "box", "field": "temp"},
+            "temperature": {"sources": [{"device": "p1", "field": "a"},
+                                        {"device": "p2", "field": "b"}]}}
+
+    class FakeNode:
+        control = {"loads": {"l": spec}}
+
+    found = dict(control_references(FakeNode()))
+    assert len(found) == 3
+    assert found["l.inside"]["device"] == "box"
+    assert any(k.endswith("[1]") for k in found)

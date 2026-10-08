@@ -20,3 +20,4 @@ venv/
 # tests/fixtures/ are tracked; raw captures are not.
 *.cap
 *.raw
+.coverage

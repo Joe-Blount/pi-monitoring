@@ -81,6 +81,16 @@ apt-cache policy python3-bleak      # confirm it is available on this release
 sudo apt install python3-bleak
 ```
 
+It is not packaged before Debian 12. On an older release, where the candidate
+above comes back as none, use pip instead:
+
+```
+sudo pip3 install bleak
+```
+
+Debian 11 and earlier have no externally-managed restriction, so this needs no
+flags. The install script tries apt first and falls back to pip by itself.
+
 The install script does this for you when the node file declares a Bluetooth
 device, and skips it otherwise so a sensors-only machine stays small.
 
@@ -180,7 +190,7 @@ reason. Common ones:
 | `no DHT sensor found` | The `dht11` overlay is missing. It prints the exact line to add. |
 | `cannot open /dev/serial/by-id/…` | The adapter is unplugged, or the path contains a different cable's serial number. |
 | `needs pyserial` | `sudo apt install python3-serial` |
-| `needs bleak` | `sudo apt install python3-bleak` |
+| `needs bleak` | `sudo apt install python3-bleak`, or `sudo pip3 install bleak` on a release that does not package it |
 | `did not identify itself` | A Bluetooth pack out of range, asleep, or already connected to a phone. Most packs accept one connection at a time. Close the vendor application and try again. |
 
 **Does it produce data?**

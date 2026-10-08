@@ -149,6 +149,20 @@ def test_the_poll_command_has_room_for_a_retrying_sensor():
 INSTALL = (REPO / "deploy" / "install.sh").read_text()
 
 
+def test_the_install_script_has_a_fallback_for_bleak():
+    """bleak is not packaged before Debian 12 and one of these machines runs
+    11, so apt alone would fail on site with no way to recover there. Both
+    sites have an uplink, so pip is a real fallback."""
+    assert "pip3 install" in INSTALL
+
+
+def test_the_install_script_tells_not_needed_apart_from_could_not_decide():
+    """One exit code for both meant a broken config skipped bleak silently,
+    and the first sign was a device failing with 'needs bleak'."""
+    assert "NEED_BLUETOOTH=unknown" in INSTALL
+    assert "could not read the node file" in INSTALL
+
+
 def test_the_install_script_decides_on_bluetooth_from_the_drivers():
     """Matching the node file's text for a name prefix was wrong twice: it
     skipped a Bluetooth driver named after its protocol, and it matched a

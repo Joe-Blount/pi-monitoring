@@ -18,6 +18,14 @@ from . import duration
 
 MODES = ("poll", "resident", "controller")
 
+#: Every kind of load a control block may declare.
+#:
+#: Validated because tests that look for loads of a given type filter on this
+#: string. A typo there does not fail: it yields no loads, and every test about
+#: that load passes by finding nothing to check. The load itself would also
+#: never be driven.
+LOAD_TYPES = ("dc_branch", "sequenced_ac", "battery_heating", "vent_fan")
+
 REQUIRED_TOP_LEVEL = ("site", "node", "measurement")
 
 
@@ -249,6 +257,14 @@ def load(path, known_drivers=None):
         ))
 
     _check_pins(path, node.devices, node.control)
+
+    for load_name, load in (node.control.get("loads") or {}).items():
+        if not isinstance(load, dict):
+            _fail(path, "load %r is not a mapping" % load_name)
+        kind = load.get("type")
+        if kind not in LOAD_TYPES:
+            _fail(path, "load %r has type %r; it must be one of %s"
+                        % (load_name, kind, ", ".join(LOAD_TYPES)))
 
     if node.control.get("enabled") and not node.control.get("loads"):
         _fail(path, "control is enabled but no loads are defined")

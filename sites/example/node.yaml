@@ -206,6 +206,27 @@ devices:
 # when the power is failing.
 # ---------------------------------------------------------------------------
 
+  # An ABC-BMS pack, read over Bluetooth. Disabled here because the example
+  # is never deployed, but declared because the battery heating block below
+  # names it, and a control reference that resolves to nothing produces a load
+  # that never runs with nothing reporting why.
+  - name: pack1
+    driver: abc_bms
+    mode: poll
+    enabled: false
+    tags: {location: rack}
+    params:
+      address: "XX:XX:XX:XX:XX:XX"
+      timeout: 40             # a cold Bluetooth connect genuinely takes this
+      settle: 2.0             # quiet gap that marks the end of a reply
+
+  - name: pack2
+    driver: abc_bms
+    mode: poll
+    enabled: false
+    tags: {location: rack}
+    params: {address: "YY:YY:YY:YY:YY:YY"}
+
 control:
   enabled: false              # default off. A node switches loads only when
                               # this is deliberately turned on.
@@ -478,16 +499,16 @@ control:
         # the thermal loop below is slower than that. This would be the wrong
         # choice for anything that has to react in seconds.
         sources:
-          - {device: pack1, field: temperature_1_f}
-          - {device: pack1, field: temperature_2_f}
-          - {device: pack2, field: temperature_1_f}
-          - {device: pack2, field: temperature_2_f}
+          - {device: pack1, field: temp_1}
+          - {device: pack1, field: temp_2}
+          - {device: pack2, field: temp_1}
+          - {device: pack2, field: temp_2}
 
         # Used only when every source above is stale. Ambient is not pack
         # temperature, but a cold room means cold packs, and it is a far better
         # guess than heating regardless of the weather.
         fallback_sources:
-          - {device: box, field: temperature_f}
+          - {device: box, field: temp}
 
         max_disagreement_f: 15      # warn, do not act, when they diverge
         stale_after: 10m
@@ -513,9 +534,19 @@ control:
       # producing, which is measured before the battery has any say.
       require_production:
         enabled: true
-        source: {device: inverter, field: pv_watts}
-        above_watts: 300            # above the heater's own draw, so it is
-                                    # paid for by sun rather than by the bank
+        # Panel VOLTAGE, not watts. Watts is the trap: when the pack is too
+        # cold the BMS refuses charge, the controller curtails, and production
+        # falls to whatever the loads draw. A watts gate would therefore read
+        # low on exactly the cold clear morning this exists for, and the
+        # heater would never start. This file already says so about the
+        # irrigation gate; the same physics applies here.
+        #
+        # Panel voltage is set by sunlight and the panel, and the battery
+        # cannot suppress it. An array well above battery voltage means the
+        # sun is there whether or not anything is being charged.
+        source: {device: mppt, field: pv_volts}
+        above_volts: 80             # well above a dark array, well below the
+                                    # open-circuit rating. Measure and adjust.
         stale_after: 10m
 
       limits:

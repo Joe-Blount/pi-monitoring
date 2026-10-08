@@ -167,7 +167,7 @@ devices:
 control:
   enabled: true
   loads:
-    cameras: {control_pin: 23}
+    cameras: {type: dc_branch, control_pin: 23}
 """), KNOWN)
     assert "GPIO23" in str(exc.value)
 

@@ -124,8 +124,8 @@ control:
       # battery, so this one can simply decline.
       on_stale_data: deny
 
-      inside: {device: box, field: temperature_f}
-      outside: {device: outdoor_temp, field: temperature_f}
+      inside: {device: box, field: temp}
+      outside: {device: outdoor_temp, field: temp}
       stale_after: 10m
 
       # Two conditions, and the second is what makes this better than a timer.
@@ -150,13 +150,18 @@ control:
       min_run: 5m
       min_off: 5m
 
-      # There is no reason to move air when the bank is struggling, even for
-      # half an amp. Voltage rather than state of charge, because the battery
-      # monitor is downstairs and this node measures volts at the controller
-      # over a wire.
-      require_battery:
-        volts_above: 12.3
-        stale_after: 10m
+      # Deliberately no battery gate on this node, which is a change of mind
+      # worth recording.
+      #
+      # Half an amp is not worth shedding, and this node cannot measure the
+      # bank anyway. The only voltage here comes from the charge controller,
+      # which is a resident device whose serial port a controller cannot
+      # share, and which moves to the downstairs node as soon as that exists.
+      # A gate naming it would stop working on the day of that move, and the
+      # symptom would be a fan that never runs with nothing reporting why.
+      #
+      # If the fan ever wants one, it belongs on the node that measures the
+      # battery.
 
       readback:
         source: none

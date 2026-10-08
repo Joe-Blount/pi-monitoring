@@ -42,29 +42,65 @@ else
         || echo "    WARNING: could not install python3-yaml. Nothing will run"
 fi
 
-# Bluetooth drivers need bleak, which is packaged on both releases in use, so
-# it installs like everything else rather than needing a virtual environment.
-# Only when this node actually declares an enabled Bluetooth device: a
-# sensors-only machine should not carry a Bluetooth stack it never uses.
+# Bluetooth drivers need bleak. Only when this node declares an enabled
+# Bluetooth device: a sensors-only machine should not carry a stack it never
+# uses.
 #
 # The node file is loaded rather than searched, and each driver says for itself
 # whether it needs a radio. Matching the text instead was wrong twice over: it
-# skipped bleak for a Bluetooth driver not named after its transport, and it
-# matched devices that were commented out.
-if (cd "$REPO" && python3 -c '
+# skipped a Bluetooth driver not named after its transport, and it matched
+# devices that were commented out.
+bluetooth_needed() {
+    ( cd "$REPO" && python3 - "$NODE_FILE" <<'PYEOF'
 import sys
-from monitoring import config, drivers
-node = config.load(sys.argv[1], drivers.names())
+try:
+    from monitoring import config, drivers
+    node = config.load(sys.argv[1], drivers.names())
+except Exception as exc:
+    sys.stderr.write("%s\n" % exc)
+    sys.exit(2)
 sys.exit(0 if any(
     getattr(drivers.get(d.driver), "needs_bluetooth", False)
-    for d in node.devices if d.enabled) else 1)' "$NODE_FILE" 2>/dev/null); then
-    if python3 -c "import bleak" 2>/dev/null; then
-        echo "    python3-bleak already present"
-    else
-        apt-get install -y --no-install-recommends python3-bleak >/dev/null \
-            || echo "    WARNING: could not install python3-bleak; Bluetooth devices will fail"
-    fi
+    for d in node.devices if d.enabled) else 1)
+PYEOF
+    )
+}
+
+# Three outcomes, not two. Exit 1 used to mean both "not needed" and "the
+# check crashed", so a broken config skipped bleak silently and only showed up
+# as "needs bleak" at the first read.
+if bluetooth_needed; then
+    NEED_BLUETOOTH=yes
+elif [ $? -eq 1 ]; then
+    NEED_BLUETOOTH=no
+else
+    NEED_BLUETOOTH=unknown
 fi
+
+case "$NEED_BLUETOOTH" in
+yes)
+    if python3 -c "import bleak" 2>/dev/null; then
+        echo "    bleak already present"
+    elif apt-get install -y --no-install-recommends python3-bleak >/dev/null 2>&1; then
+        echo "    python3-bleak installed from apt"
+    elif pip3 install --quiet bleak >/dev/null 2>&1; then
+        # Not packaged before Debian 12, and one of these machines runs 11.
+        # Both sites have an uplink, so pip is a real fallback, and Debian 11
+        # has no externally-managed restriction to argue with.
+        echo "    bleak installed with pip, which this release needs"
+    else
+        echo "    WARNING: could not install bleak, so Bluetooth devices will"
+        echo "             fail with 'needs bleak'. Try: pip3 install bleak"
+    fi
+    ;;
+no)
+    ;;
+unknown)
+    echo "    WARNING: could not read the node file to decide about Bluetooth."
+    echo "             Skipping bleak. The reason is above. If a pack later"
+    echo "             fails with 'needs bleak', run: pip3 install bleak"
+    ;;
+esac
 
 echo "==> directories"
 install -d -m 0755 /etc/monitoring
