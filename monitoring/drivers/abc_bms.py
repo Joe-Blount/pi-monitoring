@@ -328,10 +328,24 @@ class AbcBmsDriver(Driver):
         return "pack %s answering%s" % (self.address, (", %s" % name) if name else "")
 
     def raw(self):
-        """Every frame the pack returns, for confirming a field offset."""
+        """Every frame the pack returns, for confirming a field offset.
+
+        The gathered messages are keyed by frame identifier, except for the
+        record of commands that brought no reply, which is keyed by name. Only
+        the frames can be sorted and formatted as numbers, and a pack that
+        answers some commands and not others is the case this mode exists for,
+        so the two are separated rather than assumed to be alike.
+        """
         messages = self._exchange(READ_COMMANDS + (IDENTITY_COMMAND,))
-        return {("%#04x" % key): bytes(value).hex(" ")
-                for key, value in sorted(messages.items())}
+
+        out = {("%#04x" % key): bytes(value).hex(" ")
+               for key, value in sorted(
+                   (k, v) for k, v in messages.items() if isinstance(k, int))}
+
+        unanswered = messages.get(UNANSWERED)
+        if unanswered:
+            out["unanswered_commands"] = ", ".join("%#04x" % c for c in unanswered)
+        return out
 
 
 class _BleakTransport:

@@ -17,8 +17,11 @@ to without capturing anything.
     ./bin/ble-discover --address AA:BB:CC:DD:EE:FF --listen 60
     ./bin/ble-discover --address AA:BB:CC:DD:EE:FF --try abc_bms
 
-Nothing here writes to a battery unless you pass --try or --write, and neither
-of those sends anything but a read request from a published command set.
+Nothing here writes to a battery unless you ask it to. With --try it sends
+only read requests from a published command set, and a test enforces that.
+With --write and --hex together it sends exactly the bytes you type, which is
+the one path that can send anything at all, so check them before pressing
+return.
 
 This is a diagnostic. It is not imported by any driver and it collects no
 metrics.
@@ -199,7 +202,7 @@ def _fail(message):
     return 2
 
 
-def run(address, listen_seconds, family, write_to, write_hex):
+def run(address, listen_seconds, family, write_to, write_frame):
     """Talk to a pack. Everything above this line needs no Bluetooth stack."""
     import asyncio
 
@@ -257,11 +260,10 @@ def run(address, listen_seconds, family, write_to, write_hex):
             print("\nlistening %ds. Unprompted frames appear below." % listen_seconds)
             print("%8s  %-8s  %s" % ("seconds", "char", "bytes"))
 
-            if write_hex:
-                await client.write_gatt_char(
-                    write_to, bytes.fromhex(write_hex.replace(" ", "")),
-                    response=False)
-                print("  wrote %s to %s" % (write_hex, short_uuid(write_to)))
+            if write_frame is not None:
+                await client.write_gatt_char(write_to, write_frame, response=False)
+                print("  wrote %s to %s"
+                      % (write_frame.hex(" "), short_uuid(write_to)))
 
             if family:
                 spec = FAMILIES[family]
@@ -347,7 +349,19 @@ def main():
     if args.write_hex and not args.write_to:
         parser.error("--hex needs --write to say where to send it")
 
-    return run(args.address, args.listen, args.family, args.write_to, args.write_hex)
+    # Parsed here, not after connecting. A bad value was previously reported
+    # as a radio failure, with the wrong diagnosis, after waiting out a cold
+    # connect of up to forty seconds.
+    write_frame = None
+    if args.write_hex:
+        try:
+            write_frame = bytes.fromhex(args.write_hex.replace(" ", ""))
+        except ValueError as exc:
+            parser.error("--hex %r is not hex bytes: %s" % (args.write_hex, exc))
+        if not write_frame:
+            parser.error("--hex is empty")
+
+    return run(args.address, args.listen, args.family, args.write_to, write_frame)
 
 
 if __name__ == "__main__":

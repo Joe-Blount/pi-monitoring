@@ -256,15 +256,23 @@ def load(path, known_drivers=None):
             interval=interval,
         ))
 
-    _check_pins(path, node.devices, node.control)
+    # Shape first, before anything reads into a load. Pin checking calls
+    # .get() on every load, so a load that is null, a string or a list used to
+    # raise an AttributeError with no file name and no load name in it. A hand
+    # edit at the site deserves a sentence, not a traceback.
+    loads = node.control.get("loads")
+    if loads is not None and not isinstance(loads, dict):
+        _fail(path, "'control.loads' must be a mapping of name to load")
 
-    for load_name, load in (node.control.get("loads") or {}).items():
+    for load_name, load in (loads or {}).items():
         if not isinstance(load, dict):
             _fail(path, "load %r is not a mapping" % load_name)
         kind = load.get("type")
         if kind not in LOAD_TYPES:
             _fail(path, "load %r has type %r; it must be one of %s"
                         % (load_name, kind, ", ".join(LOAD_TYPES)))
+
+    _check_pins(path, node.devices, node.control)
 
     if node.control.get("enabled") and not node.control.get("loads"):
         _fail(path, "control is enabled but no loads are defined")

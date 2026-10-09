@@ -418,3 +418,24 @@ def test_mosfet_states_without_a_voltage_are_not_a_reading():
     otherwise publish switch states and claim the pack was read."""
     with pytest.raises(DriverError):
         abc_bms.parse({0xF2: fx.frame(0xF2, b"\x01\x01\x02")})
+
+
+def test_raw_still_shows_the_frames_when_a_command_went_unanswered():
+    """A pack that answers some commands and not others is the case raw mode
+    exists for. The unanswered record shares the dict with the frames but is
+    keyed by name, so sorting and formatting every key as a number threw the
+    frames away behind a traceback."""
+    device, transport = driver(full_pack())
+    transport.exchange = lambda wanted: {
+        0xF0: fx.status_frame(),
+        abc_bms.UNANSWERED: [0xC2, 0xC4],
+    }
+    out = device.raw()
+    assert out["0xf0"].startswith("cc f0 ")
+    assert out["unanswered_commands"] == "0xc2, 0xc4"
+
+
+def test_raw_omits_the_unanswered_line_when_everything_answered():
+    device, transport = driver(full_pack())
+    transport.exchange = lambda wanted: {0xF0: fx.status_frame()}
+    assert "unanswered_commands" not in device.raw()

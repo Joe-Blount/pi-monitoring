@@ -281,6 +281,7 @@ control:
   enabled: true
   loads:
     cameras:
+      type: dc_branch
       control_pin: 23
       readback: {source: pin, pin: 23}
 """), KNOWN)
@@ -297,6 +298,7 @@ control:
   enabled: true
   loads:
     irrigation:
+      type: sequenced_ac
       pump: {control_pin: 22}
       guard: {input: pin, pin: 22}
 """), KNOWN)
@@ -315,3 +317,37 @@ devices:
   - {name: a, driver: dht, mode: poll, params: {pin: "4"}}
 """), KNOWN)
     assert "not a whole number" in str(exc.value)
+
+
+@pytest.mark.parametrize("body,expected", [
+    ("    cams:\n", "load 'cams' is not a mapping"),
+    ("    cams: dc_branch\n", "load 'cams' is not a mapping"),
+    ("    cams: [1]\n", "load 'cams' is not a mapping"),
+])
+def test_a_load_that_is_not_a_mapping_is_named_in_the_error(tmp_path, body, expected):
+    """Pin checking reads into every load, so a hand edit that leaves one
+    null, or a bare string, used to raise an AttributeError with no file name
+    and no load name in it. A mistake made at the site deserves a sentence."""
+    with pytest.raises(config.ConfigError) as exc:
+        config.load(write(tmp_path, """
+site: s
+node: n
+measurement: m
+control:
+  loads:
+""" + body), KNOWN)
+    assert expected in str(exc.value)
+
+
+def test_loads_itself_must_be_a_mapping(tmp_path):
+    """A list of loads reads as valid YAML and then fails on .items()."""
+    with pytest.raises(config.ConfigError) as exc:
+        config.load(write(tmp_path, """
+site: s
+node: n
+measurement: m
+control:
+  loads:
+    - {type: dc_branch, control_pin: 23}
+"""), KNOWN)
+    assert "must be a mapping" in str(exc.value)

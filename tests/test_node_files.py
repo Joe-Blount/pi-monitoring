@@ -226,8 +226,9 @@ def known_driver_fields():
     from monitoring.drivers.dht import DhtDriver
     from monitoring.drivers.host import HostDriver
     from monitoring.drivers.rain_gauge import RainCounter
-    from monitoring.drivers import pi30, vedirect
+    from monitoring.drivers import abc_bms, pi30, vedirect
     from tests import vedirect_fixtures as fx
+    from tests import abc_bms_fixtures as bms
 
     fixtures = pathlib.Path(__file__).resolve().parent / "fixtures"
     sunny = ("230.1 50.0 230.1 50.0 0800 0750 015 420 53.20 010 085 0045 "
@@ -241,7 +242,17 @@ def known_driver_fields():
         "vedirect": vedirect.normalize(dict(fx.SUNNY)),
         "pi30": pi30.parse_qpigs(sunny),
         "rain_gauge": RainCounter(None, 0.011).fields(),
+        "abc_bms": _abc_bms_fields(abc_bms, bms),
     }
+
+
+def _abc_bms_fields(abc_bms, bms):
+    """What a pack reading really contains, from generated frames."""
+    messages = {}
+    abc_bms.collect(messages, bms.status_frame())
+    for frame in bms.cell_frames(bms.SIXTEEN_CELLS):
+        abc_bms.collect(messages, frame)
+    return abc_bms.parse(messages)
 
 
 @pytest.mark.parametrize("driver_name", sorted(known_driver_fields()))
@@ -485,6 +496,21 @@ def test_control_names_a_device_the_node_actually_declares(path):
                             ", ".join(sorted(declared)) or "none"))
 
 
+#: Drivers with no implementation yet, so there is nothing to check a field
+#: name against. Listed rather than inferred, because "no fixture" used to
+#: mean "skip", and skipping is how a reference goes unchecked forever.
+DRIVERS_WITHOUT_FIELDS = {"ble_bms", "ble_shunt"}
+
+#: References to fields a driver is expected to emit but does not yet. Each
+#: one is a deliberate forward reference, and listing it here is what keeps
+#: the test honest: everything not on this list must resolve today.
+#:
+#: These two wait on finding the temperature offsets in the ABC-BMS reply,
+#: which needs a --raw capture next to a pack. The load that uses them is
+#: disabled until then.
+PENDING_REFERENCES = {("abc_bms", "temp_1"), ("abc_bms", "temp_2")}
+
+
 @pytest.mark.parametrize("path", NODE_FILES, ids=IDS)
 def test_control_names_a_field_its_driver_really_emits(path):
     """The failure this exists for: a threshold on a field no driver produces.
@@ -496,13 +522,35 @@ def test_control_names_a_field_its_driver_really_emits(path):
         device = node.find(ref["device"])
         if device is None:
             continue                      # the test above reports this
+        if device.driver in DRIVERS_WITHOUT_FIELDS:
+            continue
+        if (device.driver, ref["field"]) in PENDING_REFERENCES:
+            continue
+
         emitted = fields.get(device.driver)
-        if emitted is None:
-            continue                      # no fixture for this driver yet
+        assert emitted is not None, (
+            "%s: %s names the %s driver, which has no fixture here, so its "
+            "field names are unchecked. Add one to known_driver_fields, or "
+            "list the driver in DRIVERS_WITHOUT_FIELDS if it is a stub."
+            % (path.name, where, device.driver))
         assert ref["field"] in emitted, (
             "%s: %s wants %r from the %s driver, which emits: %s"
             % (path.name, where, ref["field"], device.driver,
                ", ".join(sorted(emitted))))
+
+
+def test_every_pending_reference_is_still_pending():
+    """Stops the exemption list from rotting. Once a driver does emit one of
+    these, the entry has to go, or it would hide the next mistake in the same
+    field name."""
+    fields = known_driver_fields()
+    for driver_name, field in sorted(PENDING_REFERENCES):
+        emitted = fields.get(driver_name)
+        if emitted is None:
+            continue
+        assert field not in emitted, (
+            "the %s driver now emits %r, so remove it from "
+            "PENDING_REFERENCES" % (driver_name, field))
 
 
 def test_the_reference_walker_finds_nested_and_listed_references():
