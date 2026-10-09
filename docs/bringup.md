@@ -115,6 +115,26 @@ sudo git clone <repository> /opt/monitoring
 sudo /opt/monitoring/deploy/install.sh <site> <node>
 ```
 
+If the repository is private, a plain clone on the machine fails with an
+authentication prompt and no checkout. Two ways round it:
+
+```
+# a read-only token, which also serves every later git pull
+sudo git clone https://<token>@github.com/<owner>/<repo> /opt/monitoring
+
+# or copy from a machine that already has it, needing no credentials and
+# no uplink
+rsync -a ~/path/to/repo/ <user>@<machine>:/tmp/monitoring/
+```
+
+A token scoped to one repository with read access to contents is enough. It is
+stored in plain text in the clone's config, which is why it should be read-only
+and scoped to one repository.
+
+The script does not care where the files are. If it runs from anywhere other
+than `/opt/monitoring`, it symlinks its own location there, so a copy in a home
+directory works as well as a clone.
+
 Run with no arguments to list the site and node names available.
 
 The script is idempotent, so updating later is `git pull` and run it again.
