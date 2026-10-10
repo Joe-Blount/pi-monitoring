@@ -69,8 +69,12 @@ devices:
       # extension to span 8 to 9 feet, which is a known source of
       # intermittent enumeration failures.
 
+  # Disabled while the upstairs node polls this pack instead. These allow one
+  # connection at a time, so two readers would take turns failing. Enable this
+  # and remove the upstairs entry on the same visit, never separately.
   - name: bms
     driver: jbd
+    enabled: false
     mode: controller
     tags: {location: battery}
     params:

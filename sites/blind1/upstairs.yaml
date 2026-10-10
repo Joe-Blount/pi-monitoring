@@ -81,6 +81,31 @@ devices:
     interval: 30s
     tags: {location: pi}
 
+  # The Chins pack, read from up here.
+  #
+  # It belongs downstairs with the rest of the power equipment, and the
+  # downstairs node file declares it for when that machine exists. Until then
+  # it would report nothing at all, so it is polled from here: this Pi reached
+  # it cleanly through a floor, and data in the database today beats data in a
+  # plan.
+  #
+  # Poll rather than controller mode, deliberately. Controller mode means the
+  # controller owns the device, and there is no controller yet, so the reading
+  # would simply never happen.
+  #
+  # The driver declares itself slow, so the collector with the five minute
+  # interval and the two minute timeout reads it rather than the fast one.
+  # These packs allow one connection at a time, so every read locks the owner
+  # out of the application for its duration.
+  - name: bms
+    driver: jbd
+    mode: poll
+    tags: {location: battery}
+    params:
+      address: "A5:C2:37:4C:80:F7"    # chins320
+      timeout: 40s
+      settle: 2s
+
 # The PCF8591 analog-to-digital converter on GPIO2 and GPIO3 is deliberately
 # absent. It exists only to measure battery voltage, which the charge
 # controller reports more accurately on the downstairs node, and the two
