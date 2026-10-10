@@ -485,3 +485,48 @@ def test_poll_flushes_after_each_device(tmp_path, doubles):
     assert written >= 2
     assert out.flushes >= written, (
         "flushed %d times for %d devices" % (out.flushes, written))
+
+
+# --- a resident device is owned by its collector --------------------------
+
+def test_a_resident_device_held_by_its_collector_is_not_a_failure(tmp_path, doubles, monkeypatch):
+    """Probing a resident device claims the serial port or GPIO line its
+    collector already holds. That does not report a fault, it creates one:
+    the collector loses the resource, exits and restarts. It happened, and
+    read as two failures on a node where nothing was wrong."""
+    node = node_with(tmp_path, "  - {name: mppt, driver: good, mode: resident}\n")
+    device = node.find("mppt")
+    monkeypatch.setattr(runner, "collector_holding", lambda d: 4242)
+
+    out = io.StringIO()
+    failures = runner.check(node, out)
+    assert failures == 0
+    assert "ok" in out.getvalue() and "4242" in out.getvalue()
+
+
+def test_a_resident_device_with_no_collector_is_still_probed(tmp_path, doubles, monkeypatch):
+    """The whole point of leaving it probing: a resident device that nothing
+    is running IS a fault, and is the one this must still catch."""
+    node = node_with(tmp_path, "  - {name: mppt, driver: bad, mode: resident}\n")
+    monkeypatch.setattr(runner, "collector_holding", lambda d: None)
+
+    out = io.StringIO()
+    assert runner.check(node, out) == 1
+    assert "FAIL" in out.getvalue()
+
+
+def test_only_resident_devices_are_treated_as_owned(tmp_path, doubles):
+    """A poll device is read by a process that exits, so nothing holds it and
+    probing is always safe. Skipping the probe for one would hide a fault."""
+    node = node_with(tmp_path, "  - {name: a, driver: good, mode: poll}\n")
+    assert runner.collector_holding(node.find("a")) is None
+
+
+def test_the_collector_search_ignores_an_unrelated_process(tmp_path, doubles):
+    """Matching too loosely would silence a genuinely dead device because
+    some other command line happened to contain its name."""
+    node = node_with(tmp_path, "  - {name: mppt, driver: good, mode: resident}\n")
+    # Nothing on this machine is running a collector for a device called mppt
+    # under test, so the search must come back empty rather than matching the
+    # test runner's own command line.
+    assert runner.collector_holding(node.find("mppt")) is None

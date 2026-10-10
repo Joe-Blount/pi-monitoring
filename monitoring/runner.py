@@ -266,6 +266,40 @@ def orphaned(node):
     return [d for d in node.by_mode("controller") if d.enabled]
 
 
+def collector_holding(device):
+    """The process id of the resident collector reading this device, or None.
+
+    A resident device is owned by a long-running collector that holds its
+    serial port or its GPIO line. Probing it from here does not report a
+    fault, it creates one: the running collector loses the resource it was
+    holding, exits, and restarts. That happened, and it read as two failures
+    on a node where nothing was wrong.
+
+    A resident device with no collector IS a fault, and still probes.
+    """
+    if device.mode != "resident":
+        return None
+
+    import glob
+    import os
+
+    for entry in glob.glob("/proc/[0-9]*/cmdline"):
+        try:
+            with open(entry, "rb") as handle:
+                parts = handle.read().split(b"\0")
+        except OSError:
+            continue
+        words = [p.decode("utf-8", "replace") for p in parts if p]
+        if not any(w.endswith("collect") for w in words):
+            continue
+        if device.name in words and "--stream" in words:
+            try:
+                return int(os.path.basename(os.path.dirname(entry)))
+            except ValueError:
+                return None
+    return None
+
+
 def check(node, out=None):
     """Probe every declared device without taking a reading.
 
@@ -294,6 +328,15 @@ def check(node, out=None):
         except DriverError as exc:
             failures += 1
             out.write("  FAIL  %-16s %s\n" % (device.name, exc))
+            continue
+        held_by = collector_holding(device)
+        if held_by is not None:
+            # Probing would mean claiming a serial port or a GPIO line that
+            # the running collector already holds. That does not report a
+            # fault, it CAUSES one: the collector loses its resource, exits,
+            # and restarts. So the collector's existence is the check.
+            out.write("  ok    %-16s held by its collector, pid %d, which is "
+                      "what should be happening\n" % (device.name, held_by))
             continue
         try:
             detail = driver.check()
