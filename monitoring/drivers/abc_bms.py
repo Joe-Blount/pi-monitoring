@@ -51,6 +51,7 @@ Use ``--raw`` against a real pack to see the frames before trusting a field.
 import struct
 import sys
 
+from ..duration import seconds as _seconds
 from .base import Driver, DriverError, required
 
 SERVICE_UUID = "0000ffe0-0000-1000-8000-00805f9b34fb"
@@ -351,8 +352,13 @@ class AbcBmsDriver(Driver):
     def __init__(self, name, params, tags):
         Driver.__init__(self, name, params, tags)
         self.address = required(self.params, "address", name)
-        self.timeout = float(self.params.get("timeout", 40))
-        self.settle = float(self.params.get("settle", 2.0))
+        # Durations, not bare numbers. Node files write 40s everywhere else
+        # and a driver that demands a float turns a consistent file into a
+        # device that cannot be built.
+        self.timeout = _seconds(self.params.get("timeout", 40),
+                                "device %r timeout" % name)
+        self.settle = _seconds(self.params.get("settle", 2.0),
+                               "device %r settle" % name)
         # Injected by the tests. Production builds one from bleak on demand,
         # so importing this module needs no Bluetooth stack.
         self.transport = self.params.get("transport")

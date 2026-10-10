@@ -70,15 +70,13 @@ devices:
       # intermittent enumeration failures.
 
   - name: bms
-    driver: ble_bms
+    driver: jbd
     mode: controller
     tags: {location: battery}
     params:
-      address: "00:00:00:00:00:00"    # fill in from a scan
-      protocol: grenergy              # BAT-BMS app, Shenzhen Grenergy
-      poll_every: 60s
-      hold_connection: false
-      timeout: 40s
+      address: "A5:C2:37:4C:80:F7"    # chins320, read off the pack itself
+      timeout: 40s                    # a cold Bluetooth connect takes this
+      settle: 2s                      # quiet gap that marks the end of a reply
 
   - name: shunt
     driver: ble_shunt

@@ -19,10 +19,10 @@ REGISTRY = {
     "vedirect": ("monitoring.drivers.vedirect", "VedirectDriver"),
     "pi30": ("monitoring.drivers.pi30", "Pi30Driver"),
     "abc_bms": ("monitoring.drivers.abc_bms", "AbcBmsDriver"),
+    "jbd": ("monitoring.drivers.jbd", "JbdDriver"),
     # Registered without an implementation, so that a node file naming a
     # planned device still validates. An unknown driver stays a typo rather
     # than becoming a legitimate forward reference.
-    "ble_bms": ("monitoring.drivers.stubs", "BleBmsDriver"),
     "ble_shunt": ("monitoring.drivers.stubs", "BleShuntDriver"),
 }
 
@@ -35,6 +35,9 @@ ALIASES = {
     # belongs to the BMS maker: one brand ships two unrelated protocols across
     # its range, and this protocol appears under several brands.
     "sok": "abc_bms",
+    # Named after the transport before the protocol was known. It turned out
+    # to be JBD, which is documented and shared with many brands.
+    "ble_bms": "jbd",
 }
 
 
