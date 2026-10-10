@@ -41,18 +41,49 @@ def status_frame(volts=53.2, amps=-12.5, design_ah=100.0, remaining_ah=78.0,
 def cell_frames(millivolts, per_frame=4):
     """Cell voltages split across frames the way a pack sends them.
 
-    Each entry is a two-byte cell index and a two-byte voltage. That layout is
-    an assumption, not a confirmed fact, which is why the parser checks the
-    result rather than trusting the stride, and why these tests prove the
-    parser refuses a layout it cannot make sense of.
+    One entry is a one-byte index, a two-byte little-endian millivolt reading,
+    and one byte of padding, which is what a real pack sends. Four entries
+    fill a frame.
     """
     out = []
     for start in range(0, len(millivolts), per_frame):
         payload = bytearray()
         for offset, value in enumerate(millivolts[start:start + per_frame]):
-            payload += struct.pack("<HH", start + offset + 1, value)
+            payload.append(start + offset + 1)
+            payload += struct.pack("<H", value)
+            payload.append(0)
         out.append(frame(abc_bms.CELL_MESSAGE, payload))
     return out
+
+
+#: Frames captured from a SOK-48V0045 under load, with the vendor application
+#: showing 100 Ah rated, 106.05 Ah actual, 212 cycles, two sensors at 25 C and
+#: 24 C, the heater off, and sixteen cells near 3300 mV.
+#:
+#: Generated fixtures prove the parser is self-consistent. Only a capture
+#: proves it agrees with a battery.
+REAL = [
+    "cc f1 53 4f 4b 2d 42 4d 53 0d 00 00 00 00 00 00 00 00 00 40",
+    "cc f0 2c ce 00 d8 ad ff a0 86 01 40 9e 01 d4 00 63 00 00 74",
+    "cc f2 01 01 02 19 00 18 00 00 00 00 00 01 00 00 00 00 00 e7",
+    "cc f3 17 03 01 00 c8 00 00 01 00 00 00 00 00 00 00 00 00 b5",
+    "cc f4 01 e8 0c 00 02 dc 0c 00 03 e6 0c 00 04 df 0c 00 00 40",
+    "cc f4 05 e0 0c 00 06 e6 0c 00 07 e0 0c 00 08 e6 0c 00 00 45",
+    "cc f4 09 e2 0c 00 0a e0 0c 00 0b e0 0c 00 0c e1 0c 00 00 7d",
+    "cc f4 0d e6 0c 00 0e e2 0c 00 0f e6 0c 00 10 dc 0c 00 00 04",
+]
+
+#: What the vendor application displayed while those frames were captured.
+REAL_CELL_MILLIVOLTS = [3304, 3292, 3302, 3295, 3296, 3302, 3296, 3302,
+                        3298, 3296, 3296, 3297, 3302, 3298, 3302, 3292]
+
+
+def real_messages():
+    """The captured frames, gathered as the transport would gather them."""
+    messages = {}
+    for hexed in REAL:
+        abc_bms.collect(messages, bytes.fromhex(hexed.replace(" ", "")))
+    return messages
 
 
 def corrupt(data):

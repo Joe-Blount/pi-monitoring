@@ -86,13 +86,14 @@ class Field:
     """
 
     def __init__(self, name, message, offset, length, signed=False,
-                 scale=1.0, low=None, high=None, little_endian=True):
+                 scale=1.0, shift=0.0, low=None, high=None, little_endian=True):
         self.name = name
         self.message = message
         self.offset = offset
         self.length = length
         self.signed = signed
         self.scale = scale
+        self.shift = shift
         self.low = low
         self.high = high
         self.little_endian = little_endian
@@ -107,7 +108,7 @@ class Field:
         # Always a float. InfluxDB refuses a field whose type changes between
         # writes, so a field declared with a whole-number scale must not
         # publish an integer the first time it happens to read one.
-        return float(value * self.scale)
+        return float(value * self.scale + self.shift)
 
     def plausible(self, value):
         if value is None:
@@ -132,16 +133,11 @@ FIELDS = (
     Field("charge_mosfet_on", 0xF2, 2, 1, low=0.0, high=1.0),
     Field("discharge_mosfet_on", 0xF2, 3, 1, low=0.0, high=1.0),
     Field("temperature_sensors", 0xF2, 4, 1, low=0.0, high=16.0),
-    # Temperatures are reported, and the vendor application shows about two per
-    # pack. They are not decoded here yet because neither reference documents
-    # their offsets, and unlike the cell voltages there is no structural check
-    # that would catch a wrong one: any single byte read as a temperature looks
-    # plausible, so a guess would publish a believable wrong number.
-    #
-    # Where to look, with --raw against a pack: message F2, immediately after
-    # the sensor count at offset 4. A count of two followed by two values is
-    # the obvious layout. Compare against what the application displays at the
-    # same moment, then add Field entries here.
+    # Temperatures sit immediately after the sensor count, as two byte signed
+    # little-endian degrees Celsius. Confirmed against a pack whose
+    # application showed 25 C and 24 C while the frame carried 19 00 18 00.
+    # Read by temperatures() rather than declared here, because the count says
+    # how many there are and a pack with three would otherwise lose one.
     Field("heater_on", 0xF3, 8, 1, low=0.0, high=1.0),
 )
 
@@ -188,7 +184,22 @@ def collect(messages, frame):
     return identifier
 
 
-def cell_voltages(message, entry_size=4):
+#: Bytes per cell entry, and where the parts sit inside one.
+#:
+#: Measured against a pack rather than assumed. One frame reads:
+#:
+#:     cc f4 | 01 e8 0c 00 | 02 dc 0c 00 | ... | 00 crc
+#:             cell 1        cell 2
+#:             3304 mV       3292 mV
+#:
+#: so an entry is a one byte index, a two byte little-endian millivolt
+#: reading, and one byte of padding.
+CELL_ENTRY = 4
+CELL_INDEX_BYTES = 1
+CELL_VALUE_BYTES = 2
+
+
+def cell_voltages(message, entry_size=CELL_ENTRY):
     """Cell voltages from the accumulated cell message.
 
     The count comes from how much arrived, never from an assumption about the
@@ -210,8 +221,11 @@ def cell_voltages(message, entry_size=4):
     body = message[2:]
     found = {}
     for start in range(0, len(body) - entry_size + 1, entry_size):
-        index = int.from_bytes(body[start:start + 2], "little")
-        millivolts = int.from_bytes(body[start + 2:start + 4], "little")
+        index = int.from_bytes(
+            body[start:start + CELL_INDEX_BYTES], "little")
+        millivolts = int.from_bytes(
+            body[start + CELL_INDEX_BYTES:
+                 start + CELL_INDEX_BYTES + CELL_VALUE_BYTES], "little")
         if 0 <= index <= 64 and 1000 <= millivolts <= 5000:
             found.setdefault(index, millivolts)
 
@@ -231,6 +245,42 @@ def cell_voltages(message, entry_size=4):
         return []
 
     return [found[index] for index in sorted(found)]
+
+
+#: Where the temperature readings start inside message F2, and their size.
+TEMP_OFFSET = 5
+TEMP_BYTES = 2
+
+#: What a battery temperature can plausibly be, in Celsius. Wide on purpose:
+#: this catches an offset that moved, not a battery in trouble.
+TEMP_MIN_C, TEMP_MAX_C = -40.0, 90.0
+
+
+def temperatures(message):
+    """Celsius readings from the status message, as many as it declares.
+
+    The count comes from the frame rather than from an assumption, so a pack
+    with three sensors reports three. A reading outside a plausible range is
+    dropped rather than published, on the same principle as everything else
+    here: a wrong number is worse than a missing one.
+    """
+    if not message or len(message) <= TEMP_OFFSET:
+        return []
+
+    count = message[4]
+    if not 1 <= count <= 8:
+        return []
+
+    out = []
+    for index in range(count):
+        start = TEMP_OFFSET + index * TEMP_BYTES
+        raw = message[start:start + TEMP_BYTES]
+        if len(raw) != TEMP_BYTES:
+            break
+        celsius = int.from_bytes(raw, "little", signed=True)
+        if TEMP_MIN_C <= celsius <= TEMP_MAX_C:
+            out.append(float(celsius))
+    return out
 
 
 def parse(messages):
@@ -254,6 +304,9 @@ def parse(messages):
             out[field.name] = value
         elif value is not None:
             rejected.append("%s=%g" % (field.name, value))
+
+    for number, celsius in enumerate(temperatures(messages.get(0xF2)), start=1):
+        out["temp_%d" % number] = round(celsius * 9.0 / 5.0 + 32.0, 1)
 
     cells = cell_voltages(messages.get(CELL_MESSAGE))
     if cells:

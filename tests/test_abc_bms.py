@@ -214,10 +214,8 @@ def test_cells_whose_indices_do_not_form_a_complete_run_are_discarded():
 
 
 def test_cells_numbered_from_one_without_gaps_are_kept():
-    import struct
-    body = b"".join(struct.pack("<HH", index, 3300 + index)
-                    for index in (1, 2, 3, 4))
-    assert abc_bms.cell_voltages(b"\xcc\xf4" + body) == [3301, 3302, 3303, 3304]
+    assert abc_bms.cell_voltages(_cell_message((1, 2, 3, 4))) == \
+        [3301, 3302, 3303, 3304]
 
 
 def test_a_field_with_a_whole_number_scale_still_reads_as_a_float():
@@ -363,7 +361,8 @@ def _joined(cells):
 
 def _cell_message(indices, millivolts=3300):
     import struct
-    body = b"".join(struct.pack("<HH", i, millivolts + i) for i in indices)
+    body = b"".join(bytes([i]) + struct.pack("<H", millivolts + i) + b"\x00"
+                    for i in indices)
     return b"\xcc\xf4" + body
 
 
@@ -439,3 +438,59 @@ def test_raw_omits_the_unanswered_line_when_everything_answered():
     device, transport = driver(full_pack())
     transport.exchange = lambda wanted: {0xF0: fx.status_frame()}
     assert "unanswered_commands" not in device.raw()
+
+
+# --- against frames captured from a real pack ------------------------------
+
+def test_the_driver_agrees_with_the_vendor_application():
+    """Generated fixtures only prove the parser agrees with itself. These
+    frames came off a SOK-48V0045 while its own application was displaying
+    the values asserted below, so this is the test that proves the offsets
+    are right rather than merely self-consistent.
+
+    The three that cannot drift are the ones that matter: rated capacity,
+    actual capacity and cycle count were identical on both screens."""
+    out = abc_bms.parse(fx.real_messages())
+
+    assert out["design_capacity_ah"] == 100.0        # app: Rated 100.00 Ah
+    assert out["remaining_capacity_ah"] == 106.048   # app: Actual 106.05 Ah
+    assert out["cycles"] == 212.0                    # app: Cycle Time 212
+    assert out["charge_mosfet_on"] == 1.0            # app: C MOS on
+    assert out["discharge_mosfet_on"] == 1.0         # app: D MOS on
+    assert out["heater_on"] == 0.0                   # app: Heating Switch OFF
+    assert out["temperature_sensors"] == 2.0         # app showed two
+
+
+def test_the_captured_temperatures_match_what_the_application_showed():
+    """25 C and 24 C on screen, 19 00 18 00 in the frame. Published in
+    Fahrenheit because everything in this project is."""
+    out = abc_bms.parse(fx.real_messages())
+    assert out["temp_1"] == 77.0
+    assert out["temp_2"] == 75.2
+
+
+def test_every_captured_cell_is_read_at_its_real_voltage():
+    """The layout was wrong before this capture: a one-byte index was read as
+    two, so nothing decoded and the reader published no cells at all. That was
+    the designed behaviour, and this is what replaces the guess."""
+    messages = fx.real_messages()
+    assert abc_bms.cell_voltages(messages[abc_bms.CELL_MESSAGE]) == \
+        fx.REAL_CELL_MILLIVOLTS
+
+    out = abc_bms.parse(messages)
+    assert out["cell_count"] == 16.0
+    assert out["cell_min_volts"] == 3.292
+    assert out["cell_max_volts"] == 3.304
+
+
+def test_a_discharging_pack_reads_negative_against_a_real_frame():
+    """The application showed a negative current while discharging, so the
+    sign convention here matches the vendor's."""
+    assert abc_bms.parse(fx.real_messages())["pack_amps"] < 0
+
+
+def test_the_captured_identity_frame_names_the_pack():
+    device, transport = driver([])
+    transport.exchange = lambda wanted: {
+        0xF1: bytes.fromhex(fx.REAL[0].replace(" ", ""))}
+    assert "SOK-BMS" in device.check()

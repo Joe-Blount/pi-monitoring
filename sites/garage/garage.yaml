@@ -50,16 +50,16 @@ devices:
   - name: pack1
     driver: abc_bms
     mode: poll
-    enabled: false
+    enabled: true
     tags: {location: rack}
-    params: {address: "XX:XX:XX:XX:XX:XX"}
+    params: {address: "0B:9F:98:99:13:78"}     # SOK-48V0045
 
   - name: pack2
     driver: abc_bms
     mode: poll
-    enabled: false
+    enabled: true
     tags: {location: rack}
-    params: {address: "YY:YY:YY:YY:YY:YY"}
+    params: {address: "20:22:08:05:95:F4"}     # SOK-48V0140
 
   # The EG4, waiting on one cable: a USB-to-RS232 adapter with a DB9 male end,
   # which mates with the RJ45-to-DB9 cable that came with the inverter. That
