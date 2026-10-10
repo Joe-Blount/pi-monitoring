@@ -130,14 +130,6 @@ def test_the_install_script_installs_only_this_node_s_fragments():
 
 
 
-def test_telegraf_is_told_to_log_a_failing_device():
-    """Without this telegraf discards the command's stderr whenever the exit
-    code is zero, which is the normal case when one device fails and the rest
-    succeed. The failure would then appear nowhere at all."""
-    conf = (REPO / "deploy" / "telegraf.d" / "monitoring.conf").read_text()
-    assert "log_stderr = true" in conf
-
-
 def test_the_poll_command_has_room_for_a_retrying_sensor():
     """A sensor that retries can take several seconds. telegraf's default
     command timeout is five, and a timeout looks exactly like a dead sensor."""
@@ -241,8 +233,47 @@ def test_the_slow_collector_is_installed_only_where_it_is_needed():
     assert "monitoring-slow.conf" in INSTALL
 
 
-def test_both_collectors_keep_stderr():
-    """telegraf discards a command's stderr when the exit code is zero, which
-    is the normal case when one device fails and the others succeed."""
-    for text in (INSTALL_FAST, INSTALL_SLOW):
-        assert "log_stderr = true" in text
+def test_a_failing_device_is_visible_without_relying_on_stderr():
+    """Telegraf discards a command's stderr when the exit code is zero, which
+    is the normal case here because the collector exits zero whenever it wrote
+    anything. So the log is not the channel a failure travels on.
+
+    The point is. A failed device publishes ok=0.0 and error_message, which
+    reaches the dashboard and outlives a log rotation. This asserts the runner
+    still reserves those names, because losing them would make a failure
+    genuinely invisible."""
+    from monitoring.runner import RESERVED_FIELDS
+    assert "ok" in RESERVED_FIELDS
+    assert "error_message" in RESERVED_FIELDS
+
+
+#: Options inputs.exec actually accepts. Telegraf treats an unknown field as a
+#: FATAL configuration error: it refuses to start at all, so one bad option in
+#: one fragment takes every input on the machine down with it. That is not a
+#: hypothetical; it happened, and the node stopped collecting.
+EXEC_OPTIONS = {
+    "commands", "command", "environment", "timeout", "interval",
+    "data_format", "name_override", "name_prefix", "name_suffix",
+    "tags", "alias", "precision", "collection_jitter", "collection_offset",
+    "ignore_error", "csv_header_row_count", "csv_column_names",
+    "csv_column_types", "csv_delimiter", "csv_skip_rows", "csv_tag_columns",
+    "csv_timestamp_column", "csv_timestamp_format", "csv_trim_space",
+}
+
+
+@pytest.mark.parametrize("name", ["monitoring.conf", "monitoring-slow.conf"])
+def test_the_collector_fragments_use_only_real_exec_options(name):
+    """An invented option is not ignored. Telegraf rejects the whole config
+    and the service will not start, so the blast radius of a typo here is
+    every metric on the machine rather than one input."""
+    text = (REPO / "deploy" / "telegraf.d" / name).read_text()
+    used = set()
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") or "=" not in stripped:
+            continue
+        used.add(stripped.split("=")[0].strip())
+    unknown = used - EXEC_OPTIONS
+    assert not unknown, (
+        "%s sets %s, which inputs.exec does not accept. Telegraf will refuse "
+        "to start." % (name, ", ".join(sorted(unknown))))
