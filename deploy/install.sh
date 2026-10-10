@@ -136,6 +136,30 @@ else
     echo "    a command line or shell history."
 fi
 
+echo "==> service environment"
+# Two settings telegraf needs before it can drive a GPIO, both found the hard
+# way on a real machine.
+#
+# A writable home. The telegraf user's home is /etc/telegraf and is not
+# writable, so the gpiozero lgpio backend cannot create its notification
+# files, silently falls back to the sysfs backend, and carries on.
+#
+# That fallback matters more than it sounds. The sysfs backend does not
+# release a pin when the process dies, so every restart finds the pin busy and
+# the collector never recovers. The character device backend does release it,
+# which is also the property the whole load-shedding fail-safe rests on, so it
+# is pinned here rather than left to a fallback nobody would notice.
+install -d -m 0755 /etc/systemd/system/telegraf.service.d
+cat > /etc/systemd/system/telegraf.service.d/pi-monitoring.conf <<'UNIT'
+# Written by pi-monitoring's install script.
+[Service]
+Environment=HOME=/var/lib/monitoring
+WorkingDirectory=/var/lib/monitoring
+Environment=GPIOZERO_PIN_FACTORY=lgpio
+UNIT
+systemctl daemon-reload
+echo "    telegraf given a writable home and the lgpio pin backend"
+
 echo "==> group membership"
 # Reading a GPIO, an I2C bus or a serial port needs the group, and the failure
 # without it is a permission error that reads like a missing device.

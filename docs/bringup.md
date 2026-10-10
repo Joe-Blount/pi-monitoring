@@ -168,10 +168,21 @@ T="${T//[[:space:]]/}"
   printf 'INFLUX_ORG=%s\n'    '<your org>'
   printf 'INFLUX_BUCKET=%s\n' '<your bucket>'
   printf 'INFLUX_TOKEN=%s\n'  "$T"; } | sudo tee /etc/monitoring/influx.env >/dev/null
-sudo chmod 600 /etc/monitoring/influx.env
-sudo chown root:root /etc/monitoring/influx.env
+sudo chown root:telegraf /etc/monitoring/influx.env
+sudo chmod 640 /etc/monitoring/influx.env
 unset T
 ```
+
+**The group matters.** A credentials file owned `root:root` with mode 600 is
+unreadable by the telegraf user, and telegraf does not fail loudly when it
+cannot read a configuration fragment: it logs a permission error, starts
+anyway, and runs with no output at all. Every input works, nothing reaches the
+database, and the only sign is one line in the journal. Mode 640 owned
+`root:telegraf` keeps the token off every other account while letting the
+service that needs it read it.
+
+The same applies to any output fragment written into
+`/etc/telegraf/telegraf.d/` by hand.
 
 The token needs **write** permission and nothing else. Nothing in this project
 reads from InfluxDB.

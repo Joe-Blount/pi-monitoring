@@ -277,3 +277,30 @@ def test_the_collector_fragments_use_only_real_exec_options(name):
     assert not unknown, (
         "%s sets %s, which inputs.exec does not accept. Telegraf will refuse "
         "to start." % (name, ", ".join(sorted(unknown))))
+
+
+def test_the_installer_gives_telegraf_a_writable_home():
+    """The telegraf user's home is /etc/telegraf and is not writable, so the
+    gpiozero lgpio backend cannot create its notification files and falls back
+    to sysfs without saying anything useful."""
+    assert "HOME=/var/lib/monitoring" in INSTALL
+    assert "WorkingDirectory=/var/lib/monitoring" in INSTALL
+
+
+def test_the_installer_pins_the_gpio_backend():
+    """The sysfs backend does not release a pin when the process dies, so
+    every restart finds the pin busy and the collector never recovers. The
+    character device backend does release it, which is also the property the
+    load-shedding fail-safe depends on, so it is chosen rather than left to a
+    silent fallback."""
+    assert "GPIOZERO_PIN_FACTORY=lgpio" in INSTALL
+
+
+def test_the_credentials_file_is_readable_by_the_service_that_needs_it():
+    """Owned root:root at mode 600 it is not, and telegraf does not fail
+    loudly: it logs one permission line, starts anyway, and runs with no
+    output at all. Every input works and nothing reaches the database."""
+    doc = (REPO / "docs" / "bringup.md").read_text()
+    assert "chown root:telegraf /etc/monitoring/influx.env" in doc
+    assert "chmod 640 /etc/monitoring/influx.env" in doc
+    assert "chmod 600 /etc/monitoring/influx.env" not in doc
