@@ -71,6 +71,7 @@ REAL = [
     "cc f4 05 e0 0c 00 06 e6 0c 00 07 e0 0c 00 08 e6 0c 00 00 45",
     "cc f4 09 e2 0c 00 0a e0 0c 00 0b e0 0c 00 0c e1 0c 00 00 7d",
     "cc f4 0d e6 0c 00 0e e2 0c 00 0f e6 0c 00 10 dc 0c 00 00 04",
+    "cc f9 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ed",
 ]
 
 #: What the vendor application displayed while those frames were captured.

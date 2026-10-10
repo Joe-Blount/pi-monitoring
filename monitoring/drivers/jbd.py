@@ -178,6 +178,10 @@ def parse_basic(body):
         "design_capacity_ah": _unsigned(body, 6) / 100.0,
         "cycles": float(_unsigned(body, 8)),
         "protection_flags": float(_unsigned(body, 16)),
+        # Which cells the management system is actively balancing, as a
+        # bitfield across two sixteen bit words. Zero means none. Worth having
+        # on a site whose balance problems have already cost it batteries.
+        "balancing_flags": float((_unsigned(body, 14) << 16) | _unsigned(body, 12)),
         "state_of_charge_pct": float(body[19]),
         # Bit 0 is the charge switch, bit 1 the discharge switch.
         "charge_mosfet_on": float(body[20] & 0x01),
@@ -250,6 +254,8 @@ def parse(messages):
         out["cell_min_volts"] = round(min(cells) / 1000.0, 3)
         out["cell_max_volts"] = round(max(cells) / 1000.0, 3)
         out["cell_spread_volts"] = round((max(cells) - min(cells)) / 1000.0, 3)
+        for number, millivolts in enumerate(cells, start=1):
+            out["cell_%02d_volts" % number] = round(millivolts / 1000.0, 3)
 
     out["commands_unanswered"] = float(
         len([r for r in READ_REGISTERS if r not in messages]))

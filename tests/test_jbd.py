@@ -311,3 +311,20 @@ def test_an_unparseable_timeout_names_the_device_and_the_field():
     with pytest.raises(Exception) as raised:
         jbd.JbdDriver("bms", {"address": "A", "timeout": "soon"}, {})
     assert "bms" in str(raised.value) and "timeout" in str(raised.value)
+
+
+def test_each_cell_is_published_separately():
+    out = jbd.parse(fx.real_messages())
+    assert out["cell_01_volts"] == 3.354
+    assert out["cell_04_volts"] == 3.342
+
+
+def test_the_balancing_bitfield_is_published():
+    """Which cells the management system is working on. Zero means none, which
+    is the captured state. Worth having where balance problems have already
+    cost batteries."""
+    assert jbd.parse(fx.real_messages())["balancing_flags"] == 0.0
+
+    body = bytearray(jbd.payload(fx.basic_frame()))
+    body[12:14] = (0x0005).to_bytes(2, "big")      # cells 1 and 3
+    assert jbd.parse({jbd.BASIC: bytes(body)})["balancing_flags"] == 5.0

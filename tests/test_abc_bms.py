@@ -494,3 +494,38 @@ def test_the_captured_identity_frame_names_the_pack():
     transport.exchange = lambda wanted: {
         0xF1: bytes.fromhex(fx.REAL[0].replace(" ", ""))}
     assert "SOK-BMS" in device.check()
+
+
+def test_the_alarm_message_is_published_rather_than_discarded():
+    """The read sends command 0xC4 on every cycle and the reply used to be
+    thrown away. That reply is where cell over-voltage, under-voltage,
+    over-temperature and over-current faults live, which makes it the single
+    most important thing the pack says."""
+    out = abc_bms.parse(fx.real_messages())
+    assert out["alarm_flags"] == 0.0
+
+
+def test_a_pack_reporting_an_alarm_publishes_a_non_zero_value():
+    """Published as a number because the bit meanings are not documented and
+    no fault has been seen here to confirm them. Zero healthy, anything else
+    worth looking at, which is enough to alert on."""
+    messages = fx.real_messages()
+    messages[abc_bms.ALARM_MESSAGE] = fx.frame(0xF9, b"\x00\x20")
+    assert abc_bms.parse(messages)["alarm_flags"] > 0
+
+
+def test_each_cell_is_published_separately():
+    """The summary says the pack is fine. Only the per-cell series shows one
+    cell walking away from the others over weeks."""
+    out = abc_bms.parse(fx.real_messages())
+    assert out["cell_01_volts"] == 3.304
+    assert out["cell_16_volts"] == 3.292
+    assert len([k for k in out if k.startswith("cell_") and k.endswith("_volts")
+                and k[5:7].isdigit()]) == 16
+
+
+def test_cell_field_names_sort_in_pack_order():
+    """Zero padded so that cell 2 sorts before cell 10 in a dashboard."""
+    out = abc_bms.parse(fx.real_messages())
+    numbered = sorted(k for k in out if k.startswith("cell_") and k[5:7].isdigit())
+    assert numbered[0] == "cell_01_volts" and numbered[1] == "cell_02_volts"

@@ -66,6 +66,10 @@ FRAME_LENGTH = 0x14          # every reply is exactly twenty bytes
 READ_COMMANDS = ((0xC1, (0xF0, 0xF2)), (0xC2, (0xF0, 0xF3, 0xF4)), (0xC4, (0xF9,)))
 IDENTITY_COMMAND = (0xC0, (0xF1,))
 
+#: The message carrying protection and alarm status. Requested by command
+#: 0xC4 and, until this was noticed, fetched on every read and discarded.
+ALARM_MESSAGE = 0xF9
+
 #: The message carrying cell voltages, which arrives in several parts.
 CELL_MESSAGE = 0xF4
 
@@ -309,12 +313,29 @@ def parse(messages):
     for number, celsius in enumerate(temperatures(messages.get(0xF2)), start=1):
         out["temp_%d" % number] = round(celsius * 9.0 / 5.0 + 32.0, 1)
 
+    # The pack's own protection and alarm word. Published as a number rather
+    # than decoded into named flags, because the bit meanings are not
+    # documented in either reference and a fault has never been seen here to
+    # confirm them. Zero is healthy; anything else deserves a look. That is
+    # enough to alert on, and far better than discarding it, which is what
+    # happened before: the command was sent on every read and the reply
+    # thrown away.
+    alarm = messages.get(ALARM_MESSAGE)
+    if alarm and len(alarm) > 3:
+        out["alarm_flags"] = float(int.from_bytes(bytes(alarm[2:-1]), "big"))
+
     cells = cell_voltages(messages.get(CELL_MESSAGE))
     if cells:
         out["cell_count"] = float(len(cells))
         out["cell_min_volts"] = round(min(cells) / 1000.0, 3)
         out["cell_max_volts"] = round(max(cells) / 1000.0, 3)
         out["cell_spread_volts"] = round((max(cells) - min(cells)) / 1000.0, 3)
+        # Each cell by itself. The summary says the pack is fine; only the
+        # individual series shows one cell walking away from the others over
+        # weeks, which is the failure that has already cost this site a pair
+        # of batteries and currently has no early warning.
+        for number, millivolts in enumerate(cells, start=1):
+            out["cell_%02d_volts" % number] = round(millivolts / 1000.0, 3)
 
     # Voltage is the anchor for trusting the rest. Current cannot be
     # range-checked usefully, because a resting pack really does read near
