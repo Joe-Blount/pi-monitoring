@@ -196,3 +196,66 @@ def test_check_reports_the_values_when_it_works():
     assert "79.0 F" in driver().check()
 
 
+
+
+# --- the name the kernel actually reports ----------------------------------
+
+def _iio(tmp_path, devices):
+    """Build an industrial I/O tree: {device number: reported name}."""
+    root = tmp_path / "iio"
+    for number, reported in devices.items():
+        d = root / ("iio:device%d" % number)
+        d.mkdir(parents=True)
+        (d / "name").write_text(reported + "\n")
+    return str(root)
+
+
+def test_a_sensor_is_found_under_the_name_the_kernel_really_uses(tmp_path):
+    """The kernel names the device after its device tree node, including a
+    unit address: GPIO17 reports dht11@11, not dht11. An exact comparison
+    finds nothing on a real machine, which is a mistake only hardware shows."""
+    root = _iio(tmp_path, {0: "dht11@11"})
+    driver = DhtDriver("box", {"iio_root": root, "pin": 17}, {})
+    assert driver._device_path().endswith("iio:device0")
+
+
+def test_a_sensor_with_no_unit_address_is_still_found(tmp_path):
+    """Older kernels report the bare name. Both must work."""
+    root = _iio(tmp_path, {0: "dht11"})
+    driver = DhtDriver("box", {"iio_root": root, "pin": 17}, {})
+    assert driver._device_path().endswith("iio:device0")
+
+
+def test_two_sensors_are_told_apart_by_the_pin_in_their_name(tmp_path):
+    """The unit address is the GPIO in hexadecimal, so it is the only thing
+    that distinguishes two of these. Refusing to choose would be worse: both
+    would be unreadable rather than one."""
+    root = _iio(tmp_path, {0: "dht11@11", 1: "dht11@18"})     # GPIO 17 and 24
+    assert DhtDriver("a", {"iio_root": root, "pin": 17}, {})._device_path() \
+        .endswith("iio:device0")
+    assert DhtDriver("b", {"iio_root": root, "pin": 24}, {})._device_path() \
+        .endswith("iio:device1")
+
+
+def test_a_sensor_on_a_different_pin_is_not_offered(tmp_path):
+    """Reading the wrong sensor silently is worse than reporting none."""
+    root = _iio(tmp_path, {0: "dht11@11"})
+    driver = DhtDriver("box", {"iio_root": root, "pin": 24}, {})
+    with pytest.raises(DriverError) as raised:
+        driver._device_path()
+    assert "no DHT sensor" in str(raised.value)
+
+
+def test_another_kind_of_iio_device_is_ignored(tmp_path):
+    """A pressure sensor on the same bus must not be read as a thermometer."""
+    root = _iio(tmp_path, {0: "bmp280", 1: "dht11@11"})
+    driver = DhtDriver("box", {"iio_root": root, "pin": 17}, {})
+    assert driver._device_path().endswith("iio:device1")
+
+
+def test_the_unit_address_is_read_as_hexadecimal():
+    """GPIO 17 appears as @11, not @17. Reading it as decimal would match the
+    wrong sensor on a machine with two."""
+    assert DhtDriver._reported_pin("dht11@11") == 17
+    assert DhtDriver._reported_pin("dht11@4") == 4
+    assert DhtDriver._reported_pin("dht11") is None

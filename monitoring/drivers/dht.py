@@ -67,15 +67,48 @@ class DhtDriver(Driver):
 
     # -- locating the sensor ----------------------------------------------
 
+    @staticmethod
+    def _name_matches(reported):
+        """Whether an industrial I/O device name is one of these sensors.
+
+        The kernel names the device after its device tree node, which carries
+        a unit address: a sensor on GPIO17 reports "dht11@11", not "dht11".
+        An exact comparison therefore finds nothing on a real machine, which
+        is a mistake only hardware reveals.
+        """
+        return reported == DRIVER_NAME or reported.startswith(DRIVER_NAME + "@")
+
+    @staticmethod
+    def _reported_pin(reported):
+        """The GPIO number in a name like "dht11@11", or None.
+
+        The unit address is the pin in hexadecimal. It is the only thing that
+        tells two of these sensors apart, so it is worth reading rather than
+        giving up when a machine has more than one.
+        """
+        _, _, suffix = reported.partition("@")
+        try:
+            return int(suffix, 16)
+        except ValueError:
+            return None
+
     def _candidates(self):
         found = []
         for path in sorted(glob.glob(os.path.join(self.iio_root, "iio:device*"))):
             try:
                 with open(os.path.join(path, "name")) as handle:
-                    if handle.read().strip() == DRIVER_NAME:
-                        found.append(path)
+                    reported = handle.read().strip()
             except OSError:
                 continue
+            if not self._name_matches(reported):
+                continue
+            # When the node file says which pin this device is on, and the
+            # kernel says which pin each sensor is on, believe both.
+            if self.pin is not None:
+                where = self._reported_pin(reported)
+                if where is not None and where != self.pin:
+                    continue
+            found.append(path)
         return found
 
     def _device_path(self):
