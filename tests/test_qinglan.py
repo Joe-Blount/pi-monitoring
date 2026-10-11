@@ -302,9 +302,11 @@ def test_a_decoy_that_passes_framing_is_refused_by_the_parser():
     messages = transport_using(client, timeout=5.0, settle=0.02).exchange(
         (qinglan.LIVE, qinglan.SETTINGS))
     settings = messages.get(qinglan.SETTINGS)
-    if settings == fx.frame(fx.REAL_SETTINGS):
-        return                                   # framing stepped past it
-    # Framing was fooled, so nothing wrong may be published.
+    # The premise, asserted rather than assumed. If framing ever starts
+    # stepping past this decoy, that is a better outcome but a different
+    # test, and this one must fail loudly rather than quietly prove nothing.
+    assert settings != fx.frame(fx.REAL_SETTINGS), (
+        "framing was not fooled, so this no longer tests the parser")
     with pytest.raises(DriverError):
         qinglan.parse({qinglan.LIVE: fx.frame(fx.REAL_LIVE_SERIES[0]),
                        qinglan.SETTINGS: settings})

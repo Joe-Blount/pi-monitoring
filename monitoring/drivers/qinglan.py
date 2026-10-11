@@ -451,9 +451,10 @@ class _BleakTransport:
         already wedged when the deadline fires. So the inner deadline can
         itself overrun, and the caller must not depend on it.
 
-        The thread is a daemon, so a radio that never returns cannot keep the
-        collector alive. This runs as a one-shot process, so an abandoned
-        thread lives until that process exits and no longer.
+        The thread is a daemon, so a radio that never returns cannot keep
+        the collector alive. A collection abandons at most one and then
+        exits. A caller that reads repeatedly is held to the same one by the
+        guard below, which refuses a second read while the first is stuck.
         """
         import threading
 
