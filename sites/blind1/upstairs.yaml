@@ -106,6 +106,21 @@ devices:
       timeout: 40s
       settle: 2s
 
+  # The shunt measures the whole bank, where the bms above sees one pack of
+  # the three. Polled from this node because it is the node in range: the
+  # shunt answers here at about -69 dBm.
+  - name: shunt
+    driver: qinglan
+    mode: poll
+    tags: {location: battery}
+    params:
+      address: "C8:47:80:52:16:A9"
+      # Part of every request. A request carrying the wrong one is ignored
+      # in silence, which is what made this device look dead.
+      device_address: 1
+      timeout: 40s
+      settle: 2s
+
 # The PCF8591 analog-to-digital converter on GPIO2 and GPIO3 is deliberately
 # absent. It exists only to measure battery voltage, which the charge
 # controller reports more accurately on the downstairs node, and the two

@@ -82,18 +82,24 @@ devices:
       timeout: 40s                    # a cold Bluetooth connect takes this
       settle: 2s                      # quiet gap that marks the end of a reply
 
+  # Disabled while the upstairs node polls the shunt instead. It allows one
+  # connection at a time, so two readers would take turns failing. Enable
+  # this and remove the upstairs entry on the same visit, never separately.
   - name: shunt
-    driver: ble_shunt
+    driver: qinglan
     mode: controller
+    enabled: false
     tags: {location: battery}
     params:
-      address: "00:00:00:00:00:00"    # fill in from a scan
+      address: "C8:47:80:52:16:A9"
+      device_address: 1               # part of every request
       poll_every: 30s
       hold_connection: false
       timeout: 40s
-      charge_is_positive: true        # VERIFY. Depends on how it was wired.
-      # If this shunt turns out to have an RS485 port, use it instead of
-      # Bluetooth: wired, no single-connection limit, documented protocol.
+      # The driver publishes the current as a magnitude, because no sample
+      # has yet been taken while the bank charged and so no field has been
+      # seen changing to mean the other direction. Until one is, nothing
+      # here claims a direction.
 
   - name: host
     driver: host

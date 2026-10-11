@@ -83,7 +83,7 @@ def test_every_driver_is_registered():
     would be dead code that still passes its own tests."""
     modules = {module for module, _ in drivers.REGISTRY.values()}
     for path in DRIVER_FILES:
-        if path.name in ("base.py", "stubs.py"):
+        if path.name == "base.py":
             continue
         assert "monitoring.drivers.%s" % path.stem in modules, (
             "%s is not in the driver registry" % path.name)

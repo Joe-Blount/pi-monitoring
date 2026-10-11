@@ -20,10 +20,7 @@ REGISTRY = {
     "pi30": ("monitoring.drivers.pi30", "Pi30Driver"),
     "abc_bms": ("monitoring.drivers.abc_bms", "AbcBmsDriver"),
     "jbd": ("monitoring.drivers.jbd", "JbdDriver"),
-    # Registered without an implementation, so that a node file naming a
-    # planned device still validates. An unknown driver stays a typo rather
-    # than becoming a legitimate forward reference.
-    "ble_shunt": ("monitoring.drivers.stubs", "BleShuntDriver"),
+    "qinglan": ("monitoring.drivers.qinglan", "QinlanDriver"),
 }
 
 
@@ -38,6 +35,9 @@ ALIASES = {
     # Named after the transport before the protocol was known. It turned out
     # to be JBD, which is documented and shared with many brands.
     "ble_bms": "jbd",
+    # Named after the transport while the protocol was still unread. The
+    # protocol belongs to the shunt maker and appears under several brands.
+    "ble_shunt": "qinglan",
 }
 
 
