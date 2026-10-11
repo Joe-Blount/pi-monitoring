@@ -240,13 +240,19 @@ def test_a_record_split_across_many_notifications_is_rejoined():
     assert messages[qinglan.ACCUMULATED] == fx.frame(fx.REAL_ACCUMULATED)
 
 
-def test_a_reply_that_arrives_late_does_not_spoil_the_next_record():
-    """A record is found by its own command byte, not by what came first."""
-    client = radio(delay=0.05)
-    messages = transport_using(client, settle=0.2).exchange(
+def test_a_reply_that_arrives_too_late_does_not_spoil_the_next_record():
+    """A record is found by its own command byte, not by what came first.
+
+    The delay here is longer than the gaps allowed, so the first command is
+    given up on and its reply lands inside the second command's window. The
+    second record must still be read.
+    """
+    client = radio(delay=0.3, delay_only={qinglan.LIVE})
+    messages = transport_using(client, timeout=5.0, settle=0.02).exchange(
         (qinglan.LIVE, qinglan.SETTINGS))
-    assert messages[qinglan.LIVE] == fx.frame(fx.REAL_LIVE_SERIES[0])
     assert messages[qinglan.SETTINGS] == fx.frame(fx.REAL_SETTINGS)
+    assert qinglan.LIVE not in messages
+    assert messages[qinglan.UNANSWERED] == [qinglan.LIVE]
 
 
 def test_traffic_that_answers_nothing_is_stepped_over():
@@ -316,6 +322,37 @@ def test_a_radio_that_never_connects_is_abandoned_at_the_deadline():
     watcher.join(timeout=10.0)
 
     assert not watcher.is_alive(), "the exchange ran past its own deadline"
+    assert outcome and outcome[0] is not None
+    assert "abandoned" in str(outcome[0])
+
+
+def test_a_radio_that_stalls_even_while_disconnecting_is_let_go(monkeypatch):
+    """The deadline alone is not enough, because cancelling can hang too.
+
+    Abandoning a coroutine waits for its cleanup, and closing a Bluetooth
+    connection waits on the system bus, which is the thing already wedged
+    when the deadline fires. The caller must not wait on that.
+    """
+    import threading
+    import time
+    monkeypatch.setattr(qinglan, "JOIN_GRACE_SECONDS", 0.3)
+    outcome = []
+
+    def attempt():
+        client = radio(hang_on_write=True, hang_on_exit=True)
+        try:
+            transport_using(client, timeout=0.3).exchange((qinglan.LIVE,))
+            outcome.append(None)
+        except DriverError as exc:
+            outcome.append(exc)
+
+    started = time.monotonic()
+    watcher = threading.Thread(target=attempt, daemon=True)
+    watcher.start()
+    watcher.join(timeout=10.0)
+
+    assert not watcher.is_alive(), "a stalled teardown held the caller"
+    assert time.monotonic() - started < 5.0
     assert outcome and outcome[0] is not None
     assert "abandoned" in str(outcome[0])
 

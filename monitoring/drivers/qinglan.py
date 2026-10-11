@@ -104,6 +104,12 @@ MAX_BUFFER_BYTES = 8 * max(FRAME_LENGTH.values())
 #: next one.
 REPLY_GAPS = 3
 
+#: Extra time allowed past the exchange's own deadline before the attempt is
+#: abandoned outright. The deadline normally fires first; this covers the
+#: case where cancelling the exchange is itself what hangs, because tearing
+#: down a Bluetooth connection waits on the system bus.
+JOIN_GRACE_SECONDS = 5.0
+
 
 class Field:
     """One value inside a reply frame.
@@ -352,8 +358,42 @@ class _BleakTransport:
         self.overflowed = 0
 
     def exchange(self, commands):
-        import asyncio
-        return asyncio.run(self._guarded(commands))
+        """Run the exchange on a thread this call is willing to abandon.
+
+        The deadline inside the exchange is not enough on its own. Cancelling
+        a coroutine waits for its cleanup, and disconnecting a Bluetooth
+        client waits on the system bus, which is exactly the thing that is
+        already wedged when the deadline fires. So the inner deadline can
+        itself overrun, and the caller must not depend on it.
+
+        The thread is a daemon, so a radio that never returns cannot keep the
+        collector alive. This runs as a one-shot process, so an abandoned
+        thread lives until that process exits and no longer.
+        """
+        import threading
+
+        box = {}
+
+        def work():
+            import asyncio
+            try:
+                box["result"] = asyncio.run(self._guarded(commands))
+            except BaseException as exc:          # noqa: BLE001
+                box["error"] = exc
+
+        worker = threading.Thread(target=work, daemon=True,
+                                  name="qinglan-%s" % self.address)
+        worker.start()
+        worker.join(self.timeout + JOIN_GRACE_SECONDS)
+
+        if worker.is_alive():
+            raise DriverError(
+                "%s did not return within %g seconds even after its deadline, "
+                "so it was abandoned rather than allowed to hold this node"
+                % (self.address, self.timeout + JOIN_GRACE_SECONDS))
+        if "error" in box:
+            raise box["error"]
+        return box["result"]
 
     async def _guarded(self, commands):
         """Run the exchange under one hard deadline.

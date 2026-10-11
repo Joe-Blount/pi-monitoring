@@ -104,7 +104,9 @@ class FakeClient:
 
     #: Every write the exchange performed, in order, exactly as sent.
     def __init__(self, address, timeout, replies=None, chunk=20, delay=0.0,
-                 chunk_delay=0.0, noise=b"", silent=False, hang=False):
+                 chunk_delay=0.0, noise=b"", silent=False, hang=False,
+                 hang_on_exit=False, hang_on_write=False,
+                 delay_only=None):
         self.address = address
         self.timeout = timeout
         self.replies = dict(replies or {})
@@ -114,6 +116,10 @@ class FakeClient:
         self.noise = noise
         self.silent = silent
         self.hang = hang
+        self.hang_on_exit = hang_on_exit
+        self.hang_on_write = hang_on_write
+        # Commands whose reply is delayed. None means all of them.
+        self.delay_only = delay_only
         self.writes = []
         self.notify = None
         self.entered = False
@@ -130,6 +136,12 @@ class FakeClient:
         return self
 
     async def __aexit__(self, *_):
+        import asyncio
+        if self.hang_on_exit:
+            # Tearing down a real connection waits on the system bus, which
+            # is the thing already wedged when a deadline fires. Cancelling
+            # the exchange therefore waits here, past its own deadline.
+            await asyncio.sleep(3600)
         self.exited = True
         return False
 
@@ -142,20 +154,23 @@ class FakeClient:
     async def write_gatt_char(self, _uuid, data, response=True):
         import asyncio
         self.writes.append(bytes(data))
+        if self.hang_on_write:
+            await asyncio.sleep(3600)
         if self.silent:
             return
         reply = self.replies.get(bytes(data)[0])
         if reply is None:
             return
         payload = self.noise + reply
-        if self.delay or self.chunk_delay:
-            asyncio.get_event_loop().create_task(self._deliver(payload))
+        slow = self.delay_only is None or bytes(data)[0] in self.delay_only
+        if (self.delay and slow) or self.chunk_delay:
+            asyncio.get_event_loop().create_task(self._deliver(payload, slow))
         else:
             self._push(payload)
 
-    async def _deliver(self, payload):
+    async def _deliver(self, payload, slow=True):
         import asyncio
-        if self.delay:
+        if self.delay and slow:
             await asyncio.sleep(self.delay)
         if not self.chunk_delay:
             self._push(payload)
