@@ -97,10 +97,10 @@ devices:
       # connection at a time, so holding it locks the phone application out.
       timeout: 25s
       settle: 2s
-      # The driver publishes the current as a magnitude, because no sample
-      # has yet been taken while the bank charged and so no field has been
-      # seen changing to mean the other direction. Until one is, nothing
-      # here claims a direction.
+      # Current is published signed, positive into the battery, the same
+      # convention as the charge controller and both packs. The shunt
+      # reports a magnitude and a direction separately and the driver
+      # combines them, so nothing here needs a wiring-dependent setting.
 
   - name: host
     driver: host
