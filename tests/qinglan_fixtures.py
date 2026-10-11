@@ -106,7 +106,7 @@ class FakeClient:
     def __init__(self, address, timeout, replies=None, chunk=20, delay=0.0,
                  chunk_delay=0.0, noise=b"", silent=False, hang=False,
                  hang_on_exit=False, hang_on_write=False,
-                 delays=None):
+                 delays=None, hold=None):
         self.address = address
         self.timeout = timeout
         self.replies = dict(replies or {})
@@ -118,9 +118,13 @@ class FakeClient:
         self.hang = hang
         self.hang_on_exit = hang_on_exit
         self.hang_on_write = hang_on_write
-        # Per-command delivery delay, which is what lets a test put one
-        # command's reply inside another command's window.
+        # Per-command delivery delay, for tests about slow devices.
         self.delays = dict(delays or {})
+        # Replies to hold back, as {command held: command that releases it}.
+        # Ordering a late reply by what is written next rather than by the
+        # clock keeps the test exact on a machine that is busy.
+        self.hold = dict(hold or {})
+        self.held = {}
         self.writes = []
         self.notify = None
         self.entered = False
@@ -159,11 +163,20 @@ class FakeClient:
             await asyncio.sleep(3600)
         if self.silent:
             return
-        reply = self.replies.get(bytes(data)[0])
+        command = bytes(data)[0]
+        # Anything waiting on this command goes out first, so it lands in
+        # this command's window exactly as a late reply would.
+        for held, trigger in self.hold.items():
+            if trigger == command and held in self.held:
+                self._push(self.held.pop(held))
+        reply = self.replies.get(command)
         if reply is None:
             return
         payload = self.noise + reply
-        wait = self.delays.get(bytes(data)[0], self.delay)
+        if command in self.hold:
+            self.held[command] = payload
+            return
+        wait = self.delays.get(command, self.delay)
         if wait or self.chunk_delay:
             asyncio.get_event_loop().create_task(self._deliver(payload, wait))
         else:
