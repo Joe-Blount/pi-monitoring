@@ -91,15 +91,30 @@ def test_discharging_and_charging_records_disagree_only_where_expected():
 
 
 def test_a_direction_that_is_neither_charging_nor_discharging_is_refused():
-    """Two values are known. A third means this is not the direction field."""
-    out = qinglan.parse({qinglan.LIVE: fx.live_frame(charging=7)})
-    assert "charging" not in out
-    assert "shunt_amps" not in out
-    assert "rejected_fields" in out
+    """Two values are known. A third means this is not the direction field.
+
+    Dropping the field and publishing the rest would show a dashboard a
+    healthy reading with the current simply absent, which is worse than no
+    reading at all.
+    """
+    with pytest.raises(DriverError) as raised:
+        qinglan.parse({qinglan.LIVE: fx.live_frame(charging=7)})
+    assert "not what it is taken to be" in str(raised.value)
 
 
-def test_the_running_time_counter_advances_once_a_minute():
-    """Measured across the timed series rather than assumed."""
+def test_a_resting_bank_reads_zero_rather_than_negative_zero():
+    out = qinglan.parse({qinglan.LIVE: fx.live_frame(amps=0.0, charging=0)})
+    assert out["shunt_amps"] == 0.0
+    assert "-0" not in lineproto.line("blind1", {}, {"a": out["shunt_amps"]}, 1)
+
+
+def test_the_running_time_counter_advances_at_about_one_a_minute():
+    """A loose bound on the fixtures, not the evidence for the unit.
+
+    The rate was measured live, where the counter held one value across two
+    samples and changed 59 seconds apart. These fixtures span 88.7 seconds
+    and only show it is minutes rather than seconds or hours.
+    """
     records = [fx.frame(text) for text in fx.REAL_CHARGING_SERIES]
     first = qinglan.parse({qinglan.LIVE: records[0]})["running_time_minutes"]
     last = qinglan.parse({qinglan.LIVE: records[-1]})["running_time_minutes"]
@@ -519,12 +534,12 @@ def test_a_reading_that_lost_a_cross_check_input_is_refused_whole():
         with pytest.raises(DriverError) as raised:
             qinglan.parse({qinglan.LIVE: shifted,
                            qinglan.SETTINGS: fx.settings_frame()})
-        assert "cannot be checked against itself" in str(raised.value)
+        assert "not what it is taken to be" in str(raised.value)
 
     with pytest.raises(DriverError) as raised:
         qinglan.parse({qinglan.LIVE: fx.live_frame(),
                        qinglan.SETTINGS: fx.settings_frame(capacity_ah=6553.5)})
-    assert "cannot be checked against itself" in str(raised.value)
+    assert "not what it is taken to be" in str(raised.value)
 
 
 def test_a_second_read_is_refused_while_the_first_is_still_stuck():

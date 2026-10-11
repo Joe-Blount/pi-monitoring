@@ -177,18 +177,23 @@ devices:
       timeout: 40s            # a cold BLE connect routinely takes 10 to 40s
 
   - name: shunt
-    driver: ble_shunt
+    driver: qinglan             # also accepted as ble_shunt
     mode: controller
     tags: {location: battery}
     params:
       address: "AA:BB:CC:DD:EE:FF"
-      poll_every: 30s
-      hold_connection: false
-      timeout: 40s
-      # Positive current means charging. Verify against reality before
-      # trusting any derived load figure: the sign depends on which way the
-      # shunt was wired.
-      charge_is_positive: true
+      # Part of every request. A request carrying the wrong one is ignored
+      # in silence, so a shunt at the factory default looks dead to anyone
+      # who does not know the number.
+      device_address: 1
+      # A total budget for scanning, connecting and reading. The driver
+      # allows five seconds past it before abandoning a read outright.
+      timeout: 25s
+      settle: 2s
+      # Current is published signed, positive into the battery. The shunt
+      # reports a magnitude and a direction separately and the driver
+      # combines them, so the sign comes from the device rather than from
+      # how it was wired and needs no setting here.
 
   - name: host
     driver: host

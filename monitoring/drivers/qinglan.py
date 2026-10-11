@@ -178,8 +178,8 @@ FIELDS = (
     # the current last changed direction, but that is not proven, so the
     # name says what it measures and not what it means.
     Field("running_time_minutes", LIVE, 16, 4, low=0.0, high=4.3e9),
-    # 1 charging, 0 discharging. Anything else means this is not what it
-    # was taken to be, and the reading is refused rather than guessed at.
+    # 1 charging, 0 discharging. Only those two values are known, so a
+    # third means the layout moved and the whole reading is refused.
     Field("charging", LIVE, 20, 2, low=0.0, high=1.0),
     Field("state_of_charge_pct", LIVE, 22, 1, low=0.0, high=100.0),
 
@@ -201,6 +201,14 @@ SOC_TOLERANCE_PCT = 5.0
 #: unanswered leaves nothing to check and is reported as such.
 CROSS_CHECK_FIELDS = frozenset(
     ("remaining_capacity_ah", "configured_capacity_ah", "state_of_charge_pct"))
+
+#: Fields whose implausibility says the record is not what it was taken to
+#: be, rather than one number being odd. Dropping one of these and
+#: publishing the rest would leave a dashboard looking healthy with the
+#: current missing, which is the quiet failure this driver exists to avoid.
+#: The direction is here because only two values are known: a third means
+#: the layout moved, and then nothing read from it can be trusted.
+REFUSE_IF_REJECTED = frozenset(CROSS_CHECK_FIELDS | {"charging"})
 
 
 def request(command, address):
@@ -317,7 +325,9 @@ def parse(messages):
     magnitude = out.pop("amps_magnitude", None)
     charging = out.get("charging")
     if magnitude is not None and charging is not None:
-        out["shunt_amps"] = magnitude if charging else -magnitude
+        # Written this way so a resting bank reads 0.0 rather than -0.0,
+        # which is the same number and looks like a sign bug on a dashboard.
+        out["shunt_amps"] = magnitude if charging else 0.0 - magnitude
     elif magnitude is not None:
         rejected.append("amps_magnitude=%g with no direction" % magnitude)
 
@@ -351,11 +361,11 @@ def parse(messages):
     # does that: remaining capacity goes out of range, the check never runs,
     # and a plausible-looking voltage and current are published anyway. So a
     # reading that lost a cross-check input is refused whole.
-    missing = CROSS_CHECK_FIELDS & rejected_names
-    if missing:
+    refused = REFUSE_IF_REJECTED & rejected_names
+    if refused:
         raise DriverError(
-            "%s out of range, so the reading cannot be checked against "
-            "itself and is not trusted" % ", ".join(sorted(missing)))
+            "%s out of range, so the record is not what it is taken to be "
+            "and nothing read from it is trusted" % ", ".join(sorted(refused)))
 
     out["commands_unanswered"] = float(len(messages.get(UNANSWERED) or []))
     if rejected:
