@@ -192,8 +192,136 @@ def test_no_write_command_appears_anywhere_in_the_driver():
 
 
 def test_a_reading_never_puts_a_write_command_on_the_wire():
-    transport = fx.FakeTransport(fx.real_messages())
-    driver = build(transport=transport)
+    """Asserted against the bytes the exchange actually writes.
+
+    Checking what a replaced transport was asked for proves nothing: the
+    request encoding and every write live below that seam. This drives the
+    real exchange against a stand-in radio and reads the wire.
+    """
+    client = radio()
+    driver = build(transport=transport_using(client))
     driver.read()
     driver.raw()
-    assert not set(transport.asked) & set(WRITE_COMMANDS)
+    assert client.writes, "the exchange wrote nothing, so this proves nothing"
+    for written in client.writes:
+        assert len(written) == 2
+        assert written[0] not in WRITE_COMMANDS
+        assert written[0] in qinglan.FRAME_LENGTH
+        assert written[1] == fx.REAL_ADDRESS
+
+
+# -- the exchange, driven against a stand-in radio -------------------------
+
+def radio(**kwargs):
+    kwargs.setdefault("replies", {
+        qinglan.LIVE: fx.frame(fx.REAL_LIVE_SERIES[0]),
+        qinglan.SETTINGS: fx.frame(fx.REAL_SETTINGS),
+        qinglan.ACCUMULATED: fx.frame(fx.REAL_ACCUMULATED),
+        qinglan.PASSWORD: fx.frame(fx.REAL_PASSWORD),
+    })
+    return fx.FakeClient("C8:47:80:52:16:A9", 1.0, **kwargs)
+
+
+def transport_using(client, timeout=1.0, settle=0.01):
+    return qinglan._BleakTransport(
+        "C8:47:80:52:16:A9", fx.REAL_ADDRESS, timeout, settle, client)
+
+
+def test_the_exchange_writes_the_command_and_the_bus_address():
+    client = radio()
+    transport_using(client).exchange((qinglan.LIVE,))
+    assert client.writes == [b"\xfb\x01"]
+
+
+def test_a_record_split_across_many_notifications_is_rejoined():
+    """The longest record does not fit one packet at the negotiated size."""
+    client = radio(chunk=7)
+    messages = transport_using(client).exchange((qinglan.ACCUMULATED,))
+    assert messages[qinglan.ACCUMULATED] == fx.frame(fx.REAL_ACCUMULATED)
+
+
+def test_a_reply_that_arrives_late_does_not_spoil_the_next_record():
+    """A record is found by its own command byte, not by what came first."""
+    client = radio(delay=0.05)
+    messages = transport_using(client, settle=0.2).exchange(
+        (qinglan.LIVE, qinglan.SETTINGS))
+    assert messages[qinglan.LIVE] == fx.frame(fx.REAL_LIVE_SERIES[0])
+    assert messages[qinglan.SETTINGS] == fx.frame(fx.REAL_SETTINGS)
+
+
+def test_traffic_that_answers_nothing_is_stepped_over():
+    client = radio(noise=b"\x11\x22\x33\x44")
+    messages = transport_using(client).exchange((qinglan.LIVE,))
+    assert messages[qinglan.LIVE] == fx.frame(fx.REAL_LIVE_SERIES[0])
+
+
+def test_a_device_that_chatters_cannot_grow_the_reader_without_limit():
+    """Memory is the scarce thing on the machine this runs on."""
+    chatter = 100000
+    client = radio(replies={qinglan.LIVE: b"\x11" * chatter}, chunk=1000)
+    transport = transport_using(client)
+    with pytest.raises(DriverError):
+        transport.exchange((qinglan.LIVE,))
+    assert transport.peak_buffer <= qinglan.MAX_BUFFER_BYTES
+    assert transport.peak_buffer < chatter
+    assert transport.overflowed > 0
+
+
+def test_a_record_that_starts_after_a_quiet_gap_is_still_gathered():
+    """A device slower than one gap must not be abandoned before it speaks."""
+    client = radio(delay=0.08)
+    messages = transport_using(client, settle=0.05).exchange((qinglan.LIVE,))
+    assert messages[qinglan.LIVE] == fx.frame(fx.REAL_LIVE_SERIES[0])
+
+
+def test_a_record_dribbling_in_with_gaps_between_pieces_is_gathered():
+    """Each piece that arrives is progress, so the waiting starts over.
+
+    Counting gaps without resetting them abandons a record that is still
+    arriving, which loses a reading that was most of the way there.
+    """
+    client = radio(chunk=6, chunk_delay=0.08)
+    messages = transport_using(client, settle=0.05).exchange((qinglan.LIVE,))
+    assert messages[qinglan.LIVE] == fx.frame(fx.REAL_LIVE_SERIES[0])
+
+
+def test_a_silent_device_gives_up_rather_than_waiting_for_ever():
+    client = radio(silent=True)
+    with pytest.raises(DriverError) as raised:
+        transport_using(client, timeout=2.0).exchange((qinglan.LIVE,))
+    assert "answered nothing" in str(raised.value)
+
+
+def test_a_radio_that_never_connects_is_abandoned_at_the_deadline():
+    """The installer runs a check with telegraf stopped and no timeout.
+
+    A stall there leaves the node silent until somebody reaches it, so the
+    deadline has to live in the driver. The call is watched from another
+    thread, so that losing the deadline fails this test rather than hanging
+    it: a test that hangs stops the suite instead of reporting.
+    """
+    import threading
+    outcome = []
+
+    def attempt():
+        try:
+            transport_using(radio(hang=True), timeout=0.3).exchange(
+                (qinglan.LIVE,))
+            outcome.append(None)
+        except DriverError as exc:
+            outcome.append(exc)
+
+    watcher = threading.Thread(target=attempt, daemon=True)
+    watcher.start()
+    watcher.join(timeout=10.0)
+
+    assert not watcher.is_alive(), "the exchange ran past its own deadline"
+    assert outcome and outcome[0] is not None
+    assert "abandoned" in str(outcome[0])
+
+
+def test_one_command_answering_and_one_not_is_reported_not_hidden():
+    client = radio(replies={qinglan.LIVE: fx.frame(fx.REAL_LIVE_SERIES[0])})
+    messages = transport_using(client).exchange(
+        (qinglan.LIVE, qinglan.SETTINGS))
+    assert messages[qinglan.UNANSWERED] == [qinglan.SETTINGS]

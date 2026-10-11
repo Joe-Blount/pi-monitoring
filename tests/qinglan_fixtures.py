@@ -94,6 +94,81 @@ def settings_frame(capacity_ah=REAL_CAPACITY_AH,
     return bytes(body)
 
 
+class FakeClient:
+    """Stands in for a bleak client, so the real exchange runs as written.
+
+    A transport replaced wholesale proves nothing about the bytes that reach
+    a radio. This replaces only the radio, which leaves the request encoding,
+    the reassembly and the giving-up in the code under test.
+    """
+
+    #: Every write the exchange performed, in order, exactly as sent.
+    def __init__(self, address, timeout, replies=None, chunk=20, delay=0.0,
+                 chunk_delay=0.0, noise=b"", silent=False, hang=False):
+        self.address = address
+        self.timeout = timeout
+        self.replies = dict(replies or {})
+        self.chunk = chunk
+        self.delay = delay
+        self.chunk_delay = chunk_delay
+        self.noise = noise
+        self.silent = silent
+        self.hang = hang
+        self.writes = []
+        self.notify = None
+        self.entered = False
+        self.exited = False
+
+    def __call__(self, address, timeout):
+        return self
+
+    async def __aenter__(self):
+        import asyncio
+        if self.hang:
+            await asyncio.sleep(3600)
+        self.entered = True
+        return self
+
+    async def __aexit__(self, *_):
+        self.exited = True
+        return False
+
+    async def start_notify(self, _uuid, callback):
+        self.notify = callback
+
+    async def stop_notify(self, _uuid):
+        self.notify = None
+
+    async def write_gatt_char(self, _uuid, data, response=True):
+        import asyncio
+        self.writes.append(bytes(data))
+        if self.silent:
+            return
+        reply = self.replies.get(bytes(data)[0])
+        if reply is None:
+            return
+        payload = self.noise + reply
+        if self.delay or self.chunk_delay:
+            asyncio.get_event_loop().create_task(self._deliver(payload))
+        else:
+            self._push(payload)
+
+    async def _deliver(self, payload):
+        import asyncio
+        if self.delay:
+            await asyncio.sleep(self.delay)
+        if not self.chunk_delay:
+            self._push(payload)
+            return
+        for start in range(0, len(payload), self.chunk):
+            self.notify(None, payload[start:start + self.chunk])
+            await asyncio.sleep(self.chunk_delay)
+
+    def _push(self, payload):
+        for start in range(0, len(payload), self.chunk):
+            self.notify(None, payload[start:start + self.chunk])
+
+
 class FakeTransport:
     """Hands back prepared replies, with no Bluetooth stack involved."""
 

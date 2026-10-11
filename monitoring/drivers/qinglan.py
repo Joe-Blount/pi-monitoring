@@ -90,6 +90,20 @@ IDENTITY_COMMAND = PASSWORD
 #: a command byte: no device sends this.
 UNANSWERED = "unanswered"
 
+#: How much unrecognised traffic the reader will hold before discarding it.
+#: A faulty module that chatters would otherwise grow this without limit, on
+#: a machine with a few hundred megabytes of memory and nobody nearby to
+#: reboot it. Several times the longest reply, so a real record is never lost
+#: to the cap.
+MAX_BUFFER_BYTES = 8 * max(FRAME_LENGTH.values())
+
+#: Quiet gaps to allow before deciding a command brought no reply. Counted in
+#: gaps rather than measured as one deadline, and reset whenever anything
+#: arrives, so a record that takes many notifications is gathered in full
+#: while a silent command still gives up quickly and leaves time for the
+#: next one.
+REPLY_GAPS = 3
+
 
 class Field:
     """One value inside a reply frame.
@@ -275,7 +289,8 @@ class QinlanDriver(Driver):
 
     def _exchange(self, commands):
         transport = self.transport or _BleakTransport(
-            self.address, self.device_address, self.timeout, self.settle)
+            self.address, self.device_address, self.timeout, self.settle,
+            self.params.get("client_factory"))
         try:
             return transport.exchange(commands)
         finally:
@@ -320,23 +335,57 @@ class _BleakTransport:
     are, and the radio is where the slowness is.
     """
 
-    def __init__(self, address, device_address, timeout, settle):
+    def __init__(self, address, device_address, timeout, settle,
+                 client_factory=None):
         self.address = address
         self.device_address = device_address
         self.timeout = timeout
         self.settle = settle
+        # Injected by the tests, so that the exchange below is exercised as
+        # written rather than replaced. Production builds a bleak client.
+        self.client_factory = client_factory
+        #: The most bytes ever held at once, and how often the cap had to
+        #: throw traffic away. Kept because a module that chatters is a real
+        #: fault on a machine with little memory, and "it grew" is the only
+        #: evidence of it after the fact.
+        self.peak_buffer = 0
+        self.overflowed = 0
 
     def exchange(self, commands):
         import asyncio
-        return asyncio.run(self._exchange(commands))
+        return asyncio.run(self._guarded(commands))
 
-    async def _exchange(self, commands):
+    async def _guarded(self, commands):
+        """Run the exchange under one hard deadline.
+
+        Scanning, connecting, writing and waiting are all inside it. Without
+        this, a radio that accepts a connection and then stops answering
+        leaves the collector running forever. That is survivable under
+        telegraf, which kills the process, but the installer runs a check
+        with telegraf stopped and no timeout of its own, so a stall there
+        leaves the whole node silent until somebody drives out to it.
+        """
+        import asyncio
+        try:
+            return await asyncio.wait_for(self._exchange(commands),
+                                          timeout=self.timeout)
+        except asyncio.TimeoutError:
+            raise DriverError(
+                "%s did not finish within %g seconds, so the attempt was "
+                "abandoned rather than left running"
+                % (self.address, self.timeout))
+
+    def _client(self):
+        if self.client_factory is not None:
+            return self.client_factory(self.address, self.timeout)
         try:
             from bleak import BleakClient
         except ImportError:
             raise DriverError(
                 "the qinglan driver needs bleak (apt install python3-bleak)")
+        return BleakClient(self.address, timeout=self.timeout)
 
+    async def _exchange(self, commands):
         import asyncio
 
         messages = {}
@@ -347,26 +396,28 @@ class _BleakTransport:
         def on_notify(_sender, data):
             # A reply longer than the negotiated packet size arrives in
             # pieces, with no terminator to mark the end. The sizes are fixed
-            # and known, so the reader gathers until it has the whole record.
+            # and known, so the reader gathers until it holds a whole record.
             buffer.extend(bytes(data))
+            if len(buffer) > MAX_BUFFER_BYTES:
+                self.overflowed += 1
+                del buffer[:-MAX_BUFFER_BYTES]
+            self.peak_buffer = max(self.peak_buffer, len(buffer))
             arrived.set()
 
         try:
-            async with BleakClient(self.address, timeout=self.timeout) as client:
+            async with self._client() as client:
                 await client.start_notify(IO_UUID, on_notify)
                 for command in commands:
-                    buffer.clear()
                     await client.write_gatt_char(
                         IO_UUID, request(command, self.device_address),
                         response=True)
-                    await self._wait_for_quiet(arrived)
-                    frame = bytes(buffer)
-                    reason = frame_is_valid(frame, command, self.device_address)
+                    frame = await self._reply(command, buffer, arrived)
+                    reason = (frame_is_valid(frame, command,
+                                             self.device_address)
+                              if frame else "no reply")
                     if reason:
-                        if frame:
-                            sys.stderr.write(
-                                "%s: reply to %#04x rejected: %s\n"
-                                % (self.address, command, reason))
+                        sys.stderr.write("%s: no usable reply to %#04x: %s\n"
+                                         % (self.address, command, reason))
                         unanswered.append(command)
                         continue
                     messages[command] = frame
@@ -375,6 +426,11 @@ class _BleakTransport:
             raise
         except Exception as exc:
             raise DriverError("cannot read %s: %s" % (self.address, exc))
+
+        if self.overflowed:
+            sys.stderr.write(
+                "%s: discarded unrecognised traffic %d time(s)\n"
+                % (self.address, self.overflowed))
 
         if not messages:
             raise DriverError(
@@ -390,17 +446,38 @@ class _BleakTransport:
 
         return messages
 
-    async def _wait_for_quiet(self, arrived):
-        """Wait until the pieces stop arriving, rather than for a byte count."""
+    async def _reply(self, command, buffer, arrived):
+        """Gather one whole record, or give up on this command.
+
+        Waiting for a quiet gap instead was wrong twice over. A device that
+        takes longer than the gap to begin answering was abandoned while its
+        reply was still coming, and that reply then arrived inside the next
+        command's window and spoiled a record that would otherwise have been
+        good. Reading to a known length removes both, because every reply
+        here is a fixed size and starts with the command it answers.
+        """
         import asyncio
-        deadline = self.timeout
-        while deadline > 0:
+        expected = FRAME_LENGTH.get(command)
+        quiet_gaps = 0
+        while True:
+            # Anything not starting this reply is the tail of an earlier one,
+            # or noise. Drop it rather than let it shift the record.
+            while buffer and buffer[0] != command:
+                del buffer[0]
+            if expected is not None and len(buffer) >= expected:
+                frame = bytes(buffer[:expected])
+                del buffer[:expected]
+                return frame
+            if quiet_gaps >= REPLY_GAPS:
+                return None
             arrived.clear()
             try:
                 await asyncio.wait_for(arrived.wait(), timeout=self.settle)
+                # Something arrived, so the device is still answering. Keep
+                # gathering however many pieces the record takes.
+                quiet_gaps = 0
             except asyncio.TimeoutError:
-                return
-            deadline -= self.settle
+                quiet_gaps += 1
 
     def close(self):
         """Nothing to release: the connection closes with its context."""
