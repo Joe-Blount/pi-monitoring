@@ -45,12 +45,15 @@ twice:
 * Reported state of charge matches remaining capacity divided by configured
   capacity.
 
-The sign of the current is NOT established. Every sample seen so far was
-taken while the bank was discharging, so no field has been observed changing
-to mean the other direction. Rather than guess, this driver publishes the
-magnitude under a name that says so, and publishes the two candidate fields
-raw. A day of daylight settles it, and until then nothing here claims a
-direction it cannot support.
+The direction is bytes 20 and 21, read as one value: 1 while charging, 0
+while discharging. Confirmed the same way as the magnitude. Over four
+samples 29.6 seconds apart with the bank charging, remaining capacity rose
+by 0.210, 0.210 and 0.209 Ah, which is 25.6, 25.6 and 25.5 A, while the
+current field read 25.5 to 25.8 A. Every discharging sample reads 0 there
+and loses capacity at the matching rate.
+
+Current is published signed, positive into the battery, which is what the
+charge controller and the battery management systems here already do.
 
 The twenty-five commands that write a value are deliberately absent. They
 include the factory reset, the accumulated-data clear and the zero-current
@@ -162,19 +165,23 @@ class Field:
 #: Bounds are deliberately wide. They exist to catch an offset that is wrong
 #: by a byte, not to judge the health of a battery.
 FIELDS = (
-    # Magnitude only. See the module docstring: the direction is not known.
-    Field("shunt_amps_abs", LIVE, 2, 2, scale=0.01, low=0.0, high=600.0),
+    # Magnitude. The sign comes from the direction field below, and the
+    # signed value is what gets published.
+    Field("amps_magnitude", LIVE, 2, 2, scale=0.01, low=0.0, high=600.0),
     Field("shunt_volts", LIVE, 4, 2, scale=0.01, low=4.0, high=120.0),
     Field("starter_volts", LIVE, 6, 2, scale=0.01, low=0.0, high=120.0),
     Field("cumulative_energy_wh", LIVE, 8, 4, scale=1.0, low=0.0, high=1e9),
     Field("remaining_capacity_ah", LIVE, 12, 4, scale=0.001, low=0.0, high=2000.0),
-    # Advances at about one per minute, so running time in minutes is the
-    # best reading of it. Published raw rather than converted, because a
-    # converted value that is wrong looks right on a dashboard.
-    Field("counter_raw", LIVE, 16, 4, low=0.0, high=4.3e9),
+    # Counted up once every 59 seconds across a timed series, so minutes.
+    # The application calls it running time. What it counts from is not
+    # established: two separate observations put the origin at the moment
+    # the current last changed direction, but that is not proven, so the
+    # name says what it measures and not what it means.
+    Field("running_time_minutes", LIVE, 16, 4, low=0.0, high=4.3e9),
+    # 1 charging, 0 discharging. Anything else means this is not what it
+    # was taken to be, and the reading is refused rather than guessed at.
+    Field("charging", LIVE, 20, 2, low=0.0, high=1.0),
     Field("state_of_charge_pct", LIVE, 22, 1, low=0.0, high=100.0),
-    # One of the two candidates for the charge or discharge flag.
-    Field("direction_raw", LIVE, 23, 1, low=0.0, high=255.0),
 
     Field("configured_capacity_ah", SETTINGS, 2, 2, scale=0.1,
           low=1.0, high=6500.0),
@@ -303,6 +310,16 @@ def parse(messages):
         elif value is not None:
             rejected.append("%s=%g" % (field.name, value))
             rejected_names.add(field.name)
+
+    # Current, signed, positive into the battery. The device reports a
+    # magnitude and a direction separately, and a magnitude on its own
+    # invites a dashboard to add a discharge to a charge.
+    magnitude = out.pop("amps_magnitude", None)
+    charging = out.get("charging")
+    if magnitude is not None and charging is not None:
+        out["shunt_amps"] = magnitude if charging else -magnitude
+    elif magnitude is not None:
+        rejected.append("amps_magnitude=%g with no direction" % magnitude)
 
     # Voltage is the anchor for trusting the rest. Current cannot be
     # range-checked usefully, because a resting bank really does read near

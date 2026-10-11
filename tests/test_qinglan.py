@@ -26,7 +26,8 @@ def build(messages=None, **params):
 def test_real_capture_reads_the_values_the_application_showed():
     out = qinglan.parse(fx.real_messages())
     assert out["shunt_volts"] == pytest.approx(fx.REAL_VOLTS)
-    assert out["shunt_amps_abs"] == pytest.approx(fx.REAL_AMPS)
+    assert out["shunt_amps"] == pytest.approx(-fx.REAL_AMPS)
+    assert out["charging"] == 0.0
     assert out["remaining_capacity_ah"] == pytest.approx(fx.REAL_REMAINING_AH)
     assert out["state_of_charge_pct"] == pytest.approx(fx.REAL_STATE_OF_CHARGE)
     assert out["configured_capacity_ah"] == pytest.approx(fx.REAL_CAPACITY_AH)
@@ -53,11 +54,62 @@ def test_remaining_capacity_falls_at_the_rate_the_current_field_implies():
         drawn_ah = (before["remaining_capacity_ah"]
                     - after["remaining_capacity_ah"])
         implied_amps = drawn_ah * 3600.0 / interval_seconds
-        assert implied_amps == pytest.approx(before["shunt_amps_abs"], rel=0.1)
+        assert implied_amps == pytest.approx(-before["shunt_amps"], rel=0.1)
+
+
+def test_a_charging_bank_reports_current_into_the_battery():
+    """The sign, proved the same way the magnitude was.
+
+    Remaining capacity rises while charging, and it must rise at the rate
+    the current field implies. Those come from different offsets with
+    different scalings, so their agreement is what confirms the direction
+    rather than an assumption about which byte means what.
+    """
+    records = [fx.frame(text) for text in fx.REAL_CHARGING_SERIES]
+    for earlier, later in zip(records, records[1:]):
+        before = qinglan.parse({qinglan.LIVE: earlier})
+        after = qinglan.parse({qinglan.LIVE: later})
+        assert before["charging"] == 1.0
+        assert before["shunt_amps"] > 0, "charging must read positive"
+        gained_ah = (after["remaining_capacity_ah"]
+                     - before["remaining_capacity_ah"])
+        assert gained_ah > 0, "remaining capacity must rise while charging"
+        implied = gained_ah * 3600.0 / fx.CHARGING_INTERVAL_SECONDS
+        assert implied == pytest.approx(before["shunt_amps"], rel=0.1)
+
+
+def test_discharging_and_charging_records_disagree_only_where_expected():
+    """The direction field is the thing that changes, not the layout."""
+    discharging = qinglan.parse({qinglan.LIVE: fx.frame(fx.REAL_LIVE_SERIES[0])})
+    charging = qinglan.parse({qinglan.LIVE: fx.frame(fx.REAL_CHARGING_SERIES[0])})
+    assert discharging["charging"] == 0.0
+    assert charging["charging"] == 1.0
+    assert discharging["shunt_amps"] < 0 < charging["shunt_amps"]
+    # Both still read a sane voltage from the same offset.
+    for reading in (discharging, charging):
+        assert 12.0 < reading["shunt_volts"] < 15.0
+
+
+def test_a_direction_that_is_neither_charging_nor_discharging_is_refused():
+    """Two values are known. A third means this is not the direction field."""
+    out = qinglan.parse({qinglan.LIVE: fx.live_frame(charging=7)})
+    assert "charging" not in out
+    assert "shunt_amps" not in out
+    assert "rejected_fields" in out
+
+
+def test_the_running_time_counter_advances_once_a_minute():
+    """Measured across the timed series rather than assumed."""
+    records = [fx.frame(text) for text in fx.REAL_CHARGING_SERIES]
+    first = qinglan.parse({qinglan.LIVE: records[0]})["running_time_minutes"]
+    last = qinglan.parse({qinglan.LIVE: records[-1]})["running_time_minutes"]
+    span = fx.CHARGING_INTERVAL_SECONDS * (len(records) - 1)
+    assert (last - first) == pytest.approx(span / 60.0, abs=1.0)
 
 
 def test_every_captured_record_carries_the_configured_bus_address():
-    for text in fx.REAL_LIVE_SERIES + [fx.REAL_SETTINGS, fx.REAL_ACCUMULATED]:
+    for text in (fx.REAL_LIVE_SERIES + fx.REAL_CHARGING_SERIES
+                 + [fx.REAL_SETTINGS, fx.REAL_ACCUMULATED]):
         record = fx.frame(text)
         assert record[1] == fx.REAL_ADDRESS
 
@@ -118,6 +170,7 @@ def test_a_reading_without_a_plausible_voltage_is_refused():
 def test_an_implausible_value_is_dropped_rather_than_published():
     out = qinglan.parse({qinglan.LIVE: fx.live_frame(amps=0.0,
                                                      remaining_ah=0.0)})
+    assert out["shunt_amps"] == 0.0
     assert out["shunt_volts"] == pytest.approx(fx.REAL_VOLTS)
     assert "rejected_fields" not in out
 

@@ -20,6 +20,21 @@ REAL_LIVE_SERIES = [
     "fb 01 03 cc 05 23 00 00 00 02 5b c0 00 06 49 5f 00 00 00 95 00 00 4f 00",
 ]
 
+#: Captured from the same shunt the next afternoon, charging at about
+#: 25.6 A. Four records 29.6 seconds apart. Remaining capacity rises by
+#: 0.210, 0.210 and 0.209 Ah between them, which is 25.6, 25.6 and 25.5 A,
+#: while the current field reads 25.6, 25.5, 25.6 and 25.8. Bytes 20 and 21
+#: read 0x0001 throughout, where every discharging record reads 0x0000.
+REAL_CHARGING_SERIES = [
+    "fb 01 0a 02 05 5f 00 00 00 02 65 8a 00 05 65 bb 00 00 00 f5 00 01 44 00",
+    "fb 01 09 f9 05 5e 00 00 00 02 65 8d 00 05 66 8d 00 00 00 f6 00 01 44 00",
+    "fb 01 0a 02 05 5f 00 00 00 02 65 90 00 05 67 5f 00 00 00 f6 00 01 44 00",
+    "fb 01 0a 15 05 5e 00 00 00 02 65 93 00 05 68 30 00 00 00 f7 00 01 44 00",
+]
+
+#: Seconds between the charging records above, measured rather than asked for.
+CHARGING_INTERVAL_SECONDS = 29.57
+
 #: The settings record from the same shunt. Configured capacity reads 520.0
 #: Ah and the shunt rating reads 500 A, both of which the site already knows
 #: by other means.
@@ -65,7 +80,7 @@ def real_messages():
 
 def live_frame(amps=REAL_AMPS, volts=REAL_VOLTS, starter_volts=0.0,
                energy_wh=154558, remaining_ah=REAL_REMAINING_AH,
-               counter=148, state_of_charge=79, direction=0,
+               counter=148, state_of_charge=79, charging=0,
                address=REAL_ADDRESS):
     """A live record built from values rather than from bytes."""
     body = bytearray(qinglan.FRAME_LENGTH[qinglan.LIVE])
@@ -77,8 +92,8 @@ def live_frame(amps=REAL_AMPS, volts=REAL_VOLTS, starter_volts=0.0,
     body[8:12] = int(energy_wh).to_bytes(4, "big")
     body[12:16] = int(round(remaining_ah * 1000)).to_bytes(4, "big")
     body[16:20] = int(counter).to_bytes(4, "big")
+    body[20:22] = int(charging).to_bytes(2, "big")
     body[22] = state_of_charge
-    body[23] = direction
     return bytes(body)
 
 
