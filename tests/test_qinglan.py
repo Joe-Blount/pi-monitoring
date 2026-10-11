@@ -247,8 +247,10 @@ def test_a_reply_that_arrives_too_late_does_not_spoil_the_next_record():
     given up on and its reply lands inside the second command's window. The
     second record must still be read.
     """
-    client = radio(delay=0.3, delay_only={qinglan.LIVE})
-    messages = transport_using(client, timeout=5.0, settle=0.02).exchange(
+    # The first reply lands after its own window closed but before the
+    # second reply, so it is sitting in the buffer when the second is read.
+    client = radio(delays={qinglan.LIVE: 0.20, qinglan.SETTINGS: 0.10})
+    messages = transport_using(client, timeout=5.0, settle=0.05).exchange(
         (qinglan.LIVE, qinglan.SETTINGS))
     assert messages[qinglan.SETTINGS] == fx.frame(fx.REAL_SETTINGS)
     assert qinglan.LIVE not in messages

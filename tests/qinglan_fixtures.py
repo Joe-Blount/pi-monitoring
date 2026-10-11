@@ -106,7 +106,7 @@ class FakeClient:
     def __init__(self, address, timeout, replies=None, chunk=20, delay=0.0,
                  chunk_delay=0.0, noise=b"", silent=False, hang=False,
                  hang_on_exit=False, hang_on_write=False,
-                 delay_only=None):
+                 delays=None):
         self.address = address
         self.timeout = timeout
         self.replies = dict(replies or {})
@@ -118,8 +118,9 @@ class FakeClient:
         self.hang = hang
         self.hang_on_exit = hang_on_exit
         self.hang_on_write = hang_on_write
-        # Commands whose reply is delayed. None means all of them.
-        self.delay_only = delay_only
+        # Per-command delivery delay, which is what lets a test put one
+        # command's reply inside another command's window.
+        self.delays = dict(delays or {})
         self.writes = []
         self.notify = None
         self.entered = False
@@ -162,16 +163,16 @@ class FakeClient:
         if reply is None:
             return
         payload = self.noise + reply
-        slow = self.delay_only is None or bytes(data)[0] in self.delay_only
-        if (self.delay and slow) or self.chunk_delay:
-            asyncio.get_event_loop().create_task(self._deliver(payload, slow))
+        wait = self.delays.get(bytes(data)[0], self.delay)
+        if wait or self.chunk_delay:
+            asyncio.get_event_loop().create_task(self._deliver(payload, wait))
         else:
             self._push(payload)
 
-    async def _deliver(self, payload, slow=True):
+    async def _deliver(self, payload, wait=0.0):
         import asyncio
-        if self.delay and slow:
-            await asyncio.sleep(self.delay)
+        if wait:
+            await asyncio.sleep(wait)
         if not self.chunk_delay:
             self._push(payload)
             return
