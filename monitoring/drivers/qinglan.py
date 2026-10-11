@@ -203,6 +203,50 @@ def frame_is_valid(frame, command, address):
     return None
 
 
+def take_frame(buffer, command, address):
+    """Pull one valid reply out of the buffer, or return None.
+
+    Taking the first command byte found is not enough. A command byte is an
+    ordinary value that also occurs inside a payload: a current of 2.54 A is
+    0x00FE, and 0xFE is the settings command. The tail of an earlier reply
+    sitting in the buffer therefore offers false starts, and locking on to
+    one consumes part of the real reply and loses both.
+
+    So every candidate is validated, and one that fails is stepped past
+    rather than ending the search, because the real reply may be behind it.
+
+    Bytes before the chosen candidate are discarded. A candidate that is
+    still arriving is kept, because the rest of it may yet come.
+
+    There is no checksum in this protocol, so a payload that happens to hold
+    the right command and address followed by enough bytes cannot be told
+    from a reply here. That is what the plausibility bounds and the
+    cross-check in parse() are for: the last defence against a wrong number
+    is refusing to publish it, not framing.
+    """
+    expected = FRAME_LENGTH.get(command)
+    if expected is None:
+        return None
+
+    start = 0
+    while start < len(buffer):
+        # A fast path only. Validation below rejects the same positions, so
+        # removing this changes how long the scan takes and nothing else.
+        if buffer[start] != command:
+            start += 1
+            continue
+        if len(buffer) - start < expected:
+            break                       # a candidate that is still arriving
+        candidate = bytes(buffer[start:start + expected])
+        if frame_is_valid(candidate, command, address) is None:
+            del buffer[:start + expected]
+            return candidate
+        start += 1                      # a false start; look behind it
+
+    del buffer[:start]
+    return None
+
+
 def password(frame):
     """The communication password the device reports, as written."""
     if not frame or len(frame) < FRAME_LENGTH[PASSWORD]:
@@ -497,16 +541,10 @@ class _BleakTransport:
         here is a fixed size and starts with the command it answers.
         """
         import asyncio
-        expected = FRAME_LENGTH.get(command)
         quiet_gaps = 0
         while True:
-            # Anything not starting this reply is the tail of an earlier one,
-            # or noise. Drop it rather than let it shift the record.
-            while buffer and buffer[0] != command:
-                del buffer[0]
-            if expected is not None and len(buffer) >= expected:
-                frame = bytes(buffer[:expected])
-                del buffer[:expected]
+            frame = take_frame(buffer, command, self.device_address)
+            if frame is not None:
                 return frame
             if quiet_gaps >= REPLY_GAPS:
                 return None

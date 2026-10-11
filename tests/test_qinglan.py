@@ -259,6 +259,56 @@ def test_a_reply_that_arrives_too_late_does_not_spoil_the_next_record():
     assert messages[qinglan.UNANSWERED] == [qinglan.LIVE]
 
 
+def test_a_command_byte_inside_a_stale_payload_is_not_mistaken_for_a_reply():
+    """A command byte is an ordinary value that also occurs in payloads.
+
+    A current of 2.54 A is 0x00FE, and 0xFE is the settings command. The
+    tail of an earlier reply therefore offers a false start, and locking on
+    to it would consume part of the real reply and lose both.
+    """
+    decoy = fx.live_frame(amps=2.54)
+    assert bytes(decoy).count(qinglan.SETTINGS) > 0, "this test needs a decoy"
+    client = radio(replies={qinglan.LIVE: decoy,
+                            qinglan.SETTINGS: fx.frame(fx.REAL_SETTINGS)},
+                   hold={qinglan.LIVE: qinglan.SETTINGS})
+    messages = transport_using(client, timeout=5.0, settle=0.02).exchange(
+        (qinglan.LIVE, qinglan.SETTINGS))
+    assert messages[qinglan.SETTINGS] == fx.frame(fx.REAL_SETTINGS)
+
+
+def test_a_decoy_that_passes_framing_is_refused_by_the_parser():
+    """Framing cannot be perfect without a checksum, so parsing is the guard.
+
+    A payload holding the settings command followed by the device address
+    cannot be told from a settings reply. What must never happen is a wrong
+    number reaching the database, and that is the parser's job.
+    """
+    decoy = fx.live_frame(amps=650.25)          # 65025 is 0xFE01
+    assert bytes(decoy).find(bytes([qinglan.SETTINGS, fx.REAL_ADDRESS])) > 0
+    client = radio(replies={qinglan.LIVE: decoy,
+                            qinglan.SETTINGS: fx.frame(fx.REAL_SETTINGS)},
+                   hold={qinglan.LIVE: qinglan.SETTINGS})
+    messages = transport_using(client, timeout=5.0, settle=0.02).exchange(
+        (qinglan.LIVE, qinglan.SETTINGS))
+    settings = messages.get(qinglan.SETTINGS)
+    if settings == fx.frame(fx.REAL_SETTINGS):
+        return                                   # framing stepped past it
+    # Framing was fooled, so nothing wrong may be published.
+    with pytest.raises(DriverError):
+        qinglan.parse({qinglan.LIVE: fx.frame(fx.REAL_LIVE_SERIES[0]),
+                       qinglan.SETTINGS: settings})
+
+
+def test_a_reply_from_another_address_is_stepped_past_not_locked_onto():
+    stray = fx.live_frame(address=5)
+    client = radio(replies={qinglan.LIVE: stray,
+                            qinglan.SETTINGS: fx.frame(fx.REAL_SETTINGS)},
+                   hold={qinglan.LIVE: qinglan.SETTINGS})
+    messages = transport_using(client, timeout=5.0, settle=0.02).exchange(
+        (qinglan.LIVE, qinglan.SETTINGS))
+    assert messages[qinglan.SETTINGS] == fx.frame(fx.REAL_SETTINGS)
+
+
 def test_traffic_that_answers_nothing_is_stepped_over():
     client = radio(noise=b"\x11\x22\x33\x44")
     messages = transport_using(client).exchange((qinglan.LIVE,))
