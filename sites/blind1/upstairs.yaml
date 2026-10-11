@@ -119,11 +119,13 @@ devices:
       # in silence, which is what made this device look dead.
       device_address: 1
       # A total budget for scanning, connecting and reading, not a per-step
-      # timeout. The slow devices on this node share one process and one
-      # 120 second telegraf timeout, and telegraf discards the whole output
-      # when it kills the process, so a shunt that overruns would also throw
-      # away the battery reading taken before it. This shunt answers in well
-      # under a second once connected.
+      # timeout. The driver allows a further five seconds past it before
+      # abandoning a read outright, so the real worst case here is thirty
+      # seconds. The slow devices on this node share one process and one 120
+      # second telegraf timeout, and telegraf discards the whole output when
+      # it kills the process, so a shunt that overran would also throw away
+      # the battery reading taken before it. This shunt answers in well under
+      # a second once connected.
       timeout: 25s
       settle: 2s
 

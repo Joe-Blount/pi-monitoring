@@ -110,6 +110,15 @@ REPLY_GAPS = 3
 #: down a Bluetooth connection waits on the system bus.
 JOIN_GRACE_SECONDS = 5.0
 
+#: Reads that were abandoned and are still running, by device address.
+#: A one-shot collection abandons at most one and then exits. A controller
+#: loop would call back every few seconds, and each abandoned read keeps a
+#: thread, an event loop and a Bluetooth connection alive, with the stale
+#: connection blocking the next one to the same device. So a second read is
+#: refused while the first has not returned, which bounds the damage to one
+#: and makes the fault visible instead of silently stacking.
+_ABANDONED = {}
+
 
 class Field:
     """One value inside a reply frame.
@@ -179,9 +188,28 @@ FIELDS = (
 #: moved, which is the failure this check exists to catch.
 SOC_TOLERANCE_PCT = 5.0
 
+#: The fields the cross-check needs. If one of these is read but refused,
+#: the check cannot run, and a reading that cannot be checked is not
+#: published. Absent is different from refused: a command that went
+#: unanswered leaves nothing to check and is reported as such.
+CROSS_CHECK_FIELDS = frozenset(
+    ("remaining_capacity_ah", "configured_capacity_ah", "state_of_charge_pct"))
+
 
 def request(command, address):
-    """Build one request: the command and the device's bus address."""
+    """Build one request: the command and the device's bus address.
+
+    Only the four commands that ask for a record can be encoded. The other
+    twenty-five set or clear something, and among them are the factory
+    reset, the accumulated-data clear and the zero-current calibration,
+    which destroy counter history that cannot be recovered. Refusing here
+    means no caller can send one, whatever it passes, rather than relying on
+    every caller to be careful.
+    """
+    if command not in FRAME_LENGTH:
+        raise DriverError(
+            "%#04x is not a read command, and this driver sends no others"
+            % command)
     if not MIN_ADDRESS <= address <= MAX_ADDRESS:
         raise DriverError(
             "device address %r is outside %d to %d"
@@ -263,6 +291,7 @@ def parse(messages):
     """
     out = {}
     rejected = []
+    rejected_names = set()
 
     for field in FIELDS:
         frame = messages.get(field.command)
@@ -273,6 +302,7 @@ def parse(messages):
             out[field.name] = value
         elif value is not None:
             rejected.append("%s=%g" % (field.name, value))
+            rejected_names.add(field.name)
 
     # Voltage is the anchor for trusting the rest. Current cannot be
     # range-checked usefully, because a resting bank really does read near
@@ -298,6 +328,17 @@ def parse(messages):
                 "(%.0f%%), so an offset has moved"
                 % (reported, remaining, capacity, implied))
         out["implied_state_of_charge_pct"] = round(implied, 1)
+
+    # A cross-check that was skipped proves nothing, and it is skipped
+    # exactly when one of its inputs was refused. A layout shifted by a byte
+    # does that: remaining capacity goes out of range, the check never runs,
+    # and a plausible-looking voltage and current are published anyway. So a
+    # reading that lost a cross-check input is refused whole.
+    missing = CROSS_CHECK_FIELDS & rejected_names
+    if missing:
+        raise DriverError(
+            "%s out of range, so the reading cannot be checked against "
+            "itself and is not trusted" % ", ".join(sorted(missing)))
 
     out["commands_unanswered"] = float(len(messages.get(UNANSWERED) or []))
     if rejected:
@@ -416,6 +457,15 @@ class _BleakTransport:
         """
         import threading
 
+        stuck = _ABANDONED.get(self.address)
+        if stuck is not None:
+            if stuck.is_alive():
+                raise DriverError(
+                    "an earlier read of %s has still not returned, so this "
+                    "one was not started. The radio or the system bus is "
+                    "wedged" % self.address)
+            del _ABANDONED[self.address]
+
         box = {}
 
         def work():
@@ -431,6 +481,7 @@ class _BleakTransport:
         worker.join(self.timeout + JOIN_GRACE_SECONDS)
 
         if worker.is_alive():
+            _ABANDONED[self.address] = worker
             raise DriverError(
                 "%s did not return within %g seconds even after its deadline, "
                 "so it was abandoned rather than allowed to hold this node"
@@ -456,7 +507,7 @@ class _BleakTransport:
         except asyncio.TimeoutError:
             raise DriverError(
                 "%s did not finish within %g seconds, so the attempt was "
-                "abandoned rather than left running"
+                "given up rather than left running"
                 % (self.address, self.timeout))
 
     def _client(self):

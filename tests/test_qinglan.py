@@ -6,6 +6,14 @@ from monitoring.drivers.base import DriverError
 from tests import qinglan_fixtures as fx
 
 
+@pytest.fixture(autouse=True)
+def no_abandoned_reads_between_tests():
+    """The stuck-read guard is per device address and outlives one test."""
+    qinglan._ABANDONED.clear()
+    yield
+    qinglan._ABANDONED.clear()
+
+
 def build(messages=None, **params):
     params.setdefault("address", "C8:47:80:52:16:A9")
     params.setdefault("transport",
@@ -113,12 +121,14 @@ def test_an_implausible_value_is_dropped_rather_than_published():
     assert out["shunt_volts"] == pytest.approx(fx.REAL_VOLTS)
     assert "rejected_fields" not in out
 
-    # A capacity beyond anything this device can be configured for is a moved
-    # offset, not a very large battery.
+    # A rating beyond anything this device is built as is a moved offset,
+    # not a very large shunt. The cross-check does not use it, so the rest
+    # of the reading still stands.
     out = qinglan.parse({qinglan.LIVE: fx.live_frame(),
-                         qinglan.SETTINGS: fx.settings_frame(capacity_ah=6553.5)})
-    assert "configured_capacity_ah" not in out
+                         qinglan.SETTINGS: fx.settings_frame(rating_amps=1001)})
+    assert "shunt_rating_amps" not in out
     assert "rejected_fields" in out
+    assert out["shunt_volts"] == pytest.approx(fx.REAL_VOLTS)
 
 
 def test_every_published_number_is_a_float():
@@ -202,6 +212,7 @@ def test_a_reading_never_puts_a_write_command_on_the_wire():
     driver = build(transport=transport_using(client))
     driver.read()
     driver.raw()
+    driver.check()
     assert client.writes, "the exchange wrote nothing, so this proves nothing"
     for written in client.writes:
         assert len(written) == 2
@@ -361,6 +372,7 @@ def test_a_radio_that_never_connects_is_abandoned_at_the_deadline():
     it: a test that hangs stops the suite instead of reporting.
     """
     import threading
+    import time
     outcome = []
 
     def attempt():
@@ -371,13 +383,18 @@ def test_a_radio_that_never_connects_is_abandoned_at_the_deadline():
         except DriverError as exc:
             outcome.append(exc)
 
+    started = time.monotonic()
     watcher = threading.Thread(target=attempt, daemon=True)
     watcher.start()
     watcher.join(timeout=10.0)
 
     assert not watcher.is_alive(), "the exchange ran past its own deadline"
     assert outcome and outcome[0] is not None
-    assert "abandoned" in str(outcome[0])
+    # The deadline, not the backstop behind it. Both end the attempt, but
+    # only one of them cancels and disconnects cleanly, and a test that
+    # accepts either proves the clean path still exists when it does not.
+    assert "did not finish within" in str(outcome[0])
+    assert time.monotonic() - started < qinglan.JOIN_GRACE_SECONDS
 
 
 def test_a_radio_that_stalls_even_while_disconnecting_is_let_go(monkeypatch):
@@ -416,3 +433,71 @@ def test_one_command_answering_and_one_not_is_reported_not_hidden():
     messages = transport_using(client).exchange(
         (qinglan.LIVE, qinglan.SETTINGS))
     assert messages[qinglan.UNANSWERED] == [qinglan.SETTINGS]
+
+
+def test_only_a_read_command_can_be_encoded_at_all():
+    """A structural guard, so no caller can send a destructive command.
+
+    Checking what the driver happens to send covers the paths that exist
+    today. Refusing to build the bytes covers the ones somebody adds later.
+    """
+    for command in WRITE_COMMANDS:
+        with pytest.raises(DriverError) as raised:
+            qinglan.request(command, fx.REAL_ADDRESS)
+        assert "not a read command" in str(raised.value)
+    for command in qinglan.FRAME_LENGTH:
+        assert qinglan.request(command, fx.REAL_ADDRESS)[0] == command
+
+
+def test_a_reading_that_lost_a_cross_check_input_is_refused_whole():
+    """A check that was skipped proves nothing.
+
+    A layout shifted by a byte puts remaining capacity out of range, which
+    is exactly what stops the cross-check running, so without this the
+    reading would publish a plausible voltage and current and claim success.
+    """
+    # In range and consistent, so it is published and checked as usual.
+    assert "remaining_capacity_ah" in qinglan.parse(
+        {qinglan.LIVE: fx.live_frame(), qinglan.SETTINGS: fx.settings_frame()})
+
+    for shifted in (fx.live_frame(remaining_ah=4000.0), ):
+        with pytest.raises(DriverError) as raised:
+            qinglan.parse({qinglan.LIVE: shifted,
+                           qinglan.SETTINGS: fx.settings_frame()})
+        assert "cannot be checked against itself" in str(raised.value)
+
+    with pytest.raises(DriverError) as raised:
+        qinglan.parse({qinglan.LIVE: fx.live_frame(),
+                       qinglan.SETTINGS: fx.settings_frame(capacity_ah=6553.5)})
+    assert "cannot be checked against itself" in str(raised.value)
+
+
+def test_a_second_read_is_refused_while_the_first_is_still_stuck():
+    """A controller loop would otherwise stack an abandoned read every tick.
+
+    Each one keeps a thread, an event loop and a Bluetooth connection, and
+    the stale connection blocks the next one to the same device.
+    """
+    import threading
+    import time
+    first, second = [], []
+
+    def run(box, client):
+        try:
+            transport_using(client, timeout=0.2).exchange((qinglan.LIVE,))
+        except DriverError as exc:
+            box.append(exc)
+
+    # Stall the teardown too, so the read is truly abandoned rather than
+    # cancelled cleanly. Only an abandoned read leaves a thread behind.
+    stuck = radio(hang_on_write=True, hang_on_exit=True)
+    watcher = threading.Thread(target=run, args=(first, stuck), daemon=True)
+    watcher.start()
+    watcher.join(timeout=20.0)
+    assert first and "abandoned" in str(first[0])
+
+    started = time.monotonic()
+    run(second, radio())
+    assert second, "the second read should have been refused"
+    assert "has still not returned" in str(second[0])
+    assert time.monotonic() - started < 1.0, "it waited instead of refusing"

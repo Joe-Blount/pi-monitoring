@@ -93,9 +93,10 @@ devices:
     params:
       address: "C8:47:80:52:16:A9"
       device_address: 1               # part of every request
-      poll_every: 30s
-      hold_connection: false
-      timeout: 40s
+      # Connect, read and disconnect each time. The device allows one
+      # connection at a time, so holding it locks the phone application out.
+      timeout: 25s
+      settle: 2s
       # The driver publishes the current as a magnitude, because no sample
       # has yet been taken while the bank charged and so no field has been
       # seen changing to mean the other direction. Until one is, nothing
