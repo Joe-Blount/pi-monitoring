@@ -29,7 +29,85 @@ if [[ "$(id -u)" != "0" ]]; then
     exit 2
 fi
 
+# Telegraf is stopped for two reasons below, and must come back however this
+# script ends. Without a trap it stays stopped after a hang that the owner
+# interrupts, after a dropped connection delivers SIGHUP, and after the kernel
+# kills this shell for memory. All three leave the node silent with no error
+# anywhere, and the machine is an hour away.
+TELEGRAF_WAS_RUNNING=0
+TELEGRAF_STOPPED=0
+
+stop_telegraf_once() {
+    [[ "$TELEGRAF_STOPPED" == "1" ]] && return 0
+    if systemctl is-active --quiet telegraf; then
+        TELEGRAF_WAS_RUNNING=1
+        systemctl stop telegraf || true
+    fi
+    TELEGRAF_STOPPED=1
+}
+
+restore_telegraf() {
+    if [[ "$TELEGRAF_WAS_RUNNING" == "1" ]] \
+       && ! systemctl is-active --quiet telegraf; then
+        echo "==> putting telegraf back" >&2
+        systemctl start telegraf || true
+    fi
+}
+
+trap 'rc=$?; restore_telegraf; exit $rc' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+
+# Memory the kernel thinks a new process could actually get. Free memory is
+# not the number: most of it is page cache the kernel hands back on demand.
+available_mb() {
+    awk '/^MemAvailable:/ {printf "%d", $2 / 1024; found = 1}
+         END {if (!found) print 0}' /proc/meminfo 2>/dev/null || echo 0
+}
+
+# Below this, pip is refused. Its resolver is far heavier than apt, and the
+# one recorded lock-up on the 418 MB machine was package work overlapping a
+# Bluetooth scan. Stopping telegraf first removes the overlap; this guards
+# the rest.
+PIP_MIN_AVAILABLE_MB=300
+
+echo "==> installing from"
+if git -C "$REPO" rev-parse --short HEAD >/dev/null 2>&1; then
+    echo "    commit $(git -C "$REPO" rev-parse --short HEAD)"
+    if [[ -n "$(git -C "$REPO" status --porcelain 2>/dev/null)" ]]; then
+        echo "    WARNING: this checkout has uncommitted changes, so what is"
+        echo "             about to run is not what is in the repository:" >&2
+        git -C "$REPO" status --short 2>/dev/null | sed "s/^/             /" >&2
+    fi
+else
+    echo "    not a git checkout"
+fi
+
 echo "==> packages"
+
+# Every package install goes through one of these two, and both stop telegraf
+# first. Routing them rather than trusting each call site is the point: apt
+# running beside a Bluetooth scan is the one recorded way this script has
+# locked up a machine, and a locked machine needs somebody to drive to it. A
+# call added later cannot forget.
+install_from_apt() {
+    stop_telegraf_once
+    apt-get install -y --no-install-recommends "$1" >/dev/null 2>&1
+}
+
+#: Returned when there is not enough memory to risk pip, as distinct from pip
+#: running and failing.
+PIP_REFUSED=3
+
+install_from_pip() {
+    stop_telegraf_once
+    if [[ "$(available_mb)" -lt "$PIP_MIN_AVAILABLE_MB" ]]; then
+        return "$PIP_REFUSED"
+    fi
+    pip3 install --quiet "$1" >/dev/null 2>&1
+}
+
 # python3-yaml is the only hard requirement, and it comes first because the
 # steps after it read the node file. Drivers that need more pull their own
 # packages in as they are written, so a sensors-only node stays small.
@@ -38,7 +116,7 @@ if python3 -c "import yaml" 2>/dev/null; then
 else
     # Deliberately not fatal: a site with no uplink today must still be able
     # to take a code update.
-    apt-get install -y --no-install-recommends python3-yaml >/dev/null \
+    install_from_apt python3-yaml \
         || echo "    WARNING: could not install python3-yaml. Nothing will run"
 fi
 
@@ -81,16 +159,29 @@ case "$NEED_BLUETOOTH" in
 yes)
     if python3 -c "import bleak" 2>/dev/null; then
         echo "    bleak already present"
-    elif apt-get install -y --no-install-recommends python3-bleak >/dev/null 2>&1; then
+    elif install_from_apt python3-bleak; then
         echo "    python3-bleak installed from apt"
-    elif pip3 install --quiet bleak >/dev/null 2>&1; then
+    else
         # Not packaged before Debian 12, and one of these machines runs 11.
         # Both sites have an uplink, so pip is a real fallback, and Debian 11
         # has no externally-managed restriction to argue with.
-        echo "    bleak installed with pip, which this release needs"
-    else
-        echo "    WARNING: could not install bleak, so Bluetooth devices will"
-        echo "             fail with 'needs bleak'. Try: pip3 install bleak"
+        install_from_pip bleak
+        case "$?" in
+        0)
+            echo "    bleak installed with pip, which this release needs"
+            ;;
+        "$PIP_REFUSED")
+            echo "    WARNING: only $(available_mb) MB available, so pip was"
+            echo "             not run. Its resolver is heavy and has locked"
+            echo "             up a small machine before. Install"
+            echo "             python3-bleak by hand when there is room."
+            ;;
+        *)
+            echo "    WARNING: could not install bleak, so Bluetooth devices"
+            echo "             will fail with 'needs bleak'. Try:"
+            echo "             pip3 install bleak"
+            ;;
+        esac
     fi
     ;;
 no)
@@ -177,8 +268,13 @@ install -d -m 0755 /etc/telegraf/telegraf.d
 # keep running a collector for hardware that is no longer declared.
 rm -f /etc/telegraf/telegraf.d/pi-monitoring.conf
 rm -f /etc/telegraf/telegraf.d/pi-monitoring-*.conf
-# The old generic names, removed once so an existing installation is tidied.
+# The old generic names, removed so an existing installation is tidied. Both
+# spellings matter: an earlier version of this script wrote
+# monitoring-<node>-*.conf, and leaving one behind beside its pi-monitoring
+# replacement starts two execd children for one device. They then fight over
+# the serial port and the GPIO and restart every ten seconds for ever.
 rm -f /etc/telegraf/telegraf.d/monitoring.conf
+rm -f /etc/telegraf/telegraf.d/monitoring-*.conf
 
 # Poll devices: one exec input for the whole node, common to every machine.
 install -m 0644 "$REPO/deploy/telegraf.d/monitoring.conf" \
@@ -238,19 +334,26 @@ runuser -u telegraf -- /opt/monitoring/bin/collect \
 echo "==> checking devices"
 # telegraf's resident children hold the GPIO pins and serial ports. Probing
 # while they run gives false failures and steals bytes from a live stream.
-if systemctl is-active --quiet telegraf; then
-    systemctl stop telegraf
-    telegraf_was_running=1
-fi
+stop_telegraf_once
 # A warning, never a refusal. A dead five dollar sensor must not block a
 # software update at a site nobody can reach; it fails loudly at runtime.
 # As telegraf, not as root. Root can read a repository under a 0700 home
 # directory that telegraf cannot, so checking as root would pass and every
 # collection afterwards would fail.
-if ! runuser -u telegraf -- /opt/monitoring/bin/collect \
+# Bounded, because this runs with telegraf stopped. Most drivers here have no
+# deadline of their own, and a device that accepts a connection and then stops
+# answering would otherwise hold the whole node silent until somebody noticed.
+CHECK_TIMEOUT=240
+if ! timeout "$CHECK_TIMEOUT" runuser -u telegraf -- /opt/monitoring/bin/collect \
         --node /etc/monitoring/node.yaml --check; then
-    echo "    some devices failed. Continuing: this is a warning, because a"
-    echo "    dead sensor must not block an update at a site nobody can reach."
+    status=$?
+    if [[ "$status" == "124" ]]; then
+        echo "    the device check did not finish within ${CHECK_TIMEOUT}s and was" >&2
+        echo "    stopped. Continuing, so telegraf comes back either way." >&2
+    else
+        echo "    some devices failed. Continuing: this is a warning, because a"
+        echo "    dead sensor must not block an update at a site nobody can reach."
+    fi
 fi
 
 echo "==> restarting telegraf"

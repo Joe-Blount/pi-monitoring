@@ -304,3 +304,88 @@ def test_the_credentials_file_is_readable_by_the_service_that_needs_it():
     assert "chown root:telegraf /etc/monitoring/influx.env" in doc
     assert "chmod 640 /etc/monitoring/influx.env" in doc
     assert "chmod 600 /etc/monitoring/influx.env" not in doc
+
+
+# -- surviving an upgrade --------------------------------------------------
+
+def test_telegraf_is_put_back_however_the_installer_ends():
+    """A hang the owner interrupts, a dropped connection, or an out of
+    memory kill must not leave the node silent.
+
+    None of those is a command failing, so set -e does not cover them, and
+    the script stops telegraf in the middle. Only a trap puts it back.
+    """
+    script = INSTALL
+    assert "trap 'rc=$?; restore_telegraf; exit $rc' EXIT" in script
+    for signal in ("INT", "TERM", "HUP"):
+        assert "trap 'exit" in script and signal in script, signal
+    assert "systemctl start telegraf" in script
+
+
+def test_every_package_install_goes_through_a_helper_that_stops_telegraf():
+    """apt beside a Bluetooth scan is the one recorded way this script has
+    locked up a machine, and a locked machine needs a visit.
+
+    Checked structurally rather than by ordering lines. Ordering passes as
+    long as some earlier stop exists anywhere, which a call added later in a
+    different branch would satisfy while still running beside a collector.
+    Routing every install through one of two helpers cannot be forgotten.
+    """
+    lines = [l for l in INSTALL.splitlines() if not l.strip().startswith("#")]
+    installers = [l for l in lines
+                  if "apt-get install" in l or "pip3 install --quiet" in l]
+    assert len(installers) == 2, (
+        "expected exactly the two helper bodies, found: %s" % installers)
+
+    for helper in ("install_from_apt()", "install_from_pip()"):
+        start = next(i for i, l in enumerate(lines) if l.startswith(helper))
+        # To the closing brace, not a fixed number of lines. A window that
+        # runs past the end finds the next function's stop and passes.
+        end = next(i for i, l in enumerate(lines[start:], start) if l == "}")
+        body = lines[start:end]
+        assert any("stop_telegraf_once" in l for l in body), helper
+        assert any("apt-get install" in l or "pip3 install" in l
+                   for l in body), helper
+
+
+def test_the_heaviest_package_path_is_refused_when_memory_is_short():
+    script = INSTALL
+    assert "PIP_MIN_AVAILABLE_MB" in script
+    assert "MemAvailable" in script, "free memory is the wrong number to read"
+
+
+def test_the_device_check_cannot_run_for_ever_with_telegraf_stopped():
+    """Most drivers here have no deadline of their own."""
+    script = INSTALL
+    assert "timeout \"$CHECK_TIMEOUT\" runuser" in script
+
+
+def test_every_fragment_name_this_project_has_ever_written_is_removed():
+    """Rolling back across the rename would otherwise start two execd
+    children for one device, which fight over the port and restart for ever.
+    """
+    script = INSTALL
+    for pattern in ("pi-monitoring.conf", "pi-monitoring-*.conf",
+                    "monitoring.conf", "monitoring-*.conf"):
+        assert "rm -f /etc/telegraf/telegraf.d/%s" % pattern in script, pattern
+
+
+def test_the_installer_says_which_commit_it_installed():
+    """A pull that failed still lets the install report success."""
+    script = INSTALL
+    assert "rev-parse --short HEAD" in script
+    assert "status --porcelain" in script
+
+
+def test_the_credentials_example_agrees_with_the_bringup_guide():
+    """Owned root:root at mode 600, telegraf starts and sends nothing.
+
+    That happened. The guide explains it; the example used to contradict it,
+    which is how a fixed failure gets reinstalled by someone following the
+    instructions.
+    """
+    example = (REPO / "influx.env.example").read_text()
+    assert "chown root:telegraf" in example
+    assert "chmod 640" in example
+    assert "chmod 600" not in example
+    assert "chown root:root" not in example
