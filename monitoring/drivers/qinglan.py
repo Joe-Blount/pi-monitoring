@@ -64,7 +64,7 @@ device exists to keep.
 import sys
 
 from ..duration import seconds as _seconds
-from .base import Driver, DriverError, required
+from .base import Driver, DriverError, required, run_abandonable
 
 SERVICE_UUID = "0000ffe0-0000-1000-8000-00805f9b34fb"
 #: Written to and subscribed on. This device uses one characteristic for
@@ -107,20 +107,6 @@ MAX_BUFFER_BYTES = 8 * max(FRAME_LENGTH.values())
 #: next one.
 REPLY_GAPS = 3
 
-#: Extra time allowed past the exchange's own deadline before the attempt is
-#: abandoned outright. The deadline normally fires first; this covers the
-#: case where cancelling the exchange is itself what hangs, because tearing
-#: down a Bluetooth connection waits on the system bus.
-JOIN_GRACE_SECONDS = 5.0
-
-#: Reads that were abandoned and are still running, by device address.
-#: A one-shot collection abandons at most one and then exits. A controller
-#: loop would call back every few seconds, and each abandoned read keeps a
-#: thread, an event loop and a Bluetooth connection alive, with the stale
-#: connection blocking the next one to the same device. So a second read is
-#: refused while the first has not returned, which bounds the damage to one
-#: and makes the fault visible instead of silently stacking.
-_ABANDONED = {}
 
 
 class Field:
@@ -472,51 +458,14 @@ class _BleakTransport:
     def exchange(self, commands):
         """Run the exchange on a thread this call is willing to abandon.
 
-        The deadline inside the exchange is not enough on its own. Cancelling
-        a coroutine waits for its cleanup, and disconnecting a Bluetooth
-        client waits on the system bus, which is exactly the thing that is
-        already wedged when the deadline fires. So the inner deadline can
-        itself overrun, and the caller must not depend on it.
-
-        The thread is a daemon, so a radio that never returns cannot keep
-        the collector alive. A collection abandons at most one and then
-        exits. A caller that reads repeatedly is held to the same one by the
-        guard below, which refuses a second read while the first is stuck.
+        See run_abandonable: the deadline inside the exchange cannot be
+        relied on, because cancelling it waits on the same system bus that
+        is already wedged when it fires.
         """
-        import threading
-
-        stuck = _ABANDONED.get(self.address)
-        if stuck is not None:
-            if stuck.is_alive():
-                raise DriverError(
-                    "an earlier read of %s has still not returned, so this "
-                    "one was not started. The radio or the system bus is "
-                    "wedged" % self.address)
-            del _ABANDONED[self.address]
-
-        box = {}
-
-        def work():
-            import asyncio
-            try:
-                box["result"] = asyncio.run(self._guarded(commands))
-            except BaseException as exc:          # noqa: BLE001
-                box["error"] = exc
-
-        worker = threading.Thread(target=work, daemon=True,
-                                  name="qinglan-%s" % self.address)
-        worker.start()
-        worker.join(self.timeout + JOIN_GRACE_SECONDS)
-
-        if worker.is_alive():
-            _ABANDONED[self.address] = worker
-            raise DriverError(
-                "%s did not return within %g seconds even after its deadline, "
-                "so it was abandoned rather than allowed to hold this node"
-                % (self.address, self.timeout + JOIN_GRACE_SECONDS))
-        if "error" in box:
-            raise box["error"]
-        return box["result"]
+        import asyncio
+        return run_abandonable(
+            self.address, self.timeout,
+            lambda: asyncio.run(self._guarded(commands)))
 
     async def _guarded(self, commands):
         """Run the exchange under one hard deadline.

@@ -52,7 +52,7 @@ import struct
 import sys
 
 from ..duration import seconds as _seconds
-from .base import Driver, DriverError, required
+from .base import Driver, DriverError, required, run_abandonable
 
 SERVICE_UUID = "0000ffe0-0000-1000-8000-00805f9b34fb"
 NOTIFY_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb"
@@ -436,21 +436,54 @@ class _BleakTransport:
     are, and the radio is where the slowness is.
     """
 
-    def __init__(self, address, timeout, settle):
+    def __init__(self, address, timeout, settle,
+                 client_factory=None):
         self.address = address
         self.timeout = timeout
         self.settle = settle
+        # Injected by the tests, so the exchange is exercised as
+        # written rather than replaced. Production builds a bleak
+        # client, so importing this module needs no radio stack.
+        self.client_factory = client_factory
 
     def exchange(self, wanted):
-        import asyncio
-        return asyncio.run(self._exchange(wanted))
+        """Run the exchange on a thread this call is willing to abandon.
 
-    async def _exchange(self, wanted):
+        Only the connect was ever bounded. Enabling notifications, each
+        write, disabling them again and the disconnect are all unbounded
+        calls on the system bus, and the install script runs a device check
+        with telegraf stopped, so one that hangs there takes the whole node
+        down until somebody notices.
+        """
+        import asyncio
+        return run_abandonable(
+            self.address, self.timeout,
+            lambda: asyncio.run(self._guarded(wanted)))
+
+    async def _guarded(self, wanted):
+        """One deadline over the whole exchange, not just the connect."""
+        import asyncio
+        try:
+            return await asyncio.wait_for(self._exchange(wanted),
+                                          timeout=self.timeout)
+        except asyncio.TimeoutError:
+            raise DriverError(
+                "%s did not finish within %g seconds, so the attempt was "
+                "given up rather than left running"
+                % (self.address, self.timeout))
+
+
+    def _client(self):
+        if self.client_factory is not None:
+            return self.client_factory(self.address, self.timeout)
         try:
             from bleak import BleakClient
         except ImportError:
             raise DriverError(
                 "the abc_bms driver needs bleak (apt install python3-bleak)")
+        return BleakClient(self.address, timeout=self.timeout)
+
+    async def _exchange(self, wanted):
 
         import asyncio
 
@@ -466,7 +499,7 @@ class _BleakTransport:
             arrived.set()
 
         try:
-            async with BleakClient(self.address, timeout=self.timeout) as client:
+            async with self._client() as client:
                 await client.start_notify(NOTIFY_UUID, on_notify)
                 for code, _ in wanted:
                     # What arrived before this command, so the reply to this

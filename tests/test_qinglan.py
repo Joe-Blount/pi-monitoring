@@ -1,7 +1,7 @@
 import pytest
 
 from monitoring import drivers, lineproto
-from monitoring.drivers import qinglan
+from monitoring.drivers import base, qinglan
 from monitoring.drivers.base import DriverError
 from tests import qinglan_fixtures as fx
 
@@ -9,9 +9,9 @@ from tests import qinglan_fixtures as fx
 @pytest.fixture(autouse=True)
 def no_abandoned_reads_between_tests():
     """The stuck-read guard is per device address and outlives one test."""
-    qinglan._ABANDONED.clear()
+    base._ABANDONED.clear()
     yield
-    qinglan._ABANDONED.clear()
+    base._ABANDONED.clear()
 
 
 def build(messages=None, **params):
@@ -464,7 +464,7 @@ def test_a_radio_that_never_connects_is_abandoned_at_the_deadline():
     # only one of them cancels and disconnects cleanly, and a test that
     # accepts either proves the clean path still exists when it does not.
     assert "did not finish within" in str(outcome[0])
-    assert time.monotonic() - started < qinglan.JOIN_GRACE_SECONDS
+    assert time.monotonic() - started < base.JOIN_GRACE_SECONDS
 
 
 def test_a_radio_that_stalls_even_while_disconnecting_is_let_go(monkeypatch):
@@ -476,7 +476,7 @@ def test_a_radio_that_stalls_even_while_disconnecting_is_let_go(monkeypatch):
     """
     import threading
     import time
-    monkeypatch.setattr(qinglan, "JOIN_GRACE_SECONDS", 0.3)
+    monkeypatch.setattr(base, "JOIN_GRACE_SECONDS", 0.3)
     outcome = []
 
     def attempt():

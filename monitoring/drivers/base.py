@@ -90,3 +90,74 @@ def required(params, key, name):
     if key not in params:
         raise DriverError("device %r needs the parameter %r" % (name, key))
     return params[key]
+
+
+#: Extra time allowed past a read's own deadline before it is abandoned
+#: outright. The deadline normally fires first. This covers the case where
+#: cancelling the read is itself what hangs, which is the usual one: tearing
+#: down a connection waits on the system bus, and the bus is what is already
+#: wedged when a deadline fires.
+JOIN_GRACE_SECONDS = 5.0
+
+#: Reads that were abandoned and are still running, keyed by whatever
+#: identifies the device. A one-shot collection abandons at most one and then
+#: exits. A controller loop would call back every few seconds, and each
+#: abandoned read keeps a thread, an event loop and a connection alive, with
+#: the stale connection blocking the next one to the same device. So a second
+#: read is refused while the first has not returned, which bounds the damage
+#: to one and makes the fault visible instead of silently stacking.
+_ABANDONED = {}
+
+
+def run_abandonable(label, budget, work, grace=None):
+    """Run `work` on a thread this call is willing to walk away from.
+
+    A deadline inside the work is not enough on its own. Cancelling a
+    coroutine waits for its cleanup, and closing a device connection waits on
+    the system bus, which is exactly the thing already wedged when the
+    deadline fires. So the inner deadline can overrun itself, and the caller
+    must not depend on it.
+
+    The thread is a daemon, so a device that never returns cannot keep the
+    collector alive. This matters because the install script stops telegraf
+    and then checks every device: a read that hangs there leaves a whole node
+    silent, at a site an hour away, with nothing in any log saying why.
+    """
+    import threading
+
+    # Read at call time, not bound as a default. A default argument is
+    # evaluated once when the function is defined, so the constant above
+    # could never be adjusted, by a test or by anything else.
+    if grace is None:
+        grace = JOIN_GRACE_SECONDS
+
+    stuck = _ABANDONED.get(label)
+    if stuck is not None:
+        if stuck.is_alive():
+            raise DriverError(
+                "an earlier read of %s has still not returned, so this one "
+                "was not started. The device or the system bus is wedged"
+                % label)
+        del _ABANDONED[label]
+
+    box = {}
+
+    def run():
+        try:
+            box["result"] = work()
+        except BaseException as exc:          # noqa: BLE001
+            box["error"] = exc
+
+    worker = threading.Thread(target=run, daemon=True, name="read-%s" % label)
+    worker.start()
+    worker.join(budget + grace)
+
+    if worker.is_alive():
+        _ABANDONED[label] = worker
+        raise DriverError(
+            "%s did not return within %g seconds even after its deadline, so "
+            "it was abandoned rather than allowed to hold this node"
+            % (label, budget + grace))
+    if "error" in box:
+        raise box["error"]
+    return box["result"]
