@@ -41,16 +41,18 @@ What is confirmed, and what is only inferred
 Worth separating, because the two look identical once they are published.
 
 Confirmed: battery voltage, battery current including its sign, battery
-power, PV power, load power, AC output voltage and frequency. Each is held
-in place by an independent reading or by the energy balance.
+power, PV voltage, PV current, PV power, load power, AC output voltage and
+frequency. Each is held in place by an independent reading or by the energy
+balance.
 
-Inferred: how PV power divides between its voltage and current registers.
-Their product is confirmed, but halving one and doubling the other would
-satisfy every check here equally well. 180 V at 14 A is the plausible shape
-for this array; 90 V at 28 A is not, which is the whole of the argument.
-Reading the inverter's own display would settle it in a second.
+PV voltage was the last of those. The product of volts and amps was
+confirmed early, but the split between them was not: halving one and
+doubling the other satisfies every check in this file. It was settled by
+reading the inverter's own front panel, which showed 219 V while the
+register held 2187. Since the product was already established, fixing one
+side fixes the other.
 
-Also inferred: that register 214 is apparent power and 206 is AC output
+Inferred, still: that register 214 is apparent power and 206 is AC output
 current. They were identified from a microwave step, where 120 V times
 11.5 A gives 1380 VA against 1390 reported. At low load they disagree
 badly, 120 V times 1.5 A giving 180 VA against 120 reported, so the current
