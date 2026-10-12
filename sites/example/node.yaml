@@ -174,7 +174,13 @@ devices:
       # time, so holding it open locks the vendor phone app out of the battery
       # while standing next to it.
       hold_connection: false
-      timeout: 40s            # a cold BLE connect routinely takes 10 to 40s
+      # A total budget for the whole exchange: scanning, connecting,
+      # every command and the disconnect. It used to bound only the
+      # connect, so the same number now means something stricter. A
+      # real read of this device takes about nine seconds, and the
+      # node's slow devices together must fit the collector's 120
+      # second timeout, counting five seconds of grace each.
+      timeout: 40s
 
   - name: shunt
     driver: qinglan             # also accepted as ble_shunt

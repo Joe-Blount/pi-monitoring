@@ -35,6 +35,28 @@ one independent reading:
 Those last three are checked again on every read, in parse(), because they
 are the cheapest way to catch a register map that has shifted under a
 firmware update.
+
+What is confirmed, and what is only inferred
+--------------------------------------------
+Worth separating, because the two look identical once they are published.
+
+Confirmed: battery voltage, battery current including its sign, battery
+power, PV power, load power, AC output voltage and frequency. Each is held
+in place by an independent reading or by the energy balance.
+
+Inferred: how PV power divides between its voltage and current registers.
+Their product is confirmed, but halving one and doubling the other would
+satisfy every check here equally well. 180 V at 14 A is the plausible shape
+for this array; 90 V at 28 A is not, which is the whole of the argument.
+Reading the inverter's own display would settle it in a second.
+
+Also inferred: that register 214 is apparent power and 206 is AC output
+current. They were identified from a microwave step, where 120 V times
+11.5 A gives 1380 VA against 1390 reported. At low load they disagree
+badly, 120 V times 1.5 A giving 180 VA against 120 reported, so the current
+register appears to carry an offset near zero. Both are published because
+they are right where it matters, and neither is cross-checked, so treat
+them as approximate below a few hundred watts.
 """
 
 import sys
@@ -97,6 +119,8 @@ class Field:
 #: inverter having a bad day.
 FIELDS = (
     Field("ac_out_volts", 205, 0.1, low=80.0, high=150.0),
+    # Reliable under load and offset near zero. See the docstring: this one
+    # is not cross-checked against anything.
     Field("ac_out_amps", 206, 0.1, low=0.0, high=60.0),
     Field("ac_out_hz", 207, 0.01, low=50.0, high=70.0),
     # Register 213 carries a second, slightly different load figure that has
@@ -166,9 +190,16 @@ def parse_reply(reply, unit, start, count):
     if crc16(reply[:-2]) != reply[-2:]:
         return None, "checksum does not match"
     length = reply[2]
+    # The whole frame, not just the slice. Slicing alone cannot tell a short
+    # frame from a complete one: a reply carrying 18 registers but declaring
+    # 19 yields a slice of the right length made partly of its own checksum,
+    # and those two bytes then decode as a reading.
+    if len(reply) != 3 + length + 2:
+        return None, ("declared %d bytes of registers but the frame holds %d"
+                      % (length, max(0, len(reply) - 5)))
     body = reply[3:3 + length]
-    if len(body) != length or length != count * 2:
-        return None, "expected %d bytes of registers, got %d" % (count * 2, len(body))
+    if length != count * 2:
+        return None, "expected %d bytes of registers, got %d" % (count * 2, length)
     return {start + index // 2: int.from_bytes(body[index:index + 2], "big")
             for index in range(0, length, 2)}, None
 
@@ -202,12 +233,25 @@ def parse(registers):
 
     # Volts times amps must equal watts. Three registers, read independently,
     # that can only agree if all three are where this driver thinks they are.
+    #
+    # A check that cannot run proves nothing, and it is exactly a shifted map
+    # that stops it running: the shift lands an implausible value in one of
+    # the three, or moves one out of the block entirely, and the other two
+    # stay inside their ranges and get published. So a missing input is a
+    # refusal rather than a reason to skip.
     for watts_name, volts_name, amps_name in POWER_CHECKS:
         watts = out.get(watts_name)
         volts = out.get(volts_name)
         amps = out.get(amps_name)
         if watts is None or volts is None or amps is None:
-            continue
+            absent = [name for name, value in
+                      ((watts_name, watts), (volts_name, volts),
+                       (amps_name, amps)) if value is None]
+            raise DriverError(
+                "%s unreadable, so %s cannot be checked against volts times "
+                "amps and nothing read is trusted%s"
+                % (", ".join(absent), watts_name,
+                   "; out of range: " + ", ".join(rejected) if rejected else ""))
         expected = volts * amps
         allowed = max(POWER_TOLERANCE_WATTS,
                       abs(expected) * POWER_TOLERANCE_PCT / 100.0)

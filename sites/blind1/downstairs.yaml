@@ -79,7 +79,13 @@ devices:
     tags: {location: battery}
     params:
       address: "A5:C2:37:4C:80:F7"    # chins320, read off the pack itself
-      timeout: 40s                    # a cold Bluetooth connect takes this
+      # A total budget for the whole exchange: scanning, connecting,
+      # every command and the disconnect. It used to bound only the
+      # connect, so the same number now means something stricter. A
+      # real read of this device takes about nine seconds, and the
+      # node's slow devices together must fit the collector's 120
+      # second timeout, counting five seconds of grace each.
+      timeout: 40s
       settle: 2s                      # quiet gap that marks the end of a reply
 
   # Disabled while the upstairs node polls the shunt instead. It allows one

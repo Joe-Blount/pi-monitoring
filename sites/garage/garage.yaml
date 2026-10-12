@@ -52,14 +52,26 @@ devices:
     mode: poll
     enabled: true
     tags: {location: rack}
-    params: {address: "0B:9F:98:99:13:78"}     # SOK-48V0045
+    params:
+      address: "0B:9F:98:99:13:78"
+      # A total budget for the whole exchange: scanning, connecting,
+      # every command and the disconnect. It used to bound only the
+      # connect, so the same number now means something stricter. A
+      # real read of this device takes about nine seconds, and the
+      # node's slow devices together must fit the collector's 120
+      # second timeout, counting five seconds of grace each.
+      timeout: 40s     # SOK-48V0045
 
   - name: pack2
     driver: abc_bms
     mode: poll
     enabled: true
     tags: {location: rack}
-    params: {address: "20:22:08:05:95:F4"}     # SOK-48V0140
+    params:
+      address: "20:22:08:05:95:F4"
+      # Same budget as the other pack. Two of these plus grace is
+      # 90 seconds against the collector's 120.
+      timeout: 40s     # SOK-48V0140
 
   # The EG4, reached through a USB-to-RS232 adapter with a DB9 male end,
   # which mates with the RJ45-to-DB9 cable that came with the inverter. That

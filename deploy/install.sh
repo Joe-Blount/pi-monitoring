@@ -31,9 +31,13 @@ fi
 
 # Telegraf is stopped for two reasons below, and must come back however this
 # script ends. Without a trap it stays stopped after a hang that the owner
-# interrupts, after a dropped connection delivers SIGHUP, and after the kernel
-# kills this shell for memory. All three leave the node silent with no error
-# anywhere, and the machine is an hour away.
+# interrupts and after a dropped connection delivers SIGHUP, both of which
+# leave the node silent with no error anywhere, an hour from anyone.
+#
+# It does NOT cover the kernel killing this shell for memory. SIGKILL cannot
+# be trapped by anything. That case is handled by not running the package
+# work beside a live collector in the first place, which is what the helpers
+# below are for.
 TELEGRAF_WAS_RUNNING=0
 TELEGRAF_STOPPED=0
 
@@ -47,7 +51,11 @@ stop_telegraf_once() {
 }
 
 restore_telegraf() {
-    if [[ "$TELEGRAF_WAS_RUNNING" == "1" ]] \
+    # Whether or not it was running when this started. The normal path
+    # restarts it unconditionally, and an earlier run of an older version of
+    # this script could have left it stopped, in which case refusing to
+    # start it here keeps the node silent for the same reason twice.
+    if [[ "$TELEGRAF_STOPPED" == "1" ]] \
        && ! systemctl is-active --quiet telegraf; then
         echo "==> putting telegraf back" >&2
         systemctl start telegraf || true
@@ -165,8 +173,13 @@ yes)
         # Not packaged before Debian 12, and one of these machines runs 11.
         # Both sites have an uplink, so pip is a real fallback, and Debian 11
         # has no externally-managed restriction to argue with.
-        install_from_pip bleak
-        case "$?" in
+        # Captured rather than tested directly. Under set -e a non-zero
+        # return from a bare command ends the script, so the refusal this
+        # reports could never be reported: the installer simply exited,
+        # on exactly the low-memory machine the refusal exists for.
+        pip_status=0
+        install_from_pip bleak || pip_status=$?
+        case "$pip_status" in
         0)
             echo "    bleak installed with pip, which this release needs"
             ;;
@@ -344,9 +357,17 @@ stop_telegraf_once
 # deadline of their own, and a device that accepts a connection and then stops
 # answering would otherwise hold the whole node silent until somebody noticed.
 CHECK_TIMEOUT=240
-if ! timeout "$CHECK_TIMEOUT" runuser -u telegraf -- /opt/monitoring/bin/collect \
-        --node /etc/monitoring/node.yaml --check; then
-    status=$?
+# Captured, not read after a negation. After `if ! cmd`, $? holds the result
+# of the negation and is always 0, so the branch below that explains a
+# timeout could never be reached and a killed check reported itself as a
+# dead sensor. --foreground so the timeout stays in this process group and
+# an operator's Ctrl-C reaches what is actually stuck.
+check_status=0
+timeout --foreground "$CHECK_TIMEOUT" runuser -u telegraf -- \
+    /opt/monitoring/bin/collect --node /etc/monitoring/node.yaml --check \
+    || check_status=$?
+if [[ "$check_status" != "0" ]]; then
+    status="$check_status"
     if [[ "$status" == "124" ]]; then
         echo "    the device check did not finish within ${CHECK_TIMEOUT}s and was" >&2
         echo "    stopped. Continuing, so telegraf comes back either way." >&2

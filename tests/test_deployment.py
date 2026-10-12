@@ -139,6 +139,28 @@ def test_the_poll_command_has_room_for_a_retrying_sensor():
 
 
 INSTALL = (REPO / "deploy" / "install.sh").read_text()
+
+#: The installer with comments removed, whole-line and trailing. Every
+#: assertion about what the script does reads this instead. A protection
+#: that has been commented out still appears in the raw text, so searching
+#: the raw text would accept a script that no longer does the thing.
+#:
+#: Trailing comments matter as much as whole lines: replacing a command with
+#: a no-op and the command text after a hash leaves every naive search
+#: satisfied, which is exactly how this was found to be too weak.
+def _strip_comments(text):
+    out = []
+    for line in text.splitlines():
+        if "'" in line or '"' in line:
+            out.append(line)          # a hash inside a string is not a comment
+            continue
+        line = line.split("#", 1)[0]
+        if line.strip():
+            out.append(line)
+    return "\n".join(out)
+
+
+INSTALL_CODE = _strip_comments(INSTALL)
 INSTALL_FAST = (REPO / "deploy" / "telegraf.d" / "monitoring.conf").read_text()
 INSTALL_SLOW = (REPO / "deploy" / "telegraf.d" / "monitoring-slow.conf").read_text()
 
@@ -315,11 +337,14 @@ def test_telegraf_is_put_back_however_the_installer_ends():
     None of those is a command failing, so set -e does not cover them, and
     the script stops telegraf in the middle. Only a trap puts it back.
     """
-    script = INSTALL
+    script = INSTALL_CODE
     assert "trap 'rc=$?; restore_telegraf; exit $rc' EXIT" in script
     for signal in ("INT", "TERM", "HUP"):
         assert "trap 'exit" in script and signal in script, signal
-    assert "systemctl start telegraf" in script
+    # Inside the restore function, not merely somewhere in the file.
+    restore = script[script.index("restore_telegraf() {"):]
+    restore = restore[:restore.index("\n}")]
+    assert "systemctl start telegraf" in restore
 
 
 def test_every_package_install_goes_through_a_helper_that_stops_telegraf():
@@ -331,7 +356,7 @@ def test_every_package_install_goes_through_a_helper_that_stops_telegraf():
     different branch would satisfy while still running beside a collector.
     Routing every install through one of two helpers cannot be forgotten.
     """
-    lines = [l for l in INSTALL.splitlines() if not l.strip().startswith("#")]
+    lines = INSTALL_CODE.splitlines()
     installers = [l for l in lines
                   if "apt-get install" in l or "pip3 install --quiet" in l]
     assert len(installers) == 2, (
@@ -349,22 +374,34 @@ def test_every_package_install_goes_through_a_helper_that_stops_telegraf():
 
 
 def test_the_heaviest_package_path_is_refused_when_memory_is_short():
-    script = INSTALL
-    assert "PIP_MIN_AVAILABLE_MB" in script
+    script = INSTALL_CODE
     assert "MemAvailable" in script, "free memory is the wrong number to read"
+    # The comparison itself, inside the helper that runs pip, not just a
+    # constant defined somewhere and never consulted.
+    helper = script[script.index("install_from_pip() {"):]
+    helper = helper[:helper.index("\n}")]
+    assert "available_mb" in helper and "PIP_MIN_AVAILABLE_MB" in helper
+    assert "return" in helper, "the guard must stop pip, not just measure"
 
 
 def test_the_device_check_cannot_run_for_ever_with_telegraf_stopped():
     """Most drivers here have no deadline of their own."""
-    script = INSTALL
-    assert "timeout \"$CHECK_TIMEOUT\" runuser" in script
+    script = INSTALL_CODE
+    assert "timeout --foreground \"$CHECK_TIMEOUT\" runuser" in script, (
+        "without --foreground the timeout runs in its own process group and "
+        "an operator's interrupt never reaches what is stuck")
+    # Captured, not read after a negation. After `if ! cmd` the status is
+    # the negation's, always zero, so the branch explaining a timeout could
+    # never run and a killed check reported itself as a dead sensor.
+    assert "|| check_status=$?" in script
+    assert "if ! timeout" not in script
 
 
 def test_every_fragment_name_this_project_has_ever_written_is_removed():
     """Rolling back across the rename would otherwise start two execd
     children for one device, which fight over the port and restart for ever.
     """
-    script = INSTALL
+    script = INSTALL_CODE
     for pattern in ("pi-monitoring.conf", "pi-monitoring-*.conf",
                     "monitoring.conf", "monitoring-*.conf"):
         assert "rm -f /etc/telegraf/telegraf.d/%s" % pattern in script, pattern
@@ -372,7 +409,7 @@ def test_every_fragment_name_this_project_has_ever_written_is_removed():
 
 def test_the_installer_says_which_commit_it_installed():
     """A pull that failed still lets the install report success."""
-    script = INSTALL
+    script = INSTALL_CODE
     assert "rev-parse --short HEAD" in script
     assert "status --porcelain" in script
 
@@ -389,3 +426,39 @@ def test_the_credentials_example_agrees_with_the_bringup_guide():
     assert "chmod 640" in example
     assert "chmod 600" not in example
     assert "chown root:root" not in example
+
+
+def test_no_package_helper_is_called_bare_under_set_e():
+    """set -e ends the script on a non-zero return from a bare command.
+
+    The pip helper returns a distinct status to mean "refused, not enough
+    memory", so that the installer can say so and carry on. Called bare,
+    that return kills the script instead, on exactly the small machine the
+    refusal exists to protect. Every call must be guarded by ||, &&, or an
+    if, so the status reaches the code that reports it.
+    """
+    # Continuations first. A call whose guard sits on the next line after a
+    # backslash is guarded, and reading the lines separately would say
+    # otherwise.
+    joined, pending = [], ""
+    for line in INSTALL_CODE.splitlines():
+        pending += line.rstrip()
+        if pending.endswith("\\"):
+            pending = pending[:-1] + " "
+            continue
+        joined.append(pending)
+        pending = ""
+    if pending:
+        joined.append(pending)
+
+    checked = 0
+    for statement in joined:
+        stripped = statement.strip()
+        if not stripped.startswith(("install_from_apt", "install_from_pip")):
+            continue
+        if stripped.endswith("() {"):
+            continue                       # the definition, not a call
+        checked += 1
+        assert "||" in stripped or "&&" in stripped, (
+            "unguarded under set -e: %s" % stripped)
+    assert checked, "found no calls to check, so this proves nothing"

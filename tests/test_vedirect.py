@@ -412,9 +412,10 @@ def test_a_trickling_line_is_stopped_even_though_it_is_never_idle():
                                  total_limit=10):
             pass
     assert "no complete frame" in str(raised.value)
-    # Stopped near its limit, not after hundreds of simulated seconds. The
-    # clock advances half a second per read, so an unbounded reader would
-    # run away rather than stop.
+    # Stopped near its limit rather than running away. The clock advances
+    # every time the reader consults it, so simulated time climbs with work
+    # done rather than at a fixed rate; the bound is what matters, not the
+    # exact figure.
     assert clock.now < 30, "ran for %.0f simulated seconds" % clock.now
 
 

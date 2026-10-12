@@ -30,11 +30,19 @@ PV_OFF_COMPRESSOR = {
     215: 562, 216: 65284, 217: 64120, 219: 296, 220: 0, 223: 0,
 }
 
-#: Array reconnected, battery recharging. 180.2 V at 14.2 A is 2559 W of
-#: solar, against 2561 W reported.
+#: Array reconnected and settled, battery recharging hard. 55.3 V at 45.5 A
+#: is 2516 W and the register reports exactly 2516. Solar reads 180.7 V at
+#: 14.1 A, which is 2548 W against 2554 reported, and the whole system
+#: balances: 2554 W of solar against 2516 W into the battery and 73 W of
+#: load, leaving 35 W, which is conversion loss.
+#:
+#: Settled matters. The first sample after the array was reconnected did not
+#: balance, by 232 W, because the registers had not caught up with each
+#: other while the charge controller was still ramping. A fixture taken
+#: during a transient teaches a parser that the arithmetic need not hold.
 PV_ON_RECHARGING = {
-    205: 1179, 206: 14, 207: 6001, 208: 52, 213: 119, 214: 106,
-    215: 537, 216: 378, 217: 1954, 219: 2051, 220: 86, 223: 1774,
+    205: 1200, 206: 15, 207: 6001, 208: 73, 213: 83, 214: 120,
+    215: 553, 216: 455, 217: 2516, 219: 1807, 220: 141, 223: 2554,
 }
 
 ALL = {

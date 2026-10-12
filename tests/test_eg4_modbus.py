@@ -53,6 +53,25 @@ def test_volts_times_amps_equals_watts_in_every_captured_state():
                 "%s: %s" % (name, watts))
 
 
+def test_the_whole_system_balances_in_every_captured_state():
+    """Solar in equals battery plus load, give or take conversion loss.
+
+    This is the check that catches a register belonging to something else
+    entirely, which multiplying one pair together cannot. A fixture that
+    fails it was taken during a transient and is not fit to teach a parser
+    what the arithmetic looks like.
+    """
+    for name, registers in fx.ALL.items():
+        out = eg4_modbus.parse(registers)
+        incoming = out.get("pv_watts", 0.0)
+        battery = out.get("battery_watts", 0.0)
+        load = out.get("load_watts", 0.0)
+        residual = incoming - battery - load
+        assert abs(residual) < 120, (
+            "%s: %.0f W unaccounted (pv %.0f, battery %.0f, load %.0f)"
+            % (name, residual, incoming, battery, load))
+
+
 def test_the_array_reads_exactly_zero_when_it_is_disconnected():
     """How PV was told apart from load in the first place: with the array
     carrying the whole load, the two are indistinguishable."""
@@ -103,12 +122,19 @@ def test_a_shifted_register_map_is_refused_rather_than_published():
     assert "register map" in str(raised.value)
 
 
-def test_a_whole_block_shift_is_caught_by_the_voltage_anchor():
-    shifted = {number - 1: value
-               for number, value in fx.PV_OFF_COMPRESSOR.items()}
-    with pytest.raises(DriverError) as raised:
+@pytest.mark.parametrize("state", sorted(fx.ALL))
+@pytest.mark.parametrize("offset", [-1, 1])
+def test_a_shifted_block_is_refused_from_every_captured_state(state, offset):
+    """Refused in all of them, not just the one where it happens to be easy.
+
+    In the compressor capture the shift lands a huge value in the voltage
+    anchor and is caught immediately. In others it lands plausible numbers
+    everywhere, and only the arithmetic between registers notices.
+    """
+    shifted = {number + offset: value
+               for number, value in fx.ALL[state].items()}
+    with pytest.raises(DriverError):
         eg4_modbus.parse(shifted)
-    assert "battery voltage" in str(raised.value)
 
 
 def test_a_reading_without_a_plausible_battery_voltage_is_refused():
@@ -132,7 +158,7 @@ def test_an_implausible_value_is_dropped_rather_than_published():
 def test_a_request_asks_only_for_holding_registers():
     frame = eg4_modbus.request(1, 205, 19)
     assert frame[0] == 1
-    assert frame[1] == eg4_modbus.READ_HOLDING
+    assert frame[1] == 3, "function %d is not read holding registers" % frame[1]
     assert eg4_modbus.crc16(frame[:-2]) == frame[-2:]
 
 
@@ -155,6 +181,24 @@ def test_a_damaged_reply_is_rejected_with_a_reason(damage, reason):
     assert reason in why
 
 
+def test_a_reply_that_declares_more_than_it_carries_is_rejected():
+    """Its own checksum would otherwise be decoded as a reading.
+
+    The declared length lands the slice inside the checksum bytes, so the
+    slice comes out the right length and every other check passes. Only
+    measuring the whole frame catches it.
+    """
+    good = fx.reply(fx.PV_ON_IDLE)
+    # Drop one register, leave the declared length alone, and recompute the
+    # checksum so the frame is internally consistent and still wrong.
+    head = good[:2] + bytes([good[2]]) + good[3:3 + good[2] - 2]
+    short = head + eg4_modbus.crc16(head)
+    registers, why = eg4_modbus.parse_reply(
+        short, 1, eg4_modbus.BLOCK_START, eg4_modbus.BLOCK_COUNT)
+    assert registers is None
+    assert "declared" in why
+
+
 def test_a_good_reply_decodes_to_the_registers_that_went_in():
     registers, why = eg4_modbus.parse_reply(
         fx.reply(fx.PV_OFF_COMPRESSOR), 1,
@@ -174,7 +218,7 @@ def test_a_reading_sends_one_request_and_decodes_it():
     transport = fx.FakeTransport([fx.reply(fx.PV_ON_RECHARGING)])
     out = build(transport=transport).read()
     assert len(transport.sent) == 1
-    assert out["pv_watts"] == pytest.approx(1774.0)
+    assert out["pv_watts"] == pytest.approx(2554.0)
 
 
 def test_a_damaged_reply_is_retried_before_it_is_a_failure():
@@ -203,9 +247,36 @@ def test_the_driver_never_sends_a_write_function():
     driver.raw()
     assert transport.sent, "nothing was sent, so this proves nothing"
     for frame in transport.sent:
-        assert frame[1] == eg4_modbus.READ_HOLDING
+        # The literal, not the constant. Comparing a frame built from
+        # READ_HOLDING against READ_HOLDING is true whatever the constant
+        # holds, including 6, which writes a register.
+        assert frame[1] == 3, "function %d is not a read" % frame[1]
+    assert eg4_modbus.READ_HOLDING == 3
 
 
 def test_a_check_reports_the_battery_voltage_it_actually_read():
     transport = fx.FakeTransport([fx.reply(fx.PV_OFF_COMPRESSOR)])
     assert "56.2 V" in build(transport=transport).check()
+
+
+def test_a_rejected_cross_check_input_refuses_the_whole_reading():
+    """A check that was skipped proves nothing.
+
+    With battery current reading its most negative possible value, bounds
+    drop it, and without this the remaining battery fields would publish
+    with ok=1 and only a note in rejected_fields. That is a healthy-looking
+    reading with the current quietly absent.
+    """
+    registers = dict(fx.PV_OFF_COMPRESSOR)
+    registers[216] = 0x8000            # -3276.8 A, outside any real bound
+    with pytest.raises(DriverError) as raised:
+        eg4_modbus.parse(registers)
+    assert "nothing read is trusted" in str(raised.value)
+
+
+def test_a_missing_register_refuses_rather_than_skipping_the_check():
+    registers = dict(fx.PV_ON_RECHARGING)
+    del registers[223]
+    with pytest.raises(DriverError) as raised:
+        eg4_modbus.parse(registers)
+    assert "pv_watts" in str(raised.value)
