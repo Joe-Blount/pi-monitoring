@@ -61,7 +61,7 @@ devices:
     tags: {location: rack}
     params: {address: "20:22:08:05:95:F4"}     # SOK-48V0140
 
-  # The EG4, waiting on one cable: a USB-to-RS232 adapter with a DB9 male end,
+  # The EG4, reached through a USB-to-RS232 adapter with a DB9 male end,
   # which mates with the RJ45-to-DB9 cable that came with the inverter. That
   # goes into the jack printed RS232 or COM.
   #
@@ -70,23 +70,24 @@ devices:
   # either, which is documented as unusable for monitoring on this model.
   # Both were tried.
   #
-  # Measure before plugging anything in: black lead on DB9 pin 5, then read
-  # pins 2 and 3. Whichever is negative is the inverter's transmit pin. Pin 2
-  # means plug straight in; pin 3 means insert the null modem.
+  # This unit speaks Modbus RTU at 9600, not the Voltronic PI30 ASCII
+  # protocol at 2400 that the pi30 driver reads. It answers nothing at all
+  # to PI30, at any rate, which looks exactly like a dead cable and cost a
+  # morning. Try both before concluding anything about the wiring.
   #
-  # On site: put the real by-id path in and set enabled: true. If the first
-  # read fails its checksum, this firmware computes it differently from the
-  # specification; set verify_reply_crc: false rather than assuming the
-  # wiring is wrong.
+  # No null modem is needed here, and that was measured rather than assumed:
+  # the inverter drives pin 2 at -13 V and the adapter drives pin 3, so the
+  # two are already crossed. The adapter was also proved separately by
+  # shorting its own pins 2 and 3 and reading its own bytes back.
   - name: inverter
-    driver: pi30
+    driver: eg4_modbus
     mode: poll
-    enabled: false
+    enabled: true
     tags: {location: inverter}
     params:
-      port: /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_XXXXXXXX-if00-port0
-      baud: 2400
-      queries: [QPIGS, QMOD]
+      port: /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_BH00FN1F-if00-port0
+      baud: 9600
+      unit: 1
 
 # Battery heating. These SOK rack packs have no heater of their own and cannot
 # be charged below freezing, so a cold sunny morning is refused until the day

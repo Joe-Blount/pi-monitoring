@@ -226,9 +226,10 @@ def known_driver_fields():
     from monitoring.drivers.dht import DhtDriver
     from monitoring.drivers.host import HostDriver
     from monitoring.drivers.rain_gauge import RainCounter
-    from monitoring.drivers import abc_bms, pi30, vedirect
+    from monitoring.drivers import abc_bms, eg4_modbus, pi30, vedirect
     from tests import vedirect_fixtures as fx
     from tests import abc_bms_fixtures as bms
+    from tests import eg4_modbus_fixtures as eg4
 
     fixtures = pathlib.Path(__file__).resolve().parent / "fixtures"
     sunny = ("230.1 50.0 230.1 50.0 0800 0750 015 420 53.20 010 085 0045 "
@@ -243,6 +244,9 @@ def known_driver_fields():
         "pi30": pi30.parse_qpigs(sunny),
         "rain_gauge": RainCounter(None, 0.011).fields(),
         "abc_bms": _abc_bms_fields(abc_bms, bms),
+        # From a register block captured off the inverter, so a
+        # control block naming a field it does not emit fails here.
+        "eg4_modbus": eg4_modbus.parse(eg4.PV_ON_RECHARGING),
     }
 
 

@@ -21,6 +21,7 @@ REGISTRY = {
     "abc_bms": ("monitoring.drivers.abc_bms", "AbcBmsDriver"),
     "jbd": ("monitoring.drivers.jbd", "JbdDriver"),
     "qinglan": ("monitoring.drivers.qinglan", "QinlanDriver"),
+    "eg4_modbus": ("monitoring.drivers.eg4_modbus", "Eg4ModbusDriver"),
 }
 
 
