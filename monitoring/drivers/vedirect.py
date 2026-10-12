@@ -40,9 +40,17 @@ TRACKER = {0: "off", 1: "limited", 2: "mppt_active"}
 #: and newlines make fields that never end in a Checksum label.
 MAX_FRAME_BYTES = 1024
 
+#: How much longer than its own deadline a caller is allowed before the
+#: reader stops it outright. A backstop, deliberately looser than the
+#: caller's limit: a caller that can see what is wrong reports it better
+#: than this can. read() counts the frames that failed their checksum, and
+#: check() says how many were seen. Those messages are worth keeping, so
+#: this only fires where the caller never gets a frame to notice on.
+TOTAL_LIMIT_FACTOR = 3.0
+
 
 def frames(source, stop_when_empty=False, idle_limit=None, clock=time.time,
-           max_frame_bytes=MAX_FRAME_BYTES):
+           max_frame_bytes=MAX_FRAME_BYTES, total_limit=None):
     """Yield ``(fields, checksum_ok)`` for each frame read from `source`.
 
     `source` is anything with ``read(1)`` returning bytes: a serial port in
@@ -57,6 +65,15 @@ def frames(source, stop_when_empty=False, idle_limit=None, clock=time.time,
     script that stops with no message, and a long-lived child that emits
     nothing and never exits, so nothing restarts it.
 
+    `total_limit` is the number of seconds this will spend in total,
+    whatever arrives. It exists because `idle_limit` only measures silence,
+    and every byte received resets it. A stream that trickles bytes without
+    ever completing a frame is therefore never idle, so a caller checking
+    its own deadline between yields never gets a yield to check it on, and a
+    bounded read runs for as long as the bytes keep coming. Only callers
+    that are meant to return pass this: a resident stream is supposed to run
+    for ever and must not.
+
     A frame that grows past `max_frame_bytes` is abandoned and reported as
     invalid. Otherwise a stream that is not VE.Direct accumulates fields
     without limit, silently, on a machine with a few hundred megabytes.
@@ -67,12 +84,20 @@ def frames(source, stop_when_empty=False, idle_limit=None, clock=time.time,
     value = bytearray()
     in_value = False
     frame_bytes = 0
-    last_progress = clock()
+    started = clock()
+    last_progress = started
 
     def restart():
         return {}, 0, bytearray(), bytearray(), False, 0
 
     while True:
+        # Checked on every byte, not between frames. A caller cannot enforce
+        # a deadline it is never given the chance to test.
+        if total_limit is not None and clock() - started > total_limit:
+            raise DriverError(
+                "stopped after %gs: bytes kept arriving but no complete frame "
+                "did. The port may be carrying something that is not VE.Direct"
+                % total_limit)
         byte = source.read(1)
         if not byte:
             if stop_when_empty:
@@ -230,7 +255,9 @@ class VedirectDriver(Driver):
         """
         deadline = time.time() + self.frame_timeout
         bad = 0
-        for raw, ok in frames(self._open(), idle_limit=self.frame_timeout):
+        for raw, ok in frames(
+                self._open(), idle_limit=self.frame_timeout,
+                total_limit=self.frame_timeout * TOTAL_LIMIT_FACTOR):
             if ok:
                 return normalize(raw)
             bad += 1
@@ -279,7 +306,8 @@ class VedirectDriver(Driver):
         limit = min(self.frame_timeout, 10)
         deadline = time.time() + limit
         seen = 0
-        for raw, ok in frames(self._open(), idle_limit=limit):
+        for raw, ok in frames(self._open(), idle_limit=limit,
+                              total_limit=limit * TOTAL_LIMIT_FACTOR):
             seen += 1
             if ok:
                 bits = identity(raw)
@@ -293,7 +321,9 @@ class VedirectDriver(Driver):
 
     def raw(self):
         """Return one frame's unparsed fields, for bringing up a new cable."""
-        for fields, ok in frames(self._open(), idle_limit=self.frame_timeout):
+        for fields, ok in frames(
+                self._open(), idle_limit=self.frame_timeout,
+                total_limit=self.frame_timeout * TOTAL_LIMIT_FACTOR):
             return {"checksum_ok": ok, "fields": fields}
         raise DriverError("no data from %s" % self.port)
 

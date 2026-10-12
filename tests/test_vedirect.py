@@ -1,5 +1,7 @@
 import io
 
+import inspect
+
 import pytest
 
 from monitoring.drivers import vedirect
@@ -382,3 +384,46 @@ def test_an_off_reason_that_is_not_hex_does_not_lose_the_frame():
     assert values["off_reason"] == "unexpected"
     assert "off_reason_code" not in values
     assert values["battery_volts"] == 13.51
+
+
+# -- a line that trickles without ever finishing a frame -------------------
+
+class TricklingPort:
+    """Bytes that never complete a frame, arriving for ever.
+
+    This is the shape that defeats an idle limit. Every byte resets the
+    silence timer, so the line is never idle, and nothing is ever yielded,
+    so a caller checking its own deadline between frames never gets a turn.
+    """
+
+    def __init__(self, _clock=None):
+        self.reads = 0
+
+    def read(self, _count):
+        self.reads += 1
+        return b"x"
+
+
+def test_a_trickling_line_is_stopped_even_though_it_is_never_idle():
+    clock = FakeClock()
+    port = TricklingPort(clock)
+    with pytest.raises(DriverError) as raised:
+        for _ in vedirect.frames(port, idle_limit=10, clock=clock,
+                                 total_limit=10):
+            pass
+    assert "no complete frame" in str(raised.value)
+    # Stopped near its limit, not after hundreds of simulated seconds. The
+    # clock advances half a second per read, so an unbounded reader would
+    # run away rather than stop.
+    assert clock.now < 30, "ran for %.0f simulated seconds" % clock.now
+
+
+def test_the_bounded_callers_pass_a_total_limit_and_the_stream_does_not():
+    source = inspect.getsource(vedirect)
+    stream = source[source.index("def stream("):source.index("def check(")]
+    assert "total_limit" not in stream, (
+        "a resident stream must not stop itself")
+    for method in ("def read(", "def check(", "def raw("):
+        start = source.index(method)
+        body = source[start:start + 900]
+        assert "total_limit" in body, method
