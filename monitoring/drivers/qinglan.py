@@ -5,10 +5,12 @@ other battery drivers here: the shunt, its Bluetooth module and its phone
 application are sold under several names, and the protocol is the only part
 that stays still.
 
-The protocol was recovered from the vendor Android application by
-reconstructing its compiled code. Nothing here is copied from that
-application. The command set and the record layout were then confirmed
-against real hardware, which is what the rest of this file is about.
+The protocol was reverse engineered for interoperability, from the vendor's
+own Android application, so that a device the owner owns can be read by
+software the owner runs. Nothing here is copied from that application: this
+is an independent implementation of a wire format, and the command set and
+record layout were then confirmed against real hardware, which is what the
+rest of this file is about.
 
 How it works
 ------------

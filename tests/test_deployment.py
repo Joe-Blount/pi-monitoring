@@ -462,3 +462,34 @@ def test_no_package_helper_is_called_bare_under_set_e():
         assert "||" in stripped or "&&" in stripped, (
             "unguarded under set -e: %s" % stripped)
     assert checked, "found no calls to check, so this proves nothing"
+
+
+# -- the README must describe what actually exists --------------------------
+
+def _described_drivers():
+    """Driver names in the first column of the README table.
+
+    The first column rather than the section text, because rows refer to
+    each other: one row pointing at another driver by name would otherwise
+    stand in for that driver's own row and a deleted row would pass.
+    """
+    readme = (REPO / "README.md").read_text()
+    table = readme[readme.index("## Drivers"):readme.index("## Status")]
+    return set(re.findall(r"^\| `([a-z0-9_]+)`", table, re.MULTILINE))
+
+
+def test_the_readme_lists_every_driver_that_exists():
+    """Prose goes stale silently, and a reader has no way to tell.
+
+    This is the cheapest way to hold the two together: a driver that nobody
+    described fails here until somebody describes it.
+    """
+    missing = drivers.canonical() - _described_drivers()
+    assert not missing, (
+        "registered but not described in the README: %s" % sorted(missing))
+
+
+def test_the_readme_does_not_describe_drivers_that_are_gone():
+    unknown = _described_drivers() - drivers.names()
+    assert not unknown, (
+        "the README describes drivers that do not exist: %s" % sorted(unknown))

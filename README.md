@@ -200,24 +200,54 @@ python3 -m venv .venv
 
 No hardware, no network, no credentials.
 
+## Drivers
+
+One module per protocol, in `monitoring/drivers/`. Name a driver in a node
+file and it is loaded lazily, so a machine with no Bluetooth device never
+imports a Bluetooth stack.
+
+| Driver | Reads | Link | How the protocol was established |
+|---|---|---|---|
+| `host` | the machine itself | none | Temperature, uptime, disk, address, processor load and available memory. Load averages rather than a percentage, because a collector that runs once and exits cannot measure a rate. |
+| `ds18b20` | one-wire temperature | GPIO | Kernel one-wire bus. Addressed by sensor id, so no node file mentions which GPIO carries the bus. |
+| `dht` | DHT11 and DHT22 | GPIO | Read through the kernel's industrial I/O driver rather than by bit-banging from Python, so the microsecond timing is protected from the scheduler. Needs `dtoverlay=dht11,gpiopin=N`, and the overlay is called dht11 whatever sensor is attached. |
+| `rain_gauge` | tipping bucket | GPIO | Pulse counter with the total persisted across reboots. Needs the lgpio pin backend: the sysfs fallback does not release the pin, so every restart finds it busy. |
+| `vedirect` | Victron MPPT | serial | VE.Direct, documented by Victron. Frames are checksum-validated and a line that delivers bytes without ever completing a frame is bounded, which an idle timer alone does not catch. |
+| `pi30` | Voltronic-protocol inverters | serial | The PI30 ASCII protocol, documented by several vendors. Written and tested against recorded output, but not yet against hardware: the EG4 here does not speak it. See `eg4_modbus`. |
+| `abc_bms` | SOK and other ABC-BMS packs | Bluetooth | Protocol reverse engineered for interoperability by others and reimplemented here, not copied. The published cell-voltage layout was wrong for a 16-cell rack pack, so the reader validates its own cell numbering and publishes nothing rather than a set shifted by a byte. |
+| `jbd` | Chins and other JBD packs | Bluetooth | Identified as JBD from its characteristic UUIDs before anything was sent. Big-endian, and one reply arrives across several notifications, so replies are reassembled by their length byte. |
+| `qinglan` | QinLan coulomb-counting shunts | Bluetooth | No published protocol and nothing findable online. Reverse engineered for interoperability from the vendor's own Android application, then confirmed against the hardware. Nothing is copied from that application: this is an independent implementation of a wire format. Every request carries a bus address, and without it the device ignores you in silence and looks dead. |
+| `eg4_modbus` | EG4 all-in-one inverters | serial | Modbus RTU at 9600, not the PI30 ASCII at 2400 that the model is usually said to speak. The register map was built by changing one load at a time and watching, including disconnecting the array, which is the only way to tell solar power apart from load power while solar is carrying the load. |
+
+Every driver is read-only. Several of these battery modules accept
+unauthenticated commands that switch their charge and discharge paths, and
+this project sends none of them.
+
+Two habits are worth copying if you add one. Publish nothing rather than
+something wrong: each driver range-checks its fields and refuses a reading
+whose own numbers contradict each other, because a wrong number in a
+database outlives the session that produced it. And confirm a field against
+something independent before trusting it. The inverter driver checks that
+volts times amps equals watts on every read, which is what catches a
+register map shifting under a firmware update, since every individual value
+stays plausible when that happens.
+
+`collect --raw <device>` prints a device's unparsed output, which is where
+to start when adding hardware or confirming a field.
+
 ## Status
 
-Telemetry: the core is written and tested, in both poll and resident mode.
-Line protocol, the configuration loader, calibration, the runner, the host
-driver, the Victron VE.Direct driver, the DS18B20, the rain gauge, the DHT
-family, the Voltronic PI30 inverter and the ABC-BMS battery pack.
+Telemetry: written, tested and running at two sites. Every driver in the table
+above reads real hardware except `pi30`, which is written and tested against
+recorded output but has not met an inverter that speaks it.
 
-Seven of nine drivers are written. The two that remain are Bluetooth, and they
-wait on knowing their protocols, which needs a scan at the site.
-
-Two written drivers have not yet met their hardware. The PI30 inverter driver
-waits on a serial adapter. The ABC-BMS driver, which reads SOK and other
-packs, is complete for everything the
-protocol documents with confidence, which is the transport, the framing, the
-checksum, the command set and the scalar values. The layout of the cell-voltage
-entries is the one part taken on trust, so that reader checks its own result
-and publishes nothing rather than something shifted by a byte. Run
-`collect --raw` against a pack to confirm it.
+Not everything is decoded. The shunt's accumulated-totals record is unread,
+and its twenty-five write commands are identified but unmapped, which is why
+none of them is sent. On the inverter, the AC output current and apparent
+power registers are right under load and disagree near zero, and the settings
+block including the charge setpoints is unmapped. Each driver's docstring
+separates what was confirmed against an independent reading from what is
+inferred, which is worth reading before trusting a field.
 
 Control: designed, not written. It is commissioned in place rather than on a
 bench, with the run-time cap and the guard in force from the first live run so
@@ -245,9 +275,20 @@ carrying a bus.
 
 ## Protocols, credit and scope
 
-Every device here is read over a local link to hardware the owner owns: a
-serial cable, a GPIO pin, or Bluetooth. Nothing talks to a vendor's cloud
-service, and nothing needs an account.
+**Purpose.** This exists so that equipment somebody owns can be read by
+software they run, on their own premises, over a local link. That is
+interoperability, and it is the only reason any protocol here was worked
+out.
+
+Every device is read over a local link to hardware the owner owns: a serial
+cable, a GPIO pin, or Bluetooth. Nothing talks to a vendor's cloud service,
+and nothing needs an account.
+
+No vendor material is redistributed. There is no vendor code here, no
+application binary, no decompiler output and no vendor document. What is
+published is an independent implementation of a wire format, written from
+observed behaviour and confirmed against hardware. Protocols are methods of
+operation, and a description of one is not a copy of anyone's software.
 
 Every driver is read-only. Several of these battery modules accept
 unauthenticated commands that can switch their charge and discharge paths, and
@@ -255,11 +296,22 @@ this project sends none of them. Switching is done with relays on circuits the
 owner wired, never by asking a battery to disconnect itself.
 
 Some of these protocols are published by the vendor, and those are the pleasant
-ones. Victron documents VE.Direct, JK publishes its RS485 protocol, and EG4
-sends its protocol document to anyone who asks support. Others were worked out
-by people reading their own traffic, and this project reimplements what they
-documented rather than copying their code. No vendor document is redistributed
-here; where one exists, it is cited and left where the vendor put it.
+ones. Victron documents VE.Direct and JK publishes its RS485 protocol. Others
+were worked out by people reading their own traffic, and this project
+reimplements what they documented rather than copying their code. No vendor
+document is redistributed here; where one exists, it is cited and left where
+the vendor put it.
+
+A vendor document is not the same as the protocol in the box. The EG4 here
+answers nothing to the PI30 protocol its model is usually said to speak, at any
+rate from 1200 to 115200 baud, and answers Modbus RTU at 9600 immediately. A
+unit that ignores the protocol you expect looks exactly like a dead cable, so
+it is worth trying the other one before suspecting the wiring.
+
+The QinLan shunt protocol appears to be undocumented anywhere public. What is
+in `qinglan.py` was recovered from the vendor's own application and confirmed
+against hardware, and is offered here because nobody else seems to have
+published it.
 
 The ABC-BMS driver owes its resolution of the cell-voltage paging to two
 projects worth reading if you are adding a battery: batmon-ha, under the MIT

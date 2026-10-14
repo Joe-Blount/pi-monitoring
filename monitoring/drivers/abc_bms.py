@@ -211,12 +211,13 @@ def cell_voltages(message, entry_size=CELL_ENTRY):
     pack: the same reader must handle a four-cell 12 V pack and a sixteen-cell
     48 V rack pack.
 
-    The exact entry layout is the one part of this protocol not confirmed
-    against real hardware, so the scan validates itself rather than trusting a
-    stride. Each entry is read as a cell index and a voltage, and the result
-    is accepted only if the indices come out distinct, within range, and
-    starting at one. Anything else returns nothing, because no cell data is
-    better than cell data silently shifted by a byte.
+    The entry layout is measured against a pack, and the scan still
+    validates itself rather than trusting a stride, because a published
+    layout for this protocol disagrees with what the hardware sends. Each
+    entry is read as a cell index and a voltage, and the result is accepted
+    only if the indices come out distinct, within range, and starting at
+    one. Anything else returns nothing, because no cell data is better than
+    cell data silently shifted by a byte.
 
     Use ``--raw`` against a pack and compare before relying on these.
     """
