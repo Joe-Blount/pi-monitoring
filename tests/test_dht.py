@@ -72,16 +72,33 @@ def test_a_missing_sensor_gives_the_line_to_add_and_says_to_reboot(tmp_path):
     assert "DHT22 included" in message
 
 
-def test_a_failed_read_is_reported_rather_than_published(tmp_path):
+@pytest.mark.parametrize("unreadable,answering", [
+    ("in_humidityrelative_input", "in_temp_input"),
+    ("in_temp_input", "in_humidityrelative_input"),
+])
+def test_one_channel_failing_refuses_the_whole_reading(tmp_path, unreadable,
+                                                       answering):
     """The kernel reports a failed checksum as an ordinary read error, and
-    these sensors fail often enough that it must never become a value."""
+    these sensors fail often enough that it must never become a value.
+
+    Keeping the channel that answered is the tempting repair and it is
+    wrong. Both values come from one frame. The kernel marks its cache fresh
+    once the checksum passes, before it decides whether it understands the
+    payload, and leaves the stored pair alone when it does not, so the file
+    read after a failed read answers from the cache without an error. On the
+    hardware this shows as whichever channel is read first failing while the
+    other returns the same numbers forever. Half a reading here is a frozen
+    reading wearing a current timestamp.
+
+    Either order, because the trap is in whichever channel is read second.
+    """
     device = tmp_path / "iio:device0"
     device.mkdir()
     (device / "name").write_text("dht11")
-    (device / "in_temp_input").write_text("20000")
-    # A directory where a file should be: reading it raises, as a failed
-    # conversion does on real hardware.
-    (device / "in_humidityrelative_input").mkdir()
+    (device / answering).write_text("20000")
+    # A directory where a file should be: reading it raises, as a refused
+    # frame does on real hardware.
+    (device / unreadable).mkdir()
     with pytest.raises(DriverError):
         DhtDriver("box", {"iio_root": str(tmp_path), "retries": 0}, {}).read()
 
@@ -167,7 +184,10 @@ def test_a_later_attempt_can_succeed(tmp_path, monkeypatch):
                      {}).read()["humidity"] == 45.0
 
 
-def test_the_failure_message_points_at_wiring(tmp_path, monkeypatch):
+def test_the_failure_message_points_at_the_kernel_log_then_at_wiring(
+        tmp_path, monkeypatch):
+    """A sensor the kernel refuses to classify answers perfectly, so the
+    message must not send the reader to the wiring first."""
     device = tmp_path / "iio:device0"
     device.mkdir()
     (device / "name").write_text("dht11")
@@ -177,7 +197,27 @@ def test_the_failure_message_points_at_wiring(tmp_path, monkeypatch):
     with pytest.raises(DriverError) as exc:
         DhtDriver("box", {"iio_root": str(tmp_path), "retries": 1}, {}).read()
     message = str(exc.value)
+    assert "kernel log" in message
+    assert message.index("kernel log") < message.index("pull-up")
     assert "pull-up" in message and "gpiopin" in message
+
+
+@pytest.mark.parametrize("retries,expected", [(0, "1 attempt"), (3, "4 attempt")])
+def test_the_failure_message_counts_the_attempts_made(tmp_path, monkeypatch,
+                                                      retries, expected):
+    """The reasons are deduplicated before they are printed, so counting
+    them after that would report a number of attempts that never happened:
+    four identical failures would be announced as one attempt."""
+    device = tmp_path / "iio:device0"
+    device.mkdir()
+    (device / "name").write_text("dht11")
+    (device / "in_temp_input").mkdir()
+    (device / "in_humidityrelative_input").mkdir()
+    monkeypatch.setattr("monitoring.drivers.dht.time.sleep", lambda _s: None)
+    with pytest.raises(DriverError) as exc:
+        DhtDriver("box", {"iio_root": str(tmp_path), "retries": retries},
+                  {}).read()
+    assert expected in str(exc.value)
 
 
 def test_check_reports_presence_even_when_a_reading_fails(tmp_path):

@@ -312,6 +312,51 @@ a temperature. It usually means a missing or wrong pull-up resistor.
 has no error correction beyond a checksum. The driver retries, spaced by the
 sensor's own minimum sampling interval.
 
+**A DHT stops reading and the kernel log fills with `Don't know how to decode
+data`.** The kernel got a frame whose checksum passed and could not tell
+which sensor sent it. It picks the type from the frame: a humidity whole part
+below 4 means a DHT22, and failing that the two decimal bytes have to look
+like a DHT11.
+
+Read the four numbers in the log line before deciding what this is. They are
+humidity whole, humidity decimal, temperature whole, temperature decimal, and
+the temperature is in Celsius, unlike everything this project publishes.
+
+If they suit the room, whether they hold still or move by a tenth, the sensor
+is answering and the kernel is refusing a decimal it will not accept. Retrying
+gets past that only when the reading happens to land on a decimal the kernel
+takes, so the sensor reads sometimes and not others for no reason you can see.
+The fix is below.
+
+If they suit nothing, treat it as corruption instead: the checksum is an 8-bit
+sum of the four data bytes, so a damaged frame can pass it and then be refused
+for the same reason a good one is. A later clean frame decodes, so this shows
+up as occasional rather than constant, and it sends you back to the wiring, the
+cable length and the pull-up.
+
+How much decimal a DHT11 is allowed depends on the kernel:
+
+| Kernel | DHT11 accepted when | Keeps the decimal |
+|---|---|---|
+| Raspberry Pi 6.1 | both decimal bytes are 0 | no |
+| Raspberry Pi 6.6 | both decimals are below 10 | yes |
+
+A DHT11 variant that reports tenths of a degree therefore reads normally on
+6.6 and, on 6.1, only while the temperature sits on a whole degree. So
+`64 0 22 6` is 64.0 % and 22.6 C, which 6.1 refuses and 6.6 reads exactly.
+The remedy is the newer kernel. Check which one is running with `uname -r`.
+
+Watch for the matching trap while diagnosing one of these. The kernel decodes
+both values from one frame and then answers either file from that stored pair
+for two seconds without touching the sensor, and it marks the pair fresh
+before deciding whether it understands the payload. So after a failed read,
+reading the other file returns the last pair that decoded, with no error,
+however old it is. Reading temperature and humidity in quick succession will
+show one failing and the other returning a value that never changes. That
+value is the cache. Leave more than two seconds between reads when checking
+by hand, and expect the driver to refuse the whole reading rather than
+publish the half that looks healthy.
+
 **A Bluetooth device reads once and then stops.** Most battery modules accept
 one connection at a time. The vendor's phone application takes that connection
 and holds it, which locks this software out, and the reverse is also true. Poll

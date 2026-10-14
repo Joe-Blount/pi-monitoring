@@ -29,6 +29,52 @@ These sensors fail a reading often and by design: the protocol has no error
 correction beyond a checksum, and the kernel reports a failed checksum as an
 ordinary read error. Retrying is normal rather than exceptional, and the
 sensor's own minimum sampling interval governs how fast it is worth trying.
+
+Both channels come from one frame, and the kernel caches it
+-----------------------------------------------------------
+
+The two files look like two independent sensors and are not. One exchange
+with the sensor carries forty bits holding both values, and the kernel
+decodes them together: it stores both or it stores neither. It then serves
+whichever file is read next from that stored pair for two seconds without
+touching the sensor at all.
+
+So the first file read triggers the exchange and the second is answered from
+the cache. That is harmless when the first read succeeded, because both
+values come from the frame just decoded. It is a trap when the first read
+failed. The kernel marks the cache fresh once the checksum passes, before it
+decides whether it understands the payload, and it leaves the stored values
+alone when it does not. A read of the other file then returns the last pair
+that did decode, with no error, however old it is.
+
+The visible result is a reading that looks healthy and is frozen: whichever
+channel is read first fails, the other returns the same numbers forever. So
+a failure of either channel has to refuse the whole reading. Publishing the
+one that answered publishes the cache.
+
+A payload the kernel cannot place is a third kind of failure, and the one
+worth knowing about. The kernel decides which sensor it is talking to from
+the frame itself: a humidity whole part below four means a DHT22, and
+failing that it looks at the two decimal bytes to recognise a DHT11. What
+it cannot place it refuses, with "Don't know how to decode data" and the
+four numbers in the kernel log. Those are the humidity whole part, the
+humidity decimal, the temperature whole part and the temperature decimal,
+and the temperature is in Celsius, unlike everything published here.
+
+How much decimal a DHT11 is allowed differs between kernels, and some
+versions accept only zero. A DHT11 variant that reports tenths of a degree
+then falls in the gap, and reads only while the temperature happens to sit
+on a whole degree. No driver can close that gap, because the frame never
+reaches userspace.
+
+So read the kernel log before suspecting the wiring, and read the numbers
+rather than counting the lines. Values that suit the room, whether they
+hold still or move by a tenth, mean the sensor is answering and the kernel
+is refusing the decimal. Retrying gets past that only if the reading
+happens to land on a decimal the kernel accepts, and a different kernel
+settles it for good. Values that suit nothing mean a damaged frame that
+passed an eight-bit sum, which points back at the wiring, and which a later
+clean frame does get past. The bring-up guide has both.
 """
 
 import glob
@@ -152,6 +198,15 @@ class DhtDriver(Driver):
             raise DriverError("%s returned something that is not a number" % filename)
 
     def _attempt(self, path):
+        """Both channels from one frame, or nothing.
+
+        Either read failing takes the whole reading down, which looks
+        wasteful and is not. The kernel serves the second file from a cache
+        it has already marked fresh, so the value that arrives after a
+        failed read is the last frame that decoded rather than anything
+        current. Keeping the channel that answered would publish that stale
+        pair under a current timestamp, and it never moves.
+        """
         celsius = self._scaled(path, "in_temp_input")
         humidity = self._scaled(path, "in_humidityrelative_input")
         fahrenheit = round(celsius * 9.0 / 5.0 + 32.0, 1)
@@ -182,11 +237,20 @@ class DhtDriver(Driver):
             except DriverError as exc:
                 failures.append(str(exc))
 
+        attempts = self.retries + 1
         raise DriverError(
-            "%d attempts all failed: %s. A sensor that never answers is "
-            "usually wiring: check the data line, the pull-up, and that "
-            "gpiopin in the overlay matches where it is actually connected"
-            % (len(failures), "; ".join(dict.fromkeys(failures))))
+            "%d attempt%s all failed: %s. Check the kernel log first: a "
+            "\"Don't know how to decode data\" line there means the frame "
+            "arrived and was refused, and the four numbers on it name the "
+            "fault: humidity, its decimal, temperature in Celsius, its "
+            "decimal. Values that suit the room are a decimal this kernel "
+            "will not accept, which only a different kernel fixes; values "
+            "that suit nothing are a damaged frame, which is wiring. "
+            "Without that line, a sensor that never answers is usually "
+            "wiring: check the data line, the pull-up, and that gpiopin in "
+            "the overlay matches where it is connected"
+            % (attempts, "" if attempts == 1 else "s",
+               "; ".join(dict.fromkeys(failures))))
 
     def check(self):
         path = self._device_path()
