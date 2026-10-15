@@ -102,10 +102,15 @@ def _reading(readings, source, stale_after):
 # -- the ladder -------------------------------------------------------------
 
 def _step_floor(ladder, readings, was_latched):
-    """Whether the cell floor is tripped, and on what.
+    """Whether the floor is tripped, and on what.
 
     Latched below the shedding bound and released only strictly above the
-    restoring one, so a cell sagging under load cannot chatter the relay.
+    restoring one, so a value sagging under load cannot chatter the relay.
+
+    Each source carries its own bounds, because the sources are not in the
+    same units. One is a cell voltage and the other is a pack voltage, and a
+    shared pair of bounds compares a healthy cell at 3.30 against a pack
+    threshold of 12.6 and sheds forever.
     """
     floor = ladder.get("floor")
     if not floor:
@@ -118,9 +123,9 @@ def _step_floor(ladder, readings, was_latched):
         if value is None:
             continue
         readable = True
-        if value < floor["shed_below"]:
+        if value < source["shed_below"]:
             return True, value, source
-        if was_latched and value <= floor["restore_above"]:
+        if was_latched and value <= source["restore_above"]:
             # Readable, above the shedding bound, not yet clear of the
             # restoring one. Still latched, and this is the reading that says
             # so rather than a stale guess.
@@ -140,32 +145,49 @@ def _step_floor(ladder, readings, was_latched):
     return False, None, None
 
 
-def _step_tiers(ladder, value, latched, below_counts):
+def _step_tiers(ladder, value, mono_now, latched, below_counts, above_since):
     """Advance each tier's latch independently.
 
     `value` is None when the source is not readable, in which case every
-    latch is held exactly as it was: the battery judgment has become
-    unknowable, so it stops moving rather than drifting in either direction.
+    latch is held exactly as it was and every counter is cleared: the battery
+    judgment has become unknowable, so it stops moving rather than drifting
+    in either direction. Clearing the counters means a reading either side of
+    a stale gap does not count as two in a row, which it is not: consecutive
+    has to mean consecutive or the requirement is no requirement at all.
+
+    Entry is counted in readings and release is timed. They are deliberately
+    different. Entry guards against one glitched sample latching a tier whose
+    release is fifteen points away, and a count does that whatever rate the
+    sensor arrives at. Release guards against restoring on a charging spike,
+    which is a thing that lasts seconds regardless of how many readings land
+    inside it, so it is held off by the clock.
     """
     latched = dict(latched)
     counts = dict(below_counts)
+    since = dict(above_since)
     if value is None:
-        return latched, counts
+        return latched, {}, {}
 
     needed = ladder["enter_after_readings"]
     margin = ladder["release_margin_pct"]
+    dwell = ladder["restore_dwell"]
     for index, tier in enumerate(ladder["tiers"]):
         key = str(index)
         entry = tier["below_pct"]
         if value < entry:
             counts[key] = counts.get(key, 0) + 1
+            since.pop(key, None)
             if counts[key] >= needed:
                 latched[key] = True
         else:
             counts[key] = 0
             if value > entry + margin:
-                latched[key] = False
-    return latched, counts
+                first = since.setdefault(key, mono_now)
+                if mono_now - first >= dwell:
+                    latched[key] = False
+            else:
+                since.pop(key, None)
+    return latched, counts, since
 
 
 def _permits(tier, now, suns, clock_trusted):
@@ -200,7 +222,8 @@ def _permits(tier, now, suns, clock_trusted):
     raise AssertionError("unknown schedule type %r" % kind)
 
 
-def ladder_decision(name, spec, readings, now, suns, clock_trusted, state):
+def ladder_decision(name, spec, readings, now, mono_now, suns, clock_trusted,
+                    state):
     """Decide one sheddable load. Returns (Decision, new state)."""
     ladder = spec["shed_ladder"]
     was = state.get("floor_latched", False)
@@ -208,12 +231,14 @@ def ladder_decision(name, spec, readings, now, suns, clock_trusted, state):
         ladder, readings, was)
 
     value = _reading(readings, ladder["source"], ladder["stale_after"])
-    latched, counts = _step_tiers(
-        ladder, value, state.get("latched", {}), state.get("below", {}))
+    latched, counts, since = _step_tiers(
+        ladder, value, mono_now, state.get("latched", {}),
+        state.get("below", {}), state.get("above_since", {}))
 
     new_state = dict(state)
     new_state["latched"] = latched
     new_state["below"] = counts
+    new_state["above_since"] = since
     new_state["floor_latched"] = floor_latched
 
     if floor_latched:
@@ -222,7 +247,8 @@ def ladder_decision(name, spec, readings, now, suns, clock_trusted, state):
                       "it")
         else:
             reason = "%s=%.3f below the %.3f floor" % (
-                floor_source["field"], floor_value, ladder["floor"]["shed_below"])
+                floor_source["field"], floor_value,
+                floor_source["shed_below"])
         return (Decision(name, False, _depth(latched), FLOOR, reason,
                          floor_value),
                 new_state)
@@ -275,7 +301,7 @@ def _depth(latched):
 
 # -- the switches an operator holds -----------------------------------------
 
-def _override(name, switches, wall_now, clock_trusted):
+def _override(name, switches, now, clock_trusted):
     """An operator's force for this load, or None.
 
     Expired overrides are gone. An override with no expiry would be the one
@@ -298,19 +324,19 @@ def _override(name, switches, wall_now, clock_trusted):
         return None
     if not clock_trusted:
         return "off" if force == "off" else None
-    if wall_now >= float(expires):
+    if now.timestamp() >= float(expires):
         return None
     return force
 
 
-def _apply_switches(decision, name, switches, wall_now, clock_trusted):
+def _apply_switches(decision, name, switches, now, clock_trusted):
     """Let an operator's switches override a state-of-charge decision.
 
     Never reached when the floor has fired. A floor an override can defeat is
     not a floor, and the number it defends is the one standing between a
     forgotten command and a damaged cell.
     """
-    force = _override(name, switches, wall_now, clock_trusted)
+    force = _override(name, switches, now, clock_trusted)
     if force is not None:
         return decision._replace(
             connected=(force == "on"), reason_code=OVERRIDE,
@@ -371,18 +397,19 @@ def _hold(decision, spec, mono_now, state):
 LADDER_TYPES = ("dc_branch",)
 
 
-def decide(local_now, wall_now, mono_now, clock_trusted, readings, switches,
+def decide(local_now, mono_now, clock_trusted, readings, switches,
            specs, state, suns):
     """Decide every load on a node. Returns (decisions, new state).
 
-    Pure, and takes three clocks because they answer different questions and
-    conflating them is a bug in each direction.
+    Pure, and takes two clocks because they answer different questions.
 
-    `local_now` is a timezone-aware datetime and is what the schedules compare
-    against. `wall_now` is epoch seconds and judges nothing but an override's
-    expiry. `mono_now` drives every age and every timer, because the wall
-    clock steps by hours the first time it synchronises and the monotonic one
-    never does.
+    `local_now` is a timezone-aware datetime. The schedules compare against
+    it, and an override's expiry comes from its own timestamp, so there is one
+    source for both and no way to pass a pair that disagree.
+
+    `mono_now` drives every age and every timer, because the wall clock steps
+    by hours the first time it synchronises after a restored time, and every
+    dwell would expire together.
     """
     decisions = {}
     new_state = {}
@@ -393,10 +420,11 @@ def decide(local_now, wall_now, mono_now, clock_trusted, readings, switches,
 
         if spec["type"] in LADDER_TYPES:
             decision, load_state = ladder_decision(
-                name, spec, readings, local_now, suns, clock_trusted, prior)
+                name, spec, readings, local_now, mono_now, suns,
+                clock_trusted, prior)
             if decision.reason_code != FLOOR:
                 decision = _apply_switches(
-                    decision, name, switches, wall_now, clock_trusted)
+                    decision, name, switches, local_now, clock_trusted)
         else:
             decision = Decision(
                 name, False, 0, REFUSED,

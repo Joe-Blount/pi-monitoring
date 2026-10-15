@@ -49,9 +49,11 @@ RUNTIME_DIR = "/run/monitoring"
 READINGS_DIR = os.path.join(RUNTIME_DIR, "readings")
 CONTROL_STATE = os.path.join(RUNTIME_DIR, "control.json")
 
-#: Where the operator switches live. On the card, deliberately.
+#: Where the things that must outlive a reboot live. On the card,
+#: deliberately, and written rarely enough that the wear does not matter.
 PERSIST_DIR = "/var/lib/monitoring"
 SWITCHES = os.path.join(PERSIST_DIR, "switches.json")
+HIGH_WATER = os.path.join(PERSIST_DIR, "clock-high-water.json")
 
 
 def boot_id():
@@ -200,6 +202,40 @@ def write_state(loads, path=CONTROL_STATE, boot=None):
                       "loads": loads})
 
 
+# -- the clock's high-water mark --------------------------------------------
+
+def read_high_water(path=HIGH_WATER):
+    """The latest wall time this node has ever trusted, or None.
+
+    On the card rather than in tmpfs, and this is the whole point of it. The
+    rule that catches a reset clock is "the hardware must not read earlier
+    than a time already seen", and a mark that died with the power cut would
+    be None exactly when it is needed. A board whose clock resets would then
+    answer, have nothing to be compared against, and be trusted on its first
+    boot with a wrong date.
+    """
+    record = read_json(path) or {}
+    value = record.get("epoch")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def note_high_water(epoch, path=HIGH_WATER):
+    """Record a trusted wall time, if it is later than the one already held.
+
+    Only ever advanced, and only from a clock that was trusted when it was
+    read. Advancing it from an untrusted clock would let one fast wrong
+    reading poison the mark permanently, after which no real clock could ever
+    clear it.
+    """
+    held = read_high_water(path)
+    if held is not None and epoch <= held:
+        return held
+    write_json(path, {"epoch": float(epoch)})
+    return float(epoch)
+
+
 # -- switches ---------------------------------------------------------------
 
 def read_switches(path=SWITCHES):
@@ -209,12 +245,13 @@ def read_switches(path=SWITCHES):
     which is the state the system is in when nobody has touched it. Failing
     closed here would let a corrupt file shed loads nobody asked to shed.
     """
-    record = read_json(path) or {}
+    parsed = read_json(path)
+    record = parsed or {}
     loads = record.get("loads")
     return {
         "shedding_enabled": record.get("shedding_enabled", True) is not False,
         "loads": loads if isinstance(loads, dict) else {},
-        "readable": read_json(path) is not None,
+        "readable": parsed is not None,
     }
 
 

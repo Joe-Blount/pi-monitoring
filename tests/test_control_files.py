@@ -162,6 +162,37 @@ def test_switches_round_trip(tmp_path):
     assert out["readable"] is True
 
 
+# -- the clock's high-water mark ---------------------------------------------
+
+def test_the_high_water_mark_lives_where_a_reboot_cannot_clear_it(tmp_path):
+    """The rule that catches a reset clock compares against a time already
+    seen. A mark kept in tmpfs would be absent exactly when it is needed, on
+    the first boot after the power cut, and a board whose clock had reset
+    would be trusted with a wrong date."""
+    assert files.HIGH_WATER.startswith(files.PERSIST_DIR), (
+        "the high-water mark must not live in tmpfs")
+    path = str(tmp_path / "hw.json")
+    assert files.read_high_water(path) is None
+    files.note_high_water(1000.0, path)
+    assert files.read_high_water(path) == 1000.0
+
+
+def test_the_high_water_mark_only_ever_advances(tmp_path):
+    """A clock that has gone backwards must not drag the mark with it, or the
+    check it exists for stops catching anything."""
+    path = str(tmp_path / "hw.json")
+    files.note_high_water(2000.0, path)
+    assert files.note_high_water(1000.0, path) == 2000.0
+    assert files.read_high_water(path) == 2000.0
+    assert files.note_high_water(3000.0, path) == 3000.0
+
+
+def test_a_damaged_high_water_file_reads_as_absent(tmp_path):
+    path = tmp_path / "hw.json"
+    path.write_text("{broken")
+    assert files.read_high_water(str(path)) is None
+
+
 # -- clock trust -------------------------------------------------------------
 
 def test_a_synchronised_clock_is_trusted(tmp_path):

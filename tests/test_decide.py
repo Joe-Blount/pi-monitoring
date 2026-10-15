@@ -29,10 +29,10 @@ LADDER = {
     "stale_after": 600.0,
     "release_margin_pct": 15.0,
     "enter_after_readings": 2,
+    "restore_dwell": 0.0,
     "floor": {
-        "sources": [{"device": "bms", "field": "cell_min_volts"}],
-        "shed_below": 3.15,
-        "restore_above": 3.25,
+        "sources": [{"device": "bms", "field": "cell_min_volts",
+                     "shed_below": 3.15, "restore_above": 3.25}],
     },
     "tiers": [
         {"below_pct": 50.0, "schedule": {"type": "clock",
@@ -57,6 +57,18 @@ SPEC = {"type": "dc_branch", "shed_ladder": LADDER,
 #: them.
 TIMED = dict(SPEC, min_run=600.0, min_off=1800.0)
 
+#: A floor with a second source on a different bus and in different units.
+#: The battery arrives over Bluetooth from a device that is routinely quiet
+#: for minutes, and the charge controller is wired, resident and reports every
+#: thirty seconds. Each source carries its own bounds, because a cell voltage
+#: and a pack voltage share no scale.
+TWO_SOURCE = dict(LADDER, floor={"sources": [
+    {"device": "bms", "field": "cell_min_volts",
+     "shed_below": 3.15, "restore_above": 3.25},
+    {"device": "mppt", "field": "battery_volts",
+     "shed_below": 12.6, "restore_above": 13.0},
+]})
+
 
 def at(hour, minute=0):
     return datetime.datetime(2026, 6, 21, hour, minute, tzinfo=ZONE)
@@ -72,13 +84,20 @@ def reading(soc=None, cell=None, age=0.0, device="bms"):
 
 
 def run(soc=None, cell=3.30, now=None, state=None, switches=None,
-        clock_trusted=True, mono=0.0, wall=1_000_000.0, spec=None):
+        clock_trusted=True, mono=0.0, spec=None):
     """One pass of the whole decision for a single camera load."""
     decisions, new_state = decide.decide(
-        now or at(12), wall, mono, clock_trusted,
+        now or at(12), mono, clock_trusted,
         reading(soc, cell), switches or {"shedding_enabled": True, "loads": {}},
         {"cameras": spec or SPEC}, state or {}, SUNS)
     return decisions["cameras"], new_state
+
+
+#: An expiry comfortably ahead of every `at()` in this file, and one behind
+#: it. Expressed against the same clock the schedules use, so a passing test
+#: cannot depend on two clocks disagreeing.
+LATER = at(23, 59).timestamp()
+EARLIER = at(0, 1).timestamp()
 
 
 def settle(soc, mono=0.0, **kwargs):
@@ -167,6 +186,17 @@ def test_a_falling_source_never_restores_power():
             "power came back at %s while the source was still falling" % soc)
 
 
+def test_a_source_exactly_at_a_tier_entry_does_not_latch_it():
+    """Entry is strictly below. From an unlatched start, feeding the entry
+    value itself must not latch, or every threshold is one point lower than
+    the node file says."""
+    state = {}
+    for _ in range(LADDER["enter_after_readings"] + 1):
+        decision, state = run(50.0, now=at(23), state=state)
+    assert decision.connected, "latched at exactly its own entry"
+    assert decision.tier == 0
+
+
 def test_the_entry_and_release_of_adjacent_tiers_may_coincide():
     """With a margin of fifteen the ten tier releases above twenty-five and
     the twenty-five tier enters below it. At exactly twenty-five neither
@@ -178,6 +208,79 @@ def test_the_entry_and_release_of_adjacent_tiers_may_coincide():
     assert state["cameras"]["latched"]["2"] is True, "released at its boundary"
     decision, state = run(25.0, state=state)
     assert decision.tier == 3
+
+
+def test_readings_either_side_of_a_stale_gap_are_not_consecutive():
+    """Consecutive has to mean consecutive, or the requirement is none.
+
+    With five minute readings and a ten minute staleness limit, a value below
+    entry, a quiet radio, and the same value again would otherwise latch a
+    tier on two samples that could be an hour apart.
+    """
+    fresh = {"bms": {"fields": {"state_of_charge_pct": 44.0},
+                     "age_seconds": 1.0}}
+    quiet = {"bms": {"fields": {"state_of_charge_pct": 44.0},
+                     "age_seconds": 100_000.0}}
+    state = {}
+    for step, readings in enumerate((fresh, quiet, fresh)):
+        decisions, state = decide.decide(
+            at(23), float(step), True, readings,
+            {"shedding_enabled": True, "loads": {}}, {"cameras": SPEC},
+            state, SUNS)
+    assert decisions["cameras"].connected, (
+        "a tier latched on two readings separated by a stale gap")
+
+
+def test_a_tier_releases_only_after_the_restore_dwell():
+    """The failure this guards is restoring on a charging spike.
+
+    A tier whose source jumps clear of its release for one reading has not
+    recovered; it has seen the charger come on. The entry side is counted in
+    readings and this side is timed, because a spike lasts seconds whatever
+    the sensor rate.
+    """
+    patient = dict(LADDER, restore_dwell=900.0)
+    spec = dict(SPEC, shed_ladder=patient)
+
+    decision, state = settle(45.0, now=at(23), spec=spec)
+    assert not decision.connected
+
+    decision, state = run(66.0, now=at(23), mono=100.0, state=state, spec=spec)
+    assert not decision.connected, "released on the first reading above"
+
+    decision, state = run(66.0, now=at(23), mono=200.0, state=state, spec=spec)
+    assert not decision.connected, "released before the dwell expired"
+
+    decision, state = run(66.0, now=at(23), mono=1100.0, state=state,
+                          spec=spec)
+    assert decision.connected, "never released after the dwell expired"
+
+
+def test_a_source_dipping_back_restarts_the_restore_dwell():
+    """Otherwise the dwell measures from the first moment the source was ever
+    clear, and a value flickering across the release would accumulate credit
+    it has not earned."""
+    patient = dict(LADDER, restore_dwell=900.0)
+    spec = dict(SPEC, shed_ladder=patient)
+    decision, state = settle(45.0, now=at(23), spec=spec)
+
+    # Clear at 100, back below at 200, clear again at 300. A dwell that
+    # restarted correctly now expires at 1200; one that kept the original
+    # stamp would expire at 1000. The probe at 1100 is the only moment the
+    # two answers differ, which is why it is there.
+    for mono, soc in ((100.0, 66.0), (200.0, 55.0), (300.0, 66.0)):
+        decision, state = run(soc, now=at(23), mono=mono, state=state,
+                              spec=spec)
+
+    decision, state = run(66.0, now=at(23), mono=1100.0, state=state,
+                          spec=spec)
+    assert not decision.connected, (
+        "released at 1100, so the dwell was still measured from 100 and the "
+        "dip below release did not restart it")
+
+    decision, state = run(66.0, now=at(23), mono=1300.0, state=state,
+                          spec=spec)
+    assert decision.connected, "never released after the restarted dwell"
 
 
 # -- the schedules ----------------------------------------------------------
@@ -291,7 +394,7 @@ def test_the_floor_survives_an_override():
     """A floor an override can defeat is not a floor."""
     switches = {"shedding_enabled": True,
                 "loads": {"cameras": {"force": "on",
-                                      "expires_epoch": 2_000_000.0}}}
+                                      "expires_epoch": LATER}}}
     decision, _ = run(100.0, cell=3.10, switches=switches)
     assert not decision.connected
     assert decision.reason_code == decide.FLOOR
@@ -322,21 +425,67 @@ def test_a_second_floor_source_can_shed_when_the_first_is_quiet():
     """The battery arrives over Bluetooth from a device that goes quiet for
     minutes. A ladder with one source hangs on the least reliable thing on
     the node, so an independently wired source can shed on its own."""
-    ladder = dict(LADDER)
-    ladder["floor"] = dict(LADDER["floor"], sources=[
-        {"device": "bms", "field": "cell_min_volts"},
-        {"device": "mppt", "field": "battery_volts"},
-    ], shed_below=12.6, restore_above=13.0)
-    spec = dict(SPEC, shed_ladder=ladder)
-
+    spec = dict(SPEC, shed_ladder=TWO_SOURCE)
     readings = {"bms": {"fields": {}, "age_seconds": 9999.0},
                 "mppt": {"fields": {"battery_volts": 12.1},
                          "age_seconds": 5.0}}
     decisions, _ = decide.decide(
-        at(12), 1_000_000.0, 0.0, True, readings,
+        at(12), 0.0, True, readings,
         {"shedding_enabled": True, "loads": {}}, {"cameras": spec}, {}, SUNS)
     assert not decisions["cameras"].connected
     assert decisions["cameras"].reason_code == decide.FLOOR
+
+
+def test_a_healthy_source_is_judged_against_its_own_bounds():
+    """Each floor source carries its own, because they share no scale.
+
+    One pair of bounds for both compares a perfectly good cell at 3.30
+    against a pack threshold of 12.6 and sheds the cameras forever.
+    """
+    spec = dict(SPEC, shed_ladder=TWO_SOURCE)
+    readings = {"bms": {"fields": {"state_of_charge_pct": 100.0,
+                                   "cell_min_volts": 3.30},
+                        "age_seconds": 1.0},
+                "mppt": {"fields": {"battery_volts": 13.4},
+                         "age_seconds": 1.0}}
+    decisions, _ = decide.decide(
+        at(12), 0.0, True, readings,
+        {"shedding_enabled": True, "loads": {}}, {"cameras": spec}, {}, SUNS)
+    assert decisions["cameras"].connected, decisions["cameras"].reason
+
+
+def test_a_latched_floor_holds_when_its_source_goes_quiet():
+    """Releasing a shed because a radio went quiet is the wrong direction.
+    The floor holds with no time limit and says it is holding."""
+    _, state = run(100.0, cell=3.10)
+    decisions, state = decide.decide(
+        at(12), 1.0, True,
+        {"bms": {"fields": {}, "age_seconds": 1.0}},
+        {"shedding_enabled": True, "loads": {}}, {"cameras": SPEC},
+        state, SUNS)
+    assert not decisions["cameras"].connected
+    assert "nothing readable to clear it" in decisions["cameras"].reason
+
+
+def test_a_stale_floor_reading_cannot_release_a_latched_floor():
+    """The dangerous direction. A cell record frozen at 3.30 from before the
+    sag would otherwise read as proof the pack had recovered."""
+    _, state = run(100.0, cell=3.10)
+    decisions, _ = decide.decide(
+        at(12), 1.0, True,
+        {"bms": {"fields": {"cell_min_volts": 3.30},
+                 "age_seconds": 100_000.0}},
+        {"shedding_enabled": True, "loads": {}}, {"cameras": SPEC},
+        state, SUNS)
+    assert not decisions["cameras"].connected
+
+
+def test_a_value_between_the_floor_bounds_does_not_shed_from_an_unlatched_start():
+    """The hysteresis is two thresholds, not one. Without the latch check a
+    cell at 3.20 would shed on first sight and the restoring bound would
+    become the shedding bound."""
+    decision, _ = run(100.0, cell=3.20)
+    assert decision.connected
 
 
 # -- stale readings ---------------------------------------------------------
@@ -355,7 +504,7 @@ def test_a_stale_reading_holds_the_latches_and_keeps_the_schedule_running():
                      "age_seconds": 100_000.0}}
     for when, connected in ((at(12), True), (at(23), False), (at(8), True)):
         decisions, state = decide.decide(
-            when, 1_000_000.0, 0.0, True, stale,
+            when, 0.0, True, stale,
             {"shedding_enabled": True, "loads": {}}, {"cameras": SPEC},
             state, SUNS)
         assert decisions["cameras"].connected is connected, when
@@ -363,12 +512,19 @@ def test_a_stale_reading_holds_the_latches_and_keeps_the_schedule_running():
 
 
 def test_a_stale_reading_is_not_read_as_zero():
-    """Zero would latch every tier and shed the cameras on a quiet radio."""
+    """Zero would latch every tier and shed the cameras on a quiet radio.
+
+    Fed enough times to latch, because one pass counts one reading and could
+    not latch a tier whatever it read.
+    """
     stale = {"bms": {"fields": {"state_of_charge_pct": 45.0},
                      "age_seconds": 100_000.0}}
-    decisions, state = decide.decide(
-        at(12), 1_000_000.0, 0.0, True, stale,
-        {"shedding_enabled": True, "loads": {}}, {"cameras": SPEC}, {}, SUNS)
+    state = {}
+    for step in range(LADDER["enter_after_readings"] + 1):
+        decisions, state = decide.decide(
+            at(12), float(step), True, stale,
+            {"shedding_enabled": True, "loads": {}}, {"cameras": SPEC},
+            state, SUNS)
     assert decisions["cameras"].connected
     assert decisions["cameras"].tier == 0
 
@@ -376,7 +532,7 @@ def test_a_stale_reading_is_not_read_as_zero():
 def test_a_missing_field_in_a_fresh_reading_is_an_absence_not_a_zero():
     readings = {"bms": {"fields": {"cell_min_volts": 3.3}, "age_seconds": 1.0}}
     decisions, _ = decide.decide(
-        at(23), 1_000_000.0, 0.0, True, readings,
+        at(23), 0.0, True, readings,
         {"shedding_enabled": True, "loads": {}}, {"cameras": SPEC}, {}, SUNS)
     assert decisions["cameras"].connected, "a missing field shed the load"
 
@@ -400,7 +556,7 @@ def test_an_untrusted_clock_suspends_the_schedules_but_not_the_floor_tier():
 def test_an_override_beats_the_tiers():
     switches = {"shedding_enabled": True,
                 "loads": {"cameras": {"force": "on",
-                                      "expires_epoch": 2_000_000.0}}}
+                                      "expires_epoch": LATER}}}
     decision, _ = settle(9.0, switches=switches)
     assert decision.connected
     assert decision.reason_code == decide.OVERRIDE
@@ -409,7 +565,7 @@ def test_an_override_beats_the_tiers():
 def test_an_override_can_force_a_load_off():
     switches = {"shedding_enabled": True,
                 "loads": {"cameras": {"force": "off",
-                                      "expires_epoch": 2_000_000.0}}}
+                                      "expires_epoch": LATER}}}
     decision, _ = run(100.0, switches=switches)
     assert not decision.connected
 
@@ -417,8 +573,8 @@ def test_an_override_can_force_a_load_off():
 def test_an_expired_override_is_gone():
     switches = {"shedding_enabled": True,
                 "loads": {"cameras": {"force": "on",
-                                      "expires_epoch": 900_000.0}}}
-    decision, _ = settle(9.0, switches=switches, wall=1_000_000.0)
+                                      "expires_epoch": EARLIER}}}
+    decision, _ = settle(9.0, switches=switches)
     assert not decision.connected, "an expired override still applied"
 
 
@@ -437,12 +593,12 @@ def test_while_the_clock_is_untrusted_force_off_applies_and_force_on_does_not():
     halves fail safe: a force-off saves power, and ignoring a force-on costs
     nothing because the load's default is already to run."""
     off = {"shedding_enabled": True,
-           "loads": {"cameras": {"force": "off", "expires_epoch": 0.0}}}
+           "loads": {"cameras": {"force": "off", "expires_epoch": EARLIER}}}
     decision, _ = run(100.0, switches=off, clock_trusted=False)
     assert not decision.connected
 
     on = {"shedding_enabled": True,
-          "loads": {"cameras": {"force": "on", "expires_epoch": 0.0}}}
+          "loads": {"cameras": {"force": "on", "expires_epoch": EARLIER}}}
     decision, _ = settle(9.0, switches=on, clock_trusted=False)
     assert not decision.connected, "a force-on was honoured on a bad clock"
 
@@ -479,6 +635,23 @@ def test_a_minimum_off_time_holds_a_load_down():
     assert "minimum off time" in decision.reason
 
 
+def test_each_transition_restarts_the_clock_on_the_next_one():
+    """Without resetting the stamp at a transition every later timer measures
+    from boot, so the second change of mind passes instantly and the recorder
+    cycles."""
+    state = _shed_with_timers()
+    decision, state = run(100.0, mono=9000.0, state=state, spec=TIMED)
+    assert decision.connected, "the minimum off time never expired"
+    # Two readings to latch the tier, both well inside the minimum run time
+    # that started when the load was restored at 9000.
+    for mono in (9060.0, 9061.0):
+        decision, state = run(9.0, mono=mono, state=state, spec=TIMED)
+    assert decision.connected, (
+        "shed 61s after restoring, so the minimum run time was measured from "
+        "boot rather than from the restore")
+    assert "minimum run time" in decision.reason
+
+
 def test_a_minimum_off_time_expires():
     state = _shed_with_timers()
     decision, _ = run(100.0, mono=9000.0, state=state, spec=TIMED)
@@ -498,7 +671,7 @@ def test_a_load_type_this_does_not_drive_is_refused_rather_than_ignored():
     """A load nobody drives and nobody mentions is indistinguishable from one
     that is working."""
     decisions, _ = decide.decide(
-        at(12), 1_000_000.0, 0.0, True, reading(50.0),
+        at(12), 0.0, True, reading(50.0),
         {"shedding_enabled": True, "loads": {}},
         {"irrigation": {"type": "sequenced_ac", "min_run": 0.0,
                         "min_off": 0.0}},
