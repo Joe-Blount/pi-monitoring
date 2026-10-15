@@ -16,7 +16,7 @@ import yaml
 
 from . import duration
 
-MODES = ("poll", "resident", "controller")
+MODES = ("poll", "resident")
 
 #: Every kind of load a control block may declare.
 #:

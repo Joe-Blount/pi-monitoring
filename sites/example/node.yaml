@@ -79,11 +79,11 @@ battery:
 #                     ONE process per interval. Stateless reads only.
 #   mode: resident    telegraf inputs.execd holds it open. For things that
 #                     stream or count: a rain gauge, unprompted serial frames.
-#   mode: controller  the controller opens this device and publishes its
-#                     readings. Telegraf never touches it. Use this for any
-#                     device that admits a single reader on a node that also
-#                     runs control, otherwise the controller and telegraf
-#                     fight over the port and the control loop loses.
+#
+# A device that admits a single reader, such as a serial port or a Bluetooth
+# connection, is still collected by telegraf under one of those two modes. Load
+# control reads what the collector published rather than opening the device
+# itself, so there is nothing for the two to fight over.
 # ---------------------------------------------------------------------------
 
 # Two ways to turn something off, and they mean different things:
@@ -151,7 +151,7 @@ devices:
 
   - name: mppt
     driver: vedirect
-    mode: controller          # single-reader device on a controlling node
+    mode: resident            # streams unprompted; one reader holds the port
     tags: {location: solar}
     params:
       # Always the by-id path. /dev/ttyUSB0 numbering moves between boots.
@@ -164,7 +164,7 @@ devices:
 
   - name: bms
     driver: ble_bms
-    mode: controller
+    mode: poll
     tags: {location: battery}
     params:
       address: "AA:BB:CC:DD:EE:FF"
@@ -184,7 +184,7 @@ devices:
 
   - name: shunt
     driver: qinglan             # also accepted as ble_shunt
-    mode: controller
+    mode: poll
     tags: {location: battery}
     params:
       address: "AA:BB:CC:DD:EE:FF"

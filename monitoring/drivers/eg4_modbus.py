@@ -272,7 +272,7 @@ class Eg4ModbusDriver(Driver):
     """An EG4 all-in-one inverter, read over RS232 as Modbus RTU."""
 
     description = "EG4 all-in-one inverter over RS232 (Modbus RTU)"
-    modes = ("poll", "controller")
+    modes = ("poll",)
 
     def __init__(self, name, params, tags):
         Driver.__init__(self, name, params, tags)

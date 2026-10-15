@@ -372,7 +372,7 @@ class QinlanDriver(Driver):
     # Connect, read and disconnect each time rather than holding the link:
     # these modules accept one connection at a time, so a held connection
     # locks the vendor's phone application out of the shunt.
-    modes = ("poll", "controller")
+    modes = ("poll",)
 
     def __init__(self, name, params, tags):
         Driver.__init__(self, name, params, tags)

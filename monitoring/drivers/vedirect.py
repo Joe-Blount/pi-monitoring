@@ -213,7 +213,7 @@ class VedirectDriver(Driver):
     """Read a Victron charge controller over its VE.Direct cable."""
 
     description = "Victron VE.Direct charge controller"
-    modes = ("resident", "controller", "poll")
+    modes = ("resident", "poll")
 
     def __init__(self, name, params, tags):
         Driver.__init__(self, name, params, tags)

@@ -138,7 +138,6 @@ def test_a_long_failure_reason_is_shortened_for_the_log_but_not_the_point(
 def test_poll_ignores_devices_that_are_not_poll_mode(tmp_path, doubles):
     node = node_with(tmp_path, """  - {name: a, driver: good, mode: poll}
   - {name: b, driver: good, mode: resident}
-  - {name: c, driver: good, mode: controller}
 """)
     out = io.StringIO()
     runner.poll(node, NOW, out, io.StringIO())
@@ -279,75 +278,9 @@ def test_calibration_applies_to_streamed_readings_too(tmp_path, stream_doubles):
     assert out.getvalue().strip() == "m,device=a ok=1.0,value=101.0 1700000000"
 
 
-# -- devices nothing will collect --------------------------------------------
-
-def controller_node(tmp_path, control_enabled):   # noqa: needs the doubles
-    path = tmp_path / "node.yaml"
-    path.write_text("""
-site: s
-node: n
-measurement: m
-devices:
-  - {name: mppt, driver: vedirect, mode: controller, params: {port: /dev/x}}
-  - {name: counter, driver: good, mode: poll}
-control:
-  enabled: %s
-  loads:
-    cameras: {type: dc_branch, control_pin: 23}
-""" % ("true" if control_enabled else "false"))
-    return config.load(path, set(REGISTRY))
-
-
-def test_a_controller_device_with_control_disabled_is_reported_as_stranded(tmp_path, doubles):
-    """Nothing reads it, and that absence looks exactly like a sensor that is
-    working and reporting nothing."""
-    node = controller_node(tmp_path, control_enabled=False)
-    assert [d.name for d in runner.orphaned(node)] == ["mppt"]
-
-
-def test_a_controller_device_with_control_enabled_is_not_stranded(tmp_path, doubles):
-    node = controller_node(tmp_path, control_enabled=True)
-    assert runner.orphaned(node) == []
-
-
-def test_listing_marks_a_stranded_device(tmp_path, doubles):
-    out = io.StringIO()
-    runner.listing(controller_node(tmp_path, control_enabled=False), out)
-    assert "NOT COLLECTED" in out.getvalue()
-
-
-def test_check_fails_a_stranded_device_rather_than_probing_it(tmp_path, doubles):
-    """Probing it would report on hardware that nothing is going to read,
-    which is a confusing kind of success."""
-    out = io.StringIO()
-    failures = runner.check(controller_node(tmp_path, control_enabled=False), out)
-    text = out.getvalue()
-
-    assert "FAIL  mppt" in text
-    assert "nothing will read it" in text
-    # It must not have been probed: the port does not exist, and an error
-    # about opening it would send someone looking at the wiring instead of at
-    # the configuration.
-    assert "/dev/x" not in text
-    # Exactly one. The other device is a double that always passes, so this
-    # number no longer depends on whether the machine running the tests has a
-    # /proc to read.
-    assert failures == 1
-
-
-def test_poll_still_collects_while_another_device_is_stranded(tmp_path, doubles):
-    """The previous version of this asserted a list comprehension in the
-    config loader and never called poll at all."""
-    node = controller_node(tmp_path, control_enabled=False)
-    out, err = io.StringIO(), io.StringIO()
-    written = runner.poll(node, NOW, out, err)
-    assert written == 1
-    assert "value=2.0" in out.getvalue()
-    assert "mppt" not in out.getvalue(), "a stranded device must not be polled"
-
-
-def test_streaming_refuses_a_device_the_controller_owns(tmp_path, stream_doubles):
-    """Streaming it here would fight the controller for the port."""
+def test_streaming_refuses_a_device_that_is_not_resident(tmp_path, stream_doubles):
+    """Streaming a poll device would run a second reader alongside the one
+    telegraf already schedules."""
     import subprocess
     import sys as _sys
     path = tmp_path / "node.yaml"
@@ -356,19 +289,16 @@ site: s
 node: n
 measurement: m
 devices:
-  - {name: mppt, driver: vedirect, mode: controller, params: {port: /dev/x}}
-control:
-  enabled: true
-  loads:
-    cameras: {type: dc_branch, control_pin: 23}
+  - {name: bms, driver: jbd, mode: poll, params: {address: "AA:BB:CC:DD:EE:FF"}}
 """)
     repo = pathlib.Path(__file__).resolve().parent.parent
     out = subprocess.run(
-        [_sys.executable, str(repo / "bin" / "collect"), "mppt",
+        [_sys.executable, str(repo / "bin" / "collect"), "bms",
          "--node", str(path), "--stream"],
         capture_output=True, text=True, timeout=60)
     assert out.returncode == 2
-    assert "controller owns" in out.stderr
+    assert "not resident" in out.stderr
+    assert "--poll" in out.stderr
 
 
 def test_a_driver_that_crashes_mid_stream_is_named_not_swallowed(

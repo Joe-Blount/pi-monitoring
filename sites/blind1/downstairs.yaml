@@ -59,7 +59,7 @@ devices:
 
   - name: mppt
     driver: vedirect
-    mode: controller
+    mode: resident
     tags: {location: solar}
     params:
       port: /dev/serial/by-id/usb-VictronEnergy_BV_VE_Direct_cable_VEAWO3NQ-if00-port0
@@ -75,7 +75,7 @@ devices:
   - name: bms
     driver: jbd
     enabled: false
-    mode: controller
+    mode: poll
     tags: {location: battery}
     params:
       address: "A5:C2:37:4C:80:F7"    # chins320, read off the pack itself
@@ -93,7 +93,7 @@ devices:
   # this and remove the upstairs entry on the same visit, never separately.
   - name: shunt
     driver: qinglan
-    mode: controller
+    mode: poll
     enabled: false
     tags: {location: battery}
     params:

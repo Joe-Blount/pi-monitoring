@@ -202,9 +202,9 @@ In order. Each step tells you something the next one assumes.
 collect --node /etc/monitoring/node.yaml --list
 ```
 
-Every device should appear with the mode you expect. Anything marked
-`[NOT COLLECTED]` is declared but nothing will read it, which usually means a
-device in controller mode on a node where control is disabled.
+Every device should appear with the mode you expect, and anything disabled
+should say so. A device you expect to see and do not is declared in a node
+file this machine is not running.
 
 **Is each device actually there?**
 

@@ -275,7 +275,7 @@ class JbdDriver(Driver):
     slow_read = True
     # Connect, read, disconnect. These accept one connection at a time, so a
     # held link locks the owner out of the vendor application.
-    modes = ("poll", "controller")
+    modes = ("poll",)
 
     def __init__(self, name, params, tags):
         Driver.__init__(self, name, params, tags)

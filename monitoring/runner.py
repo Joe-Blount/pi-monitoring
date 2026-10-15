@@ -253,19 +253,6 @@ def stream_device(node, device, out=None, err=None, max_readings=None,
                 pass
 
 
-def orphaned(node):
-    """Devices declared with no process that will ever read them.
-
-    A device in controller mode is read by the controller, so if control is
-    disabled on this node nothing collects it. That absence looks exactly like
-    a sensor that is working and reporting nothing, which is the confusion
-    this project keeps trying to remove.
-    """
-    if node.control.get("enabled"):
-        return []
-    return [d for d in node.by_mode("controller") if d.enabled]
-
-
 def collector_holding(device):
     """The process id of the resident collector reading this device, or None.
 
@@ -312,16 +299,9 @@ def check(node, out=None):
     out = sys.stdout if out is None else out
     failures = 0
 
-    stranded = {d.name for d in orphaned(node)}
-
     for device in node.devices:
         if not device.enabled:
             out.write("  skip  %-16s disabled in configuration\n" % device.name)
-            continue
-        if device.name in stranded:
-            failures += 1
-            out.write("  FAIL  %-16s declared in controller mode, but control is "
-                      "disabled on this node, so nothing will read it\n" % device.name)
             continue
         try:
             driver = build_driver(device)
@@ -365,11 +345,8 @@ def listing(node, out=None):
     if node.tags:
         out.write("  tags: %s\n"
                   % ", ".join("%s=%s" % kv for kv in sorted(node.tags.items())))
-    stranded = {d.name for d in orphaned(node)}
     for device in node.devices:
         state = "" if device.enabled else "  [disabled]"
-        if device.name in stranded:
-            state = "  [NOT COLLECTED: control is disabled]"
         # Shown as informational: telegraf schedules the single poll command,
         # so a per-device interval on a poll device describes an intention
         # rather than what happens.

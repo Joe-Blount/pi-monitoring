@@ -45,7 +45,7 @@ class Driver:
     #: Modes this driver can actually work in. A rain gauge in poll mode
     #: validates, lists, checks and publishes a total that never changes,
     #: because nothing is watching the pin between polls.
-    modes = ("poll", "resident", "controller")
+    modes = ("poll", "resident")
 
     def __init__(self, name, params, tags):
         self.name = name

@@ -77,12 +77,14 @@ Each device declares a mode:
 |---|---|---|
 | `poll` | one `inputs.exec` per node | stateless reads: 1-Wire, I2C, host stats |
 | `resident` | `inputs.execd` | streaming or counting: a rain gauge, unprompted serial frames |
-| `controller` | the controller owns it | single-reader devices on a machine that also controls loads |
 
-`controller` mode exists because some devices admit exactly one reader. A
-serial port is one. Each Bluetooth connection is another. If telegraf holds the
-charge controller's port, the control loop cannot read the battery, and a
-control loop that cannot read its own sensor is not a control loop.
+Two modes, and a device that admits exactly one reader still uses one of them.
+A serial port admits one reader; so does each Bluetooth connection. Load
+control therefore reads what a collector published rather than opening any
+device itself, which is the only arrangement where the control loop and the
+collectors cannot compete for a port. The alternative, letting the controller
+own single-reader devices, means a node where control is switched off silently
+stops reading its own battery.
 
 ## Conventions
 

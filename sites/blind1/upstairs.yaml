@@ -62,10 +62,10 @@ devices:
   # will reach it with the supplied cable and no extension.
   #
   # Moving it later is cut and paste: this entry goes into downstairs.yaml
-  # unchanged except for mode, which becomes "controller" once a controller
-  # exists to own the port. The measurement and the location tag do not
-  # change, so dashboards filtering on those are unaffected. Only the node tag
-  # changes.
+  # unchanged, mode included, because a device that streams is read by a
+  # resident collector whether or not that node also controls loads. The
+  # measurement and the location tag do not change either, so dashboards
+  # filtering on those are unaffected. Only the node tag changes.
   - name: mppt
     driver: vedirect
     mode: resident
@@ -88,10 +88,6 @@ devices:
   # it would report nothing at all, so it is polled from here: this Pi reached
   # it cleanly through a floor, and data in the database today beats data in a
   # plan.
-  #
-  # Poll rather than controller mode, deliberately. Controller mode means the
-  # controller owns the device, and there is no controller yet, so the reading
-  # would simply never happen.
   #
   # The driver declares itself slow, so the collector with the five minute
   # interval and the two minute timeout reads it rather than the fast one.

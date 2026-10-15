@@ -88,9 +88,6 @@ def test_a_fragment_only_runs_devices_this_node_declares(path):
             assert modes[name] != "poll", (
                 "%s streams %r, but it is a poll device and is already "
                 "collected by the exec input" % (fragment.name, name))
-            assert modes[name] != "controller", (
-                "%s streams %r, but it is a controller device and the "
-                "controller owns it" % (fragment.name, name))
 
 
 @pytest.mark.parametrize("path", NODE_FILES, ids=lambda p: "%s/%s" % (p.parent.name, p.name))
