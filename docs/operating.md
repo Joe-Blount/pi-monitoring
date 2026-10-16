@@ -91,17 +91,18 @@ any minimum run time. That one rule has nothing above it.
 
 ## Stop the controller entirely
 
-If it is running as a plain process:
+```
+sudo systemctl stop monitoring-control
+sudo systemctl disable monitoring-control
+```
+
+Stop alone lasts until the next reboot, because the service is enabled.
+Disable as well if you want it to stay down.
+
+If you started it by hand rather than through the service:
 
 ```
 pkill -f "control run"
-```
-
-If it is installed as a service, stop the service instead of the process:
-
-```
-systemctl list-units --type=service | grep -i control
-sudo systemctl stop <the name that printed above>
 ```
 
 Either way, every load drops to whatever its wiring does with no signal at

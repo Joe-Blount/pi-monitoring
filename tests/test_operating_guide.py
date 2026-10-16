@@ -234,3 +234,32 @@ def test_the_guide_links_to_bringup_for_the_dht_explanation():
 def test_the_readme_links_to_the_guide():
     readme = (REPO / "README.md").read_text()
     assert "docs/operating.md" in readme
+
+
+def test_the_guide_names_the_real_service_unit():
+    """The guide was written before the unit existed and hedged by telling
+    the reader to go and find its name. Naming it is only an improvement
+    while the name is right, and a unit renamed in deploy with the guide left
+    behind sends somebody hunting for a service that is not there.
+    """
+    unit = REPO / "deploy" / "monitoring-control.service"
+    assert unit.is_file(), "the unit this guide names does not exist"
+    name = unit.stem
+    # The unit argument itself, compared whole. A containment test passes
+    # against a plausible near-miss: the real name is a substring of several
+    # names somebody might write instead, so "is it in there" answers yes to
+    # a unit that does not exist.
+    named = set()
+    for command in CODE_LINES:
+        words = command.split()
+        if "systemctl" not in words:
+            continue
+        for word in words:
+            if "monitoring" in word:
+                named.add(word.split(".service")[0])
+
+    assert named, "the guide gives no systemctl command for this service"
+    unknown = named - {name, "telegraf"}
+    assert not unknown, (
+        "the guide names unit(s) %s; the only one that exists is %s"
+        % (sorted(unknown), name))
