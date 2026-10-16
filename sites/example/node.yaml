@@ -237,6 +237,7 @@ devices:
     enabled: false
     tags: {location: rack}
     params: {address: "YY:YY:YY:YY:YY:YY"}
+
   # The load controller, read as though it were a device.
   #
   # The controller is a separate service, not a collector. What it decided
@@ -245,7 +246,7 @@ devices:
   # carries it like any other device. No second output path, no second set of
   # credentials, nothing new in the telegraf configuration.
   #
-  # Enabled together with control above, never separately. Enabled here with
+  # Enabled together with the control block, never separately. Enabled here with
   # the controller off, every poll fails with "the controller has published
   # nothing", which is true but is noise rather than news. Disabled here with
   # the controller on, the shed level and the reason code reach nobody, and a
@@ -257,7 +258,6 @@ devices:
     enabled: false
     params: {path: /run/monitoring/control.json}
     tags: {location: control}
-
 
 control:
   enabled: false              # default off. A node switches loads only when

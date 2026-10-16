@@ -150,9 +150,12 @@ def test_the_level_reaches_the_device_for_each_polarity():
 
 
 def test_the_device_is_constructed_the_way_the_shipping_code_constructs_it():
-    """The double and the real device take the same call. An earlier version
-    gave the double a convenience signature, so every test exercised a
-    construction the shipping code never made."""
+    """The double and the real device take the same call.
+
+    A double with a convenience signature of its own would mean every test
+    here exercised a construction the shipping code never makes, and the
+    construction is where two of the three polarity inversions live.
+    """
     pin = relay.Relay(22, relay.ENERGIZE_TO_CONNECT, factory=relay.Recording)
     pin._open()
     assert pin._device.pin == 22

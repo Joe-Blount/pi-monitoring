@@ -59,7 +59,7 @@ control override clear cameras
 ## Force the cameras off
 
 ```
-control override cameras off --until "2026-10-18 09:00"
+control override cameras off --until "YYYY-MM-DD HH:MM"
 ```
 
 Always give an end time. An override with no end time is treated as already

@@ -731,6 +731,70 @@ def test_an_unresolved_floor_does_not_change_hands():
     assert decisions["cameras"].connected
 
 
+def test_the_load_does_not_flicker_back_when_one_floor_source_recovers():
+    """A resolved latch is not a licence to reconnect onto the other source.
+
+    The cell recovers while the pack sits under its own bound. If releasing
+    the cell's latch let the load back, the entry test would latch again on
+    the very next pass, so the load would be connected for exactly one loop
+    interval. On the camera branch that is a recorder power cycle onto a bank
+    the pack says is below its floor, and the timers cannot absorb it because
+    the floor is exempt from them.
+    """
+    spec = dict(SPEC, shed_ladder=TWO_SOURCE)
+
+    def pass_through(state, cell, pack):
+        readings = {"bms": {"fields": {"state_of_charge_pct": 60.0,
+                                       "cell_min_volts": cell},
+                            "age_seconds": 1.0},
+                    "mppt": {"fields": {"battery_volts": pack},
+                             "age_seconds": 1.0}}
+        return decide.decide(at(12), 0.0, True, readings,
+                             {"shedding_enabled": True, "loads": {}},
+                             {"cameras": spec}, state, SUNS)
+
+    decisions, state = pass_through({}, 3.10, 13.2)
+    assert not decisions["cameras"].connected
+
+    for pass_number in range(3):
+        decisions, state = pass_through(state, 3.30, 12.0)
+        assert not decisions["cameras"].connected, (
+            "the load came back on pass %d with the pack under its floor"
+            % pass_number)
+        assert "battery_volts" in decisions["cameras"].reason
+
+    # Both clear, and only then does it come back.
+    decisions, state = pass_through(state, 3.30, 13.6)
+    assert decisions["cameras"].connected
+
+
+def test_a_recovered_owner_hands_the_floor_over_only_on_a_live_reading():
+    """The other source has to be readable and under its own bound. A quiet
+    second source must not keep a resolved floor latched, or a radio going
+    silent would be enough to hold a shed with nothing saying it should."""
+    spec = dict(SPEC, shed_ladder=TWO_SOURCE)
+    readings = {"bms": {"fields": {"state_of_charge_pct": 60.0,
+                                   "cell_min_volts": 3.10},
+                        "age_seconds": 1.0},
+                "mppt": {"fields": {"battery_volts": 12.0},
+                         "age_seconds": 1.0}}
+    decisions, state = decide.decide(
+        at(12), 0.0, True, readings, {"shedding_enabled": True, "loads": {}},
+        {"cameras": spec}, {}, SUNS)
+    assert not decisions["cameras"].connected
+
+    recovered = {"bms": {"fields": {"state_of_charge_pct": 60.0,
+                                    "cell_min_volts": 3.30},
+                         "age_seconds": 1.0},
+                 "mppt": {"fields": {"battery_volts": 12.0},
+                          "age_seconds": 100_000.0}}
+    decisions, _ = decide.decide(
+        at(12), 0.0, True, recovered,
+        {"shedding_enabled": True, "loads": {}}, {"cameras": spec}, state,
+        SUNS)
+    assert decisions["cameras"].connected, decisions["cameras"].reason
+
+
 def test_either_floor_source_can_latch_on_its_own():
     """The asymmetry is only on release. A second, independently wired
     source exists so that it can shed when the first is unreliable."""

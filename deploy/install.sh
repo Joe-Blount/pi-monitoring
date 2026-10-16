@@ -57,14 +57,13 @@ restore_telegraf() {
     # start it here keeps the node silent for the same reason twice.
     #
     # errexit is turned off for the whole function rather than trusted to be
-    # guarded line by line. A dropped ssh connection closes this process's
-    # stderr before the HUP trap below ever fires, so the echo here can fail
-    # on its own account, with nothing wrong with telegraf at all, and under
-    # set -e that failure would end the shell right here, before systemctl
-    # start runs. Once telegraf has been stopped by this script, nothing
-    # short of the kernel is allowed to be the reason it does not come back,
-    # and that has to hold even when every diagnostic write in this function
-    # fails.
+    # guarded line by line. When the terminal this was started from goes
+    # away, a write to stderr fails on its own account, with nothing wrong
+    # with telegraf at all, and under set -e that failure would end the shell
+    # right here, before systemctl start runs. A node left silent because a
+    # diagnostic line could not be printed is the worst trade in this file,
+    # so no write in this function is allowed to decide whether telegraf
+    # comes back.
     set +e
     if [[ "$TELEGRAF_STOPPED" == "1" ]] \
        && ! systemctl is-active --quiet telegraf; then
@@ -74,6 +73,19 @@ restore_telegraf() {
     set -e
     return 0
 }
+
+# SIGPIPE is ignored for the life of this script, which is what lets the
+# EXIT trap below run at all when the far end of the output has gone.
+#
+# A connection dropped without a pty leaves stdout a pipe whose reader has
+# exited. The next progress line then raises SIGPIPE, whose default action
+# kills the shell outright: no trap runs, and telegraf stays stopped on a
+# machine nobody is standing next to. Ignored, the same write returns an
+# error instead, errexit unwinds, and the EXIT trap puts telegraf back.
+#
+# Ignoring rather than trapping. A PIPE trap that exits fires again inside
+# the EXIT trap, on its first write, and the shell leaves before the restart.
+trap '' PIPE
 
 trap 'rc=$?; restore_telegraf; exit $rc' EXIT
 trap 'exit 130' INT
@@ -165,9 +177,9 @@ PYEOF
     )
 }
 
-# Three outcomes, not two. Exit 1 used to mean both "not needed" and "the
-# check crashed", so a broken config skipped bleak silently and only showed up
-# as "needs bleak" at the first read.
+# Three outcomes, not two. One status has to mean "not needed" and a
+# different one "the check could not answer", or a broken node file skips
+# bleak silently and shows up as "needs bleak" at the first read instead.
 if bluetooth_needed; then
     NEED_BLUETOOTH=yes
 elif [ $? -eq 1 ]; then
@@ -358,11 +370,11 @@ install -d -m 0755 /etc/telegraf/telegraf.d
 # keep running a collector for hardware that is no longer declared.
 rm -f /etc/telegraf/telegraf.d/pi-monitoring.conf
 rm -f /etc/telegraf/telegraf.d/pi-monitoring-*.conf
-# The old generic names, removed so an existing installation is tidied. Both
-# spellings matter: an earlier version of this script wrote
-# monitoring-<node>-*.conf, and leaving one behind beside its pi-monitoring
-# replacement starts two execd children for one device. They then fight over
-# the serial port and the GPIO and restart every ten seconds for ever.
+# Every fragment spelling this project has ever written, removed so that an
+# installation carrying an older one is tidied. Both spellings matter: a
+# monitoring-<node>-*.conf left behind beside its pi-monitoring counterpart
+# starts two execd children for one device. They then fight over the serial
+# port and the GPIO and restart every ten seconds for ever.
 rm -f /etc/telegraf/telegraf.d/monitoring.conf
 rm -f /etc/telegraf/telegraf.d/monitoring-*.conf
 
@@ -470,7 +482,21 @@ if [[ -f "$REPO/deploy/monitoring-control.service" ]]; then
     # Applied now rather than at the next boot. The unit's writable paths
     # must exist before it starts, and this script may be the thing starting
     # it a few lines below.
-    systemd-tmpfiles --create /etc/tmpfiles.d/monitoring.conf || true
+    #
+    # Not fatal, for the same reason nothing else here is: a software update
+    # must never be blocked on a machine nobody can reach. But it is reported,
+    # because every collector on this node writes the reading cache under that
+    # path, and a path telegraf cannot create turns into one complaint per
+    # poll process with load control deciding from nothing. Silently carrying
+    # on would leave somebody reading those lines later with no idea the
+    # install had already seen the cause.
+    if ! systemd-tmpfiles --create /etc/tmpfiles.d/monitoring.conf; then
+        echo "    WARNING: could not create /run/monitoring. The collectors"
+        echo "    will log that they cannot write the reading cache, and load"
+        echo "    control cannot start. Readings still reach the database."
+        echo "    Try: sudo systemd-tmpfiles --create" \
+             "/etc/tmpfiles.d/monitoring.conf"
+    fi
     systemctl daemon-reload
 
     # Whether this node runs control at all comes from the node file, read

@@ -101,19 +101,7 @@ devices:
       baud: 9600
       unit: 1
 
-# Battery heating. These SOK rack packs have no heater of their own and cannot
-# be charged below freezing, so a cold sunny morning is refused until the day
-# warms up on its own.
-#
-# What exists today is plumbing heat tape on a switched outlet behind a
-# low-voltage disconnect, which heats whenever something is charging. It works.
-# This replaces the trigger, not the heater: heat when the packs are actually
-# cold enough to be the thing standing in the way, and only when the sun can
-# pay for it.
-#
-# Leave control disabled until the relay is wired and the probe reads. Turning
-# it on with no heater attached does nothing useful and makes the dashboard
-# claim a load exists.  # The load controller, read as though it were a device.
+  # The load controller, read as though it were a device.
   #
   # The controller is a separate service, not a collector. What it decided
   # still has to reach the database, and this is how: the loop writes a small
@@ -121,7 +109,7 @@ devices:
   # carries it like any other device. No second output path, no second set of
   # credentials, nothing new in the telegraf configuration.
   #
-  # Enabled together with control above, never separately. Enabled here with
+  # Enabled together with the control block, never separately. Enabled here with
   # the controller off, every poll fails with "the controller has published
   # nothing", which is true but is noise rather than news. Disabled here with
   # the controller on, the shed level and the reason code reach nobody, and a
@@ -135,6 +123,19 @@ devices:
     tags: {location: control}
 
 
+# Battery heating. These SOK rack packs have no heater of their own and cannot
+# be charged below freezing, so a cold sunny morning is refused until the day
+# warms up on its own.
+#
+# What exists today is plumbing heat tape on a switched outlet behind a
+# low-voltage disconnect, which heats whenever something is charging. It works.
+# This replaces the trigger, not the heater: heat when the packs are actually
+# cold enough to be the thing standing in the way, and only when the sun can
+# pay for it.
+#
+# Leave control disabled until the relay is wired and the probe reads. Turning
+# it on with no heater attached does nothing useful and makes the dashboard
+# claim a load exists.
 control:
   enabled: false
   loop_interval: 30s

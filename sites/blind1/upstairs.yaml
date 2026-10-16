@@ -135,13 +135,7 @@ devices:
 # controller reports more accurately on the downstairs node, and the two
 # disagreed by about 0.3 V. Retiring it frees the I2C pins.
 
-# The vent fan. Control lives on this node because the fan, the inside sensor
-# and the outside sensor are all here. A decision must not depend on the
-# network, so a controller reads its own machine's sensors and nothing else.
-#
-# Enable once the relay is wired. Until then the fan simply runs
-# continuously with nothing to enable: this flag disabled matches that
-# unmanaged state rather than changing it.  # The load controller, read as though it were a device.
+  # The load controller, read as though it were a device.
   #
   # The controller is a separate service, not a collector. What it decided
   # still has to reach the database, and this is how: the loop writes a small
@@ -149,7 +143,7 @@ devices:
   # carries it like any other device. No second output path, no second set of
   # credentials, nothing new in the telegraf configuration.
   #
-  # Enabled together with control above, never separately. Enabled here with
+  # Enabled together with the control block, never separately. Enabled here with
   # the controller off, every poll fails with "the controller has published
   # nothing", which is true but is noise rather than news. Disabled here with
   # the controller on, the shed level and the reason code reach nobody, and a
@@ -163,6 +157,13 @@ devices:
     tags: {location: control}
 
 
+# The vent fan. Control lives on this node because the fan, the inside sensor
+# and the outside sensor are all here. A decision must not depend on the
+# network, so a controller reads its own machine's sensors and nothing else.
+#
+# Enable once the relay is wired. Until then the fan simply runs
+# continuously with nothing to enable: this flag disabled matches that
+# unmanaged state rather than changing it.
 control:
   enabled: false
   loop_interval: 30s

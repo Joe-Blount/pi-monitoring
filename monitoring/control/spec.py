@@ -60,11 +60,12 @@ LOAD_KEYS = {"type", "enabled", "control_pin", "polarity",
 #: onto the card in exchange for state that is thrown away on arrival.
 CONTROL_KEYS = {"enabled", "loads", "loop_interval", "clock"}
 
-#: Keys that were once meaningful here and now have an answer this module
-#: will not let a file override, with the reason an operator needs. Refused
-#: rather than ignored, and named rather than left to the general unknown-key
-#: message, because somebody reading that message would otherwise go looking
-#: for a typo in a key they spelled correctly.
+#: Keys this module answers for itself, with the reason an operator needs.
+#:
+#: Each one names something a node file may not decide. Refused rather than
+#: ignored, and named rather than left to the general unknown-key message,
+#: because somebody reading that message would go looking for a typo in a key
+#: they spelled correctly.
 RETIRED_CONTROL_KEYS = {
     "publish_as": "the controller's decisions reach the database through a "
                   "device declared like any other, so the tags they carry "

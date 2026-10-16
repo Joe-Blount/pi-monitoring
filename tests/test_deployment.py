@@ -416,6 +416,84 @@ def test_telegraf_is_restarted_when_stderr_is_open_too(tmp_path):
     assert _telegraf_restarts_with_stderr(tmp_path, stderr_closed=False)
 
 
+def _telegraf_restarts_with_a_dead_pipe(tmp_path, keep_pipe_trap):
+    """Run the installer's real trap machinery with its output going to a
+    pipe whose reader has already gone, and report whether telegraf was
+    asked to start again.
+
+    This is what a connection dropped without a terminal leaves behind:
+    stdout is a pipe, the far end has exited, and the next progress line
+    raises SIGPIPE. The default action for that signal kills the shell
+    outright, so no trap runs at all and telegraf stays stopped on a machine
+    nobody is standing next to. Ignoring the signal turns the same write
+    into an error, which errexit unwinds through the EXIT trap.
+
+    `keep_pipe_trap` false strips the ignore out of the real machinery, so
+    this test measures the ignore rather than the harness.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    marker = tmp_path / "telegraf-started"
+    fake_systemctl = bin_dir / "systemctl"
+    fake_systemctl.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$1 $2\" == 'is-active --quiet' ]]; then exit 1; fi\n"
+        "if [[ \"$1\" == 'start' ]]; then touch '%s'; exit 0; fi\n"
+        "exit 0\n" % marker)
+    fake_systemctl.chmod(0o755)
+
+    machinery = _trap_machinery()
+    if not keep_pipe_trap:
+        machinery = "\n".join(line for line in machinery.splitlines()
+                               if "trap '' PIPE" not in line)
+    else:
+        assert "trap '' PIPE" in machinery, (
+            "the installer does not ignore SIGPIPE, so this test is "
+            "measuring nothing")
+
+    harness = tmp_path / "harness.sh"
+    harness.write_text("\n".join([
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        machinery,
+        "TELEGRAF_STOPPED=1",
+        # Progress lines, as the installer prints many of. The first one
+        # reaching a dead pipe is where the script ends either way; the
+        # question is whether it ends through the trap or through the signal.
+        "echo '==> doing work'",
+        "echo '==> more work'",
+        "exit 0",
+    ]) + "\n")
+    harness.chmod(0o755)
+
+    env = dict(os.environ)
+    env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
+    # head -0 reads nothing and exits at once, which is what leaves the
+    # pipe's reader gone while the writer is still running.
+    subprocess.run(
+        ["bash", "-c", "'%s' 2>&1 | head -c 0" % harness],
+        env=env, capture_output=True, text=True)
+    return marker.exists()
+
+
+def test_telegraf_is_restarted_when_the_far_end_of_the_output_has_gone(
+        tmp_path):
+    """A connection dropped without a terminal leaves stdout a pipe with no
+    reader, and the default action for SIGPIPE kills the shell before any
+    trap can run. Telegraf would then stay stopped, and the node silent,
+    until somebody drives out to it."""
+    assert _telegraf_restarts_with_a_dead_pipe(tmp_path, keep_pipe_trap=True)
+
+
+def test_a_dead_output_pipe_would_otherwise_skip_the_restart(tmp_path):
+    """The control for the test above: with the signal left at its default,
+    the same machinery does not restart telegraf. Without this, a harness
+    that never actually produced the signal would make the test above pass
+    whatever the installer did."""
+    assert not _telegraf_restarts_with_a_dead_pipe(tmp_path,
+                                                   keep_pipe_trap=False)
+
+
 def test_every_package_install_goes_through_a_helper_that_stops_telegraf():
     """apt beside a Bluetooth scan is the one recorded way this script has
     locked up a machine, and a locked machine needs a visit.
@@ -486,9 +564,9 @@ def test_the_installer_says_which_commit_it_installed():
 def test_the_credentials_example_agrees_with_the_bringup_guide():
     """Owned root:root at mode 600, telegraf starts and sends nothing.
 
-    That happened. The guide explains it; the example used to contradict it,
-    which is how a fixed failure gets reinstalled by someone following the
-    instructions.
+    The guide explains that failure, so the example has to agree with it. An
+    example that contradicts the guide is how somebody following the
+    instructions installs the failure the guide exists to prevent.
     """
     example = (REPO / "influx.env.example").read_text()
     assert "chown root:telegraf" in example
@@ -581,6 +659,24 @@ def test_the_install_script_creates_the_runtime_directories_immediately():
     script may be the thing starting it moments later. Waiting for the next
     boot would mean the first install never brings the controller up."""
     assert "systemd-tmpfiles --create" in INSTALL_CODE
+
+
+def test_a_runtime_directory_that_cannot_be_created_is_reported():
+    """Every collector on a node with a control block writes the reading
+    cache under that path, so a path telegraf cannot create becomes one
+    complaint per poll process with load control deciding from nothing.
+
+    Not fatal, because a software update must never be blocked on a machine
+    nobody can reach. But the install has already seen the cause, and
+    swallowing it leaves whoever reads those complaints later with nothing to
+    connect them to.
+    """
+    section = INSTALL_CODE[INSTALL_CODE.index("systemd-tmpfiles --create"):]
+    section = section[:section.index("systemctl daemon-reload")]
+    assert "WARNING" in section, (
+        "a failure to create the runtime directories is swallowed")
+    assert "exit 1" not in section, (
+        "a runtime directory blocked the install")
 
 
 def test_the_install_script_reloads_systemd_after_writing_a_unit():

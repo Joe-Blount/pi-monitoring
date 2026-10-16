@@ -197,6 +197,25 @@ def _step_floor(ladder, readings, was_latched, latched_by):
         # Readable, above its shedding bound, not yet clear of its restoring
         # one. Still latched, and on a live reading rather than a guess.
         return True, value, source, latched_by
+
+    # The owner has cleared, so the latch it held is resolved. Before letting
+    # the load back, every other source is asked afresh. This is not the
+    # transfer the entry loop refuses: that one hands an unresolved latch to
+    # a source that cannot speak for the one that tripped it, while this is a
+    # new latch, taken because a source that can speak for itself is under
+    # its own bound right now.
+    #
+    # Without it the load reconnects for exactly one pass and sheds again on
+    # the next, because the entry loop would then see that source and latch.
+    # One pass is one loop interval, and on the camera branch that is a
+    # recorder power cycle onto a bank the pack source says is below its
+    # floor. The timers cannot absorb it either, since the floor is exempt
+    # from them.
+    for key, (other, reading) in seen.items():
+        if key == latched_by:
+            continue
+        if reading is not None and reading < other["shed_below"]:
+            return True, reading, other, key
     return False, None, None, None
 
 
@@ -265,10 +284,10 @@ def permitted_at(schedule, when, suns):
     """Whether one schedule allows a load to run at `when`.
 
     Public because it has a second caller: the command line prints a preview
-    of the day's permitted periods, and a preview computed by a second copy
-    of this arithmetic is a preview that can disagree with the controller.
-    One did, and it disagreed in the direction that matters least to notice
-    and most to be wrong about.
+    of the day's permitted periods. A preview computed by a second copy of
+    this arithmetic is a preview that can disagree with the controller, and
+    an operator comparing the two has no way to tell which one the relay will
+    follow. There is one evaluator for that reason.
 
     Takes no clock-trust flag and no dwell. Those belong to the decision
     around it, not to the question of what a schedule says about a moment.
