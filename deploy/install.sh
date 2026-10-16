@@ -55,11 +55,24 @@ restore_telegraf() {
     # restarts it unconditionally, and an earlier run of an older version of
     # this script could have left it stopped, in which case refusing to
     # start it here keeps the node silent for the same reason twice.
+    #
+    # errexit is turned off for the whole function rather than trusted to be
+    # guarded line by line. A dropped ssh connection closes this process's
+    # stderr before the HUP trap below ever fires, so the echo here can fail
+    # on its own account, with nothing wrong with telegraf at all, and under
+    # set -e that failure would end the shell right here, before systemctl
+    # start runs. Once telegraf has been stopped by this script, nothing
+    # short of the kernel is allowed to be the reason it does not come back,
+    # and that has to hold even when every diagnostic write in this function
+    # fails.
+    set +e
     if [[ "$TELEGRAF_STOPPED" == "1" ]] \
        && ! systemctl is-active --quiet telegraf; then
-        echo "==> putting telegraf back" >&2
+        echo "==> putting telegraf back" >&2 || true
         systemctl start telegraf || true
     fi
+    set -e
+    return 0
 }
 
 trap 'rc=$?; restore_telegraf; exit $rc' EXIT
@@ -222,16 +235,60 @@ echo "==> where this machine is"
 #
 # A template is written, never values. Guessing a location produces a
 # schedule that is wrong in a way nothing downstream can detect, which shows
-# up months later as cameras keeping hours nobody asked for. An existing file
-# is left exactly as it is, because this script is run again on every update
-# and overwriting it would undo the one thing a person had to type.
+# up months later as cameras keeping hours nobody asked for. location.py
+# refuses to run against a file it cannot read as a real place, so the
+# latitude and longitude lines are commented out of what lands here, even
+# though the committed example carries numbers so its own comments still
+# make sense read on their own. Installing it live would hand every machine
+# that is never edited the same invented point, silently, which is exactly
+# what the refusal in location.py exists to prevent.
+#
+# An existing file is left exactly as it is, because this script is run
+# again on every update and overwriting it would undo the one thing a person
+# had to type. But "left alone" has to mean something different for a file
+# nobody has touched yet than for one somebody has actually filled in, or an
+# operator reading install output can never tell an installed-but-unedited
+# template from a real location -- so an unedited template is called out by
+# name instead of folded into the same "left alone" line.
+#
+# Whether an existing file is usable is answered by the loader that will
+# actually read it, not by searching the text for a marker. The same choice
+# the Bluetooth probe above makes, for the same reason: a file where somebody
+# uncommented one of the two lines matches any marker test you can write and
+# is still refused at start, and the installer would have called it ready.
+location_refusal() {
+    ( cd "$REPO" && python3 - <<'PYEOF'
+import sys
+try:
+    from monitoring.control import location
+    location.read("/etc/monitoring/location.yaml")
+except Exception as exc:
+    sys.stderr.write("%s\n" % exc)
+    sys.exit(1)
+sys.exit(0)
+PYEOF
+    ) 2>&1
+}
+
 if [[ -e /etc/monitoring/location.yaml ]]; then
-    echo "    /etc/monitoring/location.yaml exists, left alone"
+    if refusal="$(location_refusal)"; then
+        echo "    /etc/monitoring/location.yaml exists, left alone"
+    else
+        echo "    /etc/monitoring/location.yaml will not load yet:"
+        echo "    $refusal"
+        echo "    Load control cannot start until that is fixed."
+    fi
 elif [[ -f "$REPO/location.yaml.example" ]]; then
-    install -m 0644 "$REPO/location.yaml.example" /etc/monitoring/location.yaml
+    location_tmp="$(mktemp)"
+    sed -E 's/^(latitude|longitude):/# \1:/' "$REPO/location.yaml.example" \
+        > "$location_tmp"
+    install -m 0644 "$location_tmp" /etc/monitoring/location.yaml
+    rm -f "$location_tmp"
     echo "    wrote a TEMPLATE to /etc/monitoring/location.yaml"
-    echo "    Edit it before enabling load control: the coordinates in it are"
-    echo "    a nearby town, not this machine."
+    echo "    Edit it before enabling load control: uncomment latitude and"
+    echo "    longitude and put in this machine's own numbers. Until then"
+    echo "    location.read() refuses to run rather than use the commented-"
+    echo "    out example point."
 fi
 
 echo "==> node file"

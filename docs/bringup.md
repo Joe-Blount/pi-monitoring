@@ -46,8 +46,8 @@ expire by default, and an unattended machine will silently drop off the network
 months later, at which point you cannot reach it to fix the fact that you
 cannot reach it.
 
-To reach devices that cannot run Tailscale themselves — cameras, routers,
-serial converters — also advertise the local range from one machine per site:
+To reach devices that cannot run Tailscale themselves (cameras, routers,
+serial converters) also advertise the local range from one machine per site:
 
 ```
 printf 'net.ipv4.ip_forward = 1\nnet.ipv6.conf.all.forwarding = 1\n' | sudo tee /etc/sysctl.d/99-tailscale.conf

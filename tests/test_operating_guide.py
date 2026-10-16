@@ -214,14 +214,57 @@ def test_every_gpio_pin_the_guide_shows_matches_the_node_files():
 
 # -- house rules ------------------------------------------------------------
 
-def test_the_guide_uses_no_em_dash():
-    assert "—" not in GUIDE_TEXT
+#: Everything the repository publishes, which is every file it tracks. The
+#: two house rules below are not about the guide: they are about anything a
+#: reader can see, and the guide was only the first place they were checked.
+def tracked_files():
+    listed = subprocess.run(["git", "ls-files", "-z"], cwd=str(REPO),
+                            capture_output=True, text=True)
+    if listed.returncode != 0:                          # pragma: no cover
+        pytest.skip("not a git checkout")
+    return [REPO / name for name in listed.stdout.split("\0") if name]
 
 
-def test_the_guide_never_mentions_an_assistant():
-    lowered = GUIDE_TEXT.lower()
-    for word in ("claude", "anthropic", "chatgpt", "copilot", "assistant"):
-        assert word not in lowered
+def readable_text():
+    """Every tracked file this can read as text, with its path."""
+    for path in tracked_files():
+        try:
+            yield path, path.read_text()
+        except (OSError, UnicodeDecodeError):           # pragma: no cover
+            continue
+
+
+def test_no_tracked_file_uses_an_em_dash():
+    """Two hyphens instead, everywhere, because it is a rule about the
+    writing rather than about one document. Checked across the repository
+    because the character arrives by paste and by autocorrect, and the place
+    it lands is whichever file was being edited at the time.
+
+    The exception is this file, which has to contain the character in order
+    to look for it.
+    """
+    found = [str(path.relative_to(REPO)) for path, text in readable_text()
+             if "—" in text and path.resolve() != pathlib.Path(
+                 __file__).resolve()]
+    assert found == [], "em dash in %s" % ", ".join(found)
+
+
+def test_no_tracked_file_mentions_an_assistant():
+    """The work stands on its own. Checked across the repository rather than
+    in the guide alone, since the names turn up in a comment or a commit
+    body as readily as in prose.
+
+    This file is exempt for the same reason as above.
+    """
+    words = ("claude", "anthropic", "chatgpt", "copilot", "assistant")
+    found = []
+    for path, text in readable_text():
+        if path.resolve() == pathlib.Path(__file__).resolve():
+            continue
+        lowered = text.lower()
+        found += ["%s: %s" % (path.relative_to(REPO), word)
+                  for word in words if word in lowered]
+    assert found == [], "; ".join(found)
 
 
 def test_the_guide_links_to_bringup_for_the_dht_explanation():

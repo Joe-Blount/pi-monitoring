@@ -9,12 +9,15 @@ A disagreement between the two must therefore fail here rather than present as
 missing data on a machine an hour away.
 """
 
+import os
 import pathlib
 import re
+import subprocess
 
 import pytest
 
 from monitoring import config, drivers
+from monitoring.control import location
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 
@@ -344,6 +347,75 @@ def test_telegraf_is_put_back_however_the_installer_ends():
     assert "systemctl start telegraf" in restore
 
 
+#: The block that has to survive a closed stderr on its own: the two
+#: TELEGRAF_* flags, both helper functions and all four traps. Extracted from
+#: the real script rather than retyped, so a change to the actual code is
+#: what the behavioural test below exercises, not a hand-written stand-in for
+#: it.
+def _trap_machinery():
+    start = INSTALL.index("TELEGRAF_WAS_RUNNING=0")
+    end = INSTALL.index("trap 'exit 129' HUP") + len("trap 'exit 129' HUP")
+    return INSTALL[start:end]
+
+
+def _telegraf_restarts_with_stderr(tmp_path, stderr_closed):
+    """Run the installer's real trap machinery to the point a dropped ssh
+    connection would drive it to, and report whether telegraf was asked to
+    start again.
+
+    A fake systemctl stands in for the real one: it reports telegraf as not
+    active, same as after stop_telegraf_once, and records a start rather than
+    doing one. Closing stderr before exiting reproduces what a dropped
+    connection does to this process before the HUP trap ever runs; leaving it
+    open is the control that shows the same machinery working when nothing
+    is wrong.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    marker = tmp_path / "telegraf-started"
+    fake_systemctl = bin_dir / "systemctl"
+    fake_systemctl.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$1 $2\" == 'is-active --quiet' ]]; then exit 1; fi\n"
+        "if [[ \"$1\" == 'start' ]]; then touch '%s'; exit 0; fi\n"
+        "exit 0\n" % marker)
+    fake_systemctl.chmod(0o755)
+
+    harness = tmp_path / "harness.sh"
+    harness.write_text("\n".join([
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        _trap_machinery(),
+        "TELEGRAF_STOPPED=1",
+        "exec 2>&-" if stderr_closed else ":",
+        "exit 129",
+    ]) + "\n")
+    harness.chmod(0o755)
+
+    env = dict(os.environ)
+    env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
+    subprocess.run(["bash", str(harness)], env=env,
+                   capture_output=True, text=True)
+    return marker.exists()
+
+
+def test_telegraf_is_restarted_even_when_stderr_is_already_closed(tmp_path):
+    """A dropped ssh connection closes this process's stderr before the HUP
+    trap ever runs. The diagnostic echo in restore_telegraf can then fail on
+    its own account, with nothing wrong with telegraf at all, and that
+    failure must not be the reason the restart is skipped: once telegraf has
+    been stopped by this script, nothing short of the kernel may keep it
+    from starting again."""
+    assert _telegraf_restarts_with_stderr(tmp_path, stderr_closed=True)
+
+
+def test_telegraf_is_restarted_when_stderr_is_open_too(tmp_path):
+    """The control case: the same trap machinery restarts telegraf when
+    nothing about the connection has failed, so the closed-stderr case above
+    is isolating the one thing that changed."""
+    assert _telegraf_restarts_with_stderr(tmp_path, stderr_closed=False)
+
+
 def test_every_package_install_goes_through_a_helper_that_stops_telegraf():
     """apt beside a Bluetooth scan is the one recorded way this script has
     locked up a machine, and a locked machine needs a visit.
@@ -578,3 +650,70 @@ def test_the_location_example_is_not_a_real_site():
                 assert len(value.split(".")[-1]) <= 1, (
                     "%s is given to more than a tenth of a degree, which is "
                     "more precision than an example should carry" % line)
+
+
+def test_the_installed_location_template_makes_location_read_refuse(tmp_path):
+    """The example commits numbers so its own comments still make sense read
+    on their own, but what the installer actually puts on a machine must not
+    be a usable point: location.py's whole "refused, never defaulted" rule
+    means a schedule computed against an invented place is wrong in a way
+    nothing downstream can detect.
+
+    Run the installer's own transform rather than a copy of it, on the real
+    example, and feed the result to the real location.read(): a change to
+    the sed expression that stops commenting out latitude and longitude
+    would pass a string-only check but must fail here.
+    """
+    match = re.search(r"sed -E '([^']*)'", INSTALL)
+    assert match, "no sed transform found in the install script's location step"
+
+    written = tmp_path / "location.yaml"
+    with open(written, "wb") as out:
+        subprocess.run(
+            ["sed", "-E", match.group(1), str(REPO / "location.yaml.example")],
+            stdout=out, check=True)
+
+    with pytest.raises(location.LocationError) as raised:
+        location.read(str(written))
+    assert "latitude" in str(raised.value)
+
+
+def test_an_unusable_location_file_is_not_reported_as_left_alone():
+    """Printing the same "exists, left alone" line for a template nobody has
+    touched and for a file somebody actually filled in means an operator
+    reading the install output can never tell which one a machine has, until
+    a schedule shows up wrong months later.
+
+    The question is answered by the loader that will really read the file,
+    not by searching its text. A file where somebody uncommented one of the
+    two coordinates matches any marker test that can be written and is still
+    refused at start, and the installer would have called it ready.
+    """
+    section = INSTALL_CODE[INSTALL_CODE.index("where this machine is"):]
+    section = section[:section.index("node file")]
+    exists_branch = section[section.index("-e /etc/monitoring/location.yaml"):]
+    assert "location_refusal" in exists_branch, (
+        "the exists-branch does not ask the loader whether the file is "
+        "usable, so an installed-but-unedited template is indistinguishable "
+        "from a real one in the install output")
+    assert "location.read" in section, (
+        "the probe has to go through the real reader, or it is a second "
+        "opinion about what the file means")
+
+
+def test_the_location_probe_refuses_a_half_edited_file(tmp_path):
+    """One coordinate filled in and the other left commented out.
+
+    This is the likely mistake: somebody edits the file at the machine, is
+    interrupted, and comes back to a file that looks edited. It has to be
+    refused by name, saying which of the two is missing, because the
+    alternative is a schedule placed on a meridian seven degrees from this
+    one, which is half an hour of error in every sunrise.
+    """
+    example = (pathlib.Path(__file__).resolve().parent.parent
+               / "location.yaml.example").read_text()
+    half = pathlib.Path(tmp_path) / "location.yaml"
+    half.write_text(example.replace("longitude:", "# longitude:"))
+    with pytest.raises(location.LocationError) as raised:
+        location.read(str(half))
+    assert "needs a longitude" in str(raised.value)

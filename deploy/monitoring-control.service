@@ -51,6 +51,15 @@ User=telegraf
 
 ExecStart=/opt/monitoring/bin/control run --node /etc/monitoring/node.yaml
 
+# A writable home and working directory, for the same reason the install
+# script gives telegraf one. The pin backend creates a notification pipe
+# under the current directory as it is imported, and a service started in /
+# cannot write there, so the first relay action fails on a machine where
+# everything else looks right. The drop-in that fixes this for telegraf
+# applies to telegraf's unit, not to this one.
+Environment=HOME=/var/lib/monitoring
+WorkingDirectory=/var/lib/monitoring
+
 # Belt and braces with what monitoring/control/relay.py already sets before
 # it imports gpiozero. This line changes nothing while that code is doing
 # its job; what it buys is a second, independent place the setting comes

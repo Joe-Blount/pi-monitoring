@@ -45,12 +45,12 @@ the loads disconnected. It is in the commissioning steps for that reason.
 One path, not two
 -----------------
 The injected factory and the shipping one are the same call with the same
-arguments, and the dry run goes through the same ``apply``. An earlier version
-had the test double constructed differently from the real device and the dry
-run computing its own level, which left two of the three places polarity can
-invert unreachable from a test: the library's own ``active_high``, which
-inverts the claim as well as every level after it, and the branch that turns a
-level into a call.
+arguments, and the dry run goes through the same ``apply``. Both have to hold:
+a test double constructed differently from the real device, or a dry run that
+computes its own level instead of calling ``apply``, leaves two of the three
+places polarity can invert unreachable from a test -- the library's own
+``active_high``, which inverts the claim as well as every level after it, and
+the branch that turns a level into a call.
 
 Releasing the line
 ------------------
@@ -195,10 +195,10 @@ class Relay:
 class Pretend(Relay):
     """A relay that records instead of driving, for a dry run.
 
-    It swaps the device, not the logic. An earlier version overrode `apply`,
-    which left the branch turning a level into a call unreachable from a dry
-    run: a dry run on site would then have shown the right answer while the
-    real relay drove the wrong way.
+    It swaps the device, not the logic. Overriding `apply` instead would
+    leave the branch turning a level into a call unreachable from a dry run,
+    so a dry run on site could show the right answer while the real relay
+    drove the wrong way.
     """
 
     def __init__(self, pin, polarity):
