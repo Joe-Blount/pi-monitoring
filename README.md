@@ -171,6 +171,10 @@ not stop a site reporting.
 Step by step, including the kernel overlays each sensor needs and how to
 confirm data is arriving: **[docs/bringup.md](docs/bringup.md)**.
 
+Once it is running, day-to-day commands for forcing a load on or off, seeing
+why one is shed, and recovering from a dead telegraf or a Pi that will not
+boot: **[docs/operating.md](docs/operating.md)**.
+
 In short:
 
 ```
