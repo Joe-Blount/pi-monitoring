@@ -293,6 +293,78 @@ def test_a_source_dipping_back_restarts_the_restore_dwell():
     assert decision.connected, "never released after the restarted dwell"
 
 
+def test_the_same_sample_seen_twice_is_one_reading():
+    """Entry counts readings, and the loop runs far faster than the battery
+    answers.
+
+    The loop passes every ten seconds; the battery is read every three
+    minutes. So a tier requiring two readings sees any one sample about
+    eighteen times. If passes counted, a single bad sample would latch a tier
+    whose release is fifteen points and a dwell away, and the cameras would
+    stay on the lower schedule until the pack genuinely recovered -- which,
+    for a sample that was wrong, is never.
+    """
+    def pass_through(state, soc, taken_at, mono):
+        readings = {"bms": {"fields": {"state_of_charge_pct": soc,
+                                       "cell_min_volts": 3.30},
+                            "age_seconds": 1.0, "taken_at": taken_at}}
+        return decide.decide(at(12), mono, True, readings,
+                             {"shedding_enabled": True, "loads": {}},
+                             {"cameras": SPEC}, state, SUNS)
+
+    # One sample at 45 percent, seen by five consecutive passes.
+    state = {}
+    for step in range(5):
+        decisions, state = pass_through(state, 45.0, 1000.0, float(step * 10))
+    assert not state["cameras"]["latched"].get("0"), (
+        "one sample satisfied a requirement for two readings")
+    assert decisions["cameras"].connected, (
+        "the cameras went off on a single sample")
+
+    # A second sample, with its own stamp, latches the fifty tier.
+    decisions, state = pass_through(state, 45.0, 1180.0, 60.0)
+    assert state["cameras"]["latched"].get("0") is True
+
+
+def test_a_reading_without_a_stamp_still_counts():
+    """A reader that cannot say when a sample was taken must not stall the
+    ladder. Counting every pass is wrong in the direction of latching too
+    early; never counting is wrong in the direction of never shedding at
+    all, which is the direction that flattens the battery."""
+    state = {}
+    for step in range(LADDER["enter_after_readings"]):
+        _, state = run(45.0, state=state, mono=float(step))
+    assert state["cameras"]["latched"].get("0") is True
+
+
+def test_a_re_read_still_releases_a_tier_on_time():
+    """The release side is timed, not counted, so it must keep running
+    between samples. Otherwise a battery that recovered and then went quiet
+    would hold a schedule it has climbed out of."""
+    ladder = dict(LADDER, restore_dwell=300.0)
+    spec = dict(SPEC, shed_ladder=ladder)
+
+    def pass_through(state, soc, taken_at, mono):
+        readings = {"bms": {"fields": {"state_of_charge_pct": soc,
+                                       "cell_min_volts": 3.30},
+                            "age_seconds": 1.0, "taken_at": taken_at}}
+        return decide.decide(at(12), mono, True, readings,
+                             {"shedding_enabled": True, "loads": {}},
+                             {"cameras": spec}, state, SUNS)
+
+    state = {}
+    for step in range(2):
+        _, state = pass_through(state, 45.0, 1000.0 + step * 180, step * 10.0)
+    assert state["cameras"]["latched"].get("0") is True
+
+    # Recovered well clear of the release margin, then quiet. The dwell has
+    # to expire on the clock, with no new sample arriving.
+    _, state = pass_through(state, 70.0, 2000.0, 1000.0)
+    assert state["cameras"]["latched"].get("0") is True
+    _, state = pass_through(state, 70.0, 2000.0, 1400.0)
+    assert state["cameras"]["latched"].get("0") is False
+
+
 # -- the schedules ----------------------------------------------------------
 
 @pytest.mark.parametrize("hour,minute,connected", [
@@ -615,6 +687,50 @@ def test_a_floor_latched_by_one_source_is_not_released_by_another():
     assert decisions["cameras"].connected
 
 
+def test_an_unresolved_floor_does_not_change_hands():
+    """The owner rule is reached by a second route, and closed on both.
+
+    Ownership asymmetry is worthless if ownership itself can move. A cell
+    trips the floor and the battery radio then goes quiet, which it does
+    routinely. The pack, which is wired and always readable, is sagging under
+    the same condition and would take the latch over. The pack then recovers
+    -- which shedding this load alone can do, since it is most of the draw --
+    and the new owner is satisfied, so the floor clears with nothing ever
+    having said the weak cell came back.
+    """
+    spec = dict(SPEC, shed_ladder=TWO_SOURCE)
+
+    def pass_through(state, cell_age, cell, pack):
+        readings = {"bms": {"fields": {"state_of_charge_pct": 60.0,
+                                       "cell_min_volts": cell},
+                            "age_seconds": cell_age},
+                    "mppt": {"fields": {"battery_volts": pack},
+                             "age_seconds": 1.0}}
+        return decide.decide(at(12), 0.0, True, readings,
+                             {"shedding_enabled": True, "loads": {}},
+                             {"cameras": spec}, state, SUNS)
+
+    decisions, state = pass_through({}, 1.0, 3.10, 13.2)
+    assert not decisions["cameras"].connected
+    assert "cell_min_volts" in decisions["cameras"].reason
+
+    # The radio goes quiet while the pack is below its own bound. The pack
+    # may not become the owner.
+    decisions, state = pass_through(state, 100_000.0, 3.10, 12.1)
+    assert not decisions["cameras"].connected
+    assert "nothing readable to clear it" in decisions["cameras"].reason, (
+        "the pack took over a latch the cell owns")
+
+    # The pack recovers on its own. The cell has not been heard from.
+    decisions, state = pass_through(state, 100_000.0, 3.10, 13.6)
+    assert not decisions["cameras"].connected, (
+        "a pack recovery cleared a floor the cell tripped")
+
+    # Only the cell can clear it.
+    decisions, state = pass_through(state, 1.0, 3.30, 13.6)
+    assert decisions["cameras"].connected
+
+
 def test_either_floor_source_can_latch_on_its_own():
     """The asymmetry is only on release. A second, independently wired
     source exists so that it can shed when the first is unreliable."""
@@ -834,6 +950,59 @@ def test_each_transition_restarts_the_clock_on_the_next_one():
         "shed 61s after restoring, so the minimum run time was measured from "
         "boot rather than from the restore")
     assert "minimum run time" in decision.reason
+
+
+def test_an_override_is_not_held_by_the_off_timer():
+    """The guide says the cameras come on right now, and somebody is standing
+    at the machine reading it.
+
+    A control that appears to do nothing for half an hour reads as a broken
+    control, and the next move is to pull the relay wire, which loses the
+    fail-safe with it. One deliberate recorder cycle is the smaller cost.
+    """
+    state = _shed_with_timers()
+    switches = {"shedding_enabled": True,
+                "loads": {"cameras": {"force": "on",
+                                      "expires_epoch": LATER}}}
+    decision, _ = run(9.0, mono=710.0, state=state, switches=switches,
+                      spec=TIMED)
+    assert decision.connected, decision.reason
+    assert decision.reason_code == decide.OVERRIDE
+
+
+def test_an_override_forcing_a_load_off_is_not_held_by_the_run_timer():
+    """The same promise in the other direction. Somebody switching a load off
+    by hand is usually doing it because something is wrong with the load."""
+    decision, state = settle(60.0, spec=TIMED)
+    assert decision.connected
+    switches = {"shedding_enabled": True,
+                "loads": {"cameras": {"force": "off",
+                                      "expires_epoch": LATER}}}
+    decision, _ = run(60.0, mono=10.0, state=state, switches=switches,
+                      spec=TIMED)
+    assert not decision.connected, decision.reason
+    assert decision.reason_code == decide.OVERRIDE
+
+
+def test_switching_shedding_off_hands_a_load_back_immediately():
+    """Which is the word the guide uses. This is the switch for the case
+    where the ladder is shedding something it should not be, so making it
+    wait is making the fault last longer."""
+    state = _shed_with_timers()
+    decision, _ = run(9.0, mono=710.0, state=state,
+                      switches={"shedding_enabled": False, "loads": {}},
+                      spec=TIMED)
+    assert decision.connected, decision.reason
+    assert decision.reason_code == decide.SHEDDING_DISABLED
+
+
+def test_the_ladder_itself_is_still_held_by_the_timers():
+    """The exemptions are for the floor and for a person, not a loophole that
+    lets the ladder cycle a recorder as a battery wavers on a threshold."""
+    state = _shed_with_timers()
+    decision, _ = run(60.0, mono=710.0, state=state, spec=TIMED)
+    assert not decision.connected
+    assert decision.reason_code == decide.HELD_BY_TIMER
 
 
 def test_a_minimum_off_time_expires():

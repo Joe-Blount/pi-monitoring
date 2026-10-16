@@ -112,6 +112,21 @@ def _reading(readings, source, stale_after):
     return value
 
 
+def _stamp(readings, source):
+    """The reading's own identity, for telling a new sample from a re-read.
+
+    The age a reader reports moves on every pass, so it cannot serve. What
+    does not move is the monotonic moment the collector published the sample,
+    which the reader carries through as ``taken_at``. Absent, this returns
+    None and every pass counts, which is the behaviour of a reading that
+    cannot say when it was taken.
+    """
+    if not source:
+        return None
+    record = readings.get(source["device"]) or {}
+    return record.get("taken_at")
+
+
 # -- the ladder -------------------------------------------------------------
 
 def _source_key(source):
@@ -151,8 +166,16 @@ def _step_floor(ladder, readings, was_latched, latched_by):
 
     # Entry: any source below its own bound, and it becomes the source that
     # has to clear it.
+    #
+    # Ownership does not change hands while a latch is unresolved. If it
+    # did, a cell-tripped floor could be handed to the pack source the
+    # moment the pack also dipped, and the pack recovering would then clear
+    # it with nothing having said the cell recovered. That is the same hole
+    # the owner rule closes, reached by a different route.
     for key, (source, value) in seen.items():
         if value is not None and value < source["shed_below"]:
+            if was_latched and latched_by is not None and key != latched_by:
+                continue
             return True, value, source, key
 
     if not was_latched:
@@ -177,7 +200,8 @@ def _step_floor(ladder, readings, was_latched, latched_by):
     return False, None, None, None
 
 
-def _step_tiers(ladder, value, mono_now, latched, below_counts, above_since):
+def _step_tiers(ladder, value, mono_now, latched, below_counts, above_since,
+                is_new_reading=True):
     """Advance each tier's latch independently.
 
     `value` is None when the source is not readable, in which case every
@@ -193,6 +217,12 @@ def _step_tiers(ladder, value, mono_now, latched, below_counts, above_since):
     sensor arrives at. Release guards against restoring on a charging spike,
     which is a thing that lasts seconds regardless of how many readings land
     inside it, so it is held off by the clock.
+
+    `is_new_reading` false means this pass is looking at a sample an earlier
+    pass already counted, so only the counting is suppressed. The timed side
+    keeps running, because a dwell that stopped between samples would hold a
+    schedule the battery has climbed out of for as long as the radio stayed
+    quiet.
     """
     latched = dict(latched)
     counts = dict(below_counts)
@@ -207,12 +237,21 @@ def _step_tiers(ladder, value, mono_now, latched, below_counts, above_since):
         key = str(index)
         entry = tier["below_pct"]
         if value < entry:
-            counts[key] = counts.get(key, 0) + 1
+            # Counted only once per reading. The loop runs every ten seconds
+            # and the battery answers every few minutes, so counting passes
+            # would let one sample satisfy a requirement for two and latch a
+            # tier whose release is fifteen points and a dwell away. A
+            # sample that was simply wrong would then hold the cameras on a
+            # lower schedule until the pack genuinely recovered, which for a
+            # wrong sample is never.
+            if is_new_reading:
+                counts[key] = counts.get(key, 0) + 1
             since.pop(key, None)
-            if counts[key] >= needed:
+            if counts.get(key, 0) >= needed:
                 latched[key] = True
         else:
-            counts[key] = 0
+            if is_new_reading:
+                counts[key] = 0
             if value > entry + margin:
                 first = since.setdefault(key, mono_now)
                 if mono_now - first >= dwell:
@@ -222,23 +261,24 @@ def _step_tiers(ladder, value, mono_now, latched, below_counts, above_since):
     return latched, counts, since
 
 
-def _permits(tier, now, suns, clock_trusted):
-    """Whether one latched tier allows the load to run now.
+def permitted_at(schedule, when, suns):
+    """Whether one schedule allows a load to run at `when`.
 
-    Returns None when the tier cannot be judged, which happens only when its
-    schedule needs a clock and the clock is not trustworthy. The caller then
-    drops the tier from the intersection rather than guessing either way.
+    Public because it has a second caller: the command line prints a preview
+    of the day's permitted periods, and a preview computed by a second copy
+    of this arithmetic is a preview that can disagree with the controller.
+    One did, and it disagreed in the direction that matters least to notice
+    and most to be wrong about.
+
+    Takes no clock-trust flag and no dwell. Those belong to the decision
+    around it, not to the question of what a schedule says about a moment.
     """
-    schedule = tier["schedule"]
     kind = schedule["type"]
-
     if kind == "never":
         return False
-    if not clock_trusted:
-        return None
     if kind == "clock":
         start, end = schedule["on_from"], schedule["on_to"]
-        minute = now.hour * 60 + now.minute
+        minute = when.hour * 60 + when.minute
         if start <= end:
             return start <= minute < end
         # Wraps midnight, so the permitted period is the union of the two
@@ -255,10 +295,27 @@ def _permits(tier, now, suns, clock_trusted):
             for window in schedule["on_windows"]:
                 begin = day[window["from"][0]] + window["from"][1]
                 finish = day[window["to"][0]] + window["to"][1]
-                if begin <= now < finish:
+                if begin <= when < finish:
                     return True
         return False
     raise AssertionError("unknown schedule type %r" % kind)
+
+
+def _permits(tier, now, suns, clock_trusted):
+    """Whether one latched tier allows the load to run now.
+
+    Returns None when the tier cannot be judged, which happens only when its
+    schedule needs a clock and the clock is not trustworthy. The caller then
+    drops the tier from the intersection rather than guessing either way.
+    """
+    schedule = tier["schedule"]
+    if schedule["type"] == "never":
+        # Needs no clock, so it survives a machine that does not know the
+        # date.
+        return False
+    if not clock_trusted:
+        return None
+    return permitted_at(schedule, now, suns)
 
 
 def ladder_decision(name, spec, readings, now, mono_now, suns, clock_trusted,
@@ -270,11 +327,21 @@ def ladder_decision(name, spec, readings, now, mono_now, suns, clock_trusted,
         ladder, readings, was, state.get("floor_latched_by"))
 
     value = _reading(readings, ladder["source"], ladder["stale_after"])
+
+    # Whether this is a reading the ladder has not already counted. The
+    # collectors stamp each one when the device answered, so the stamp is
+    # the reading's identity: the same stamp twice is one sample seen twice.
+    stamp = _stamp(readings, ladder["source"])
+    fresh = stamp is None or stamp != state.get("counted_stamp")
+
     latched, counts, since = _step_tiers(
         ladder, value, mono_now, state.get("latched", {}),
-        state.get("below", {}), state.get("above_since", {}))
+        state.get("below", {}), state.get("above_since", {}),
+        is_new_reading=fresh)
 
     new_state = dict(state)
+    if fresh and stamp is not None:
+        new_state["counted_stamp"] = stamp
     new_state["latched"] = latched
     new_state["below"] = counts
     new_state["above_since"] = since
@@ -398,19 +465,35 @@ def _apply_switches(decision, name, switches, now, clock_trusted):
 
 # -- the timers -------------------------------------------------------------
 
+#: Reasons the run and off timers do not apply to.
+#:
+#: The timers exist to stop the ladder cycling a recorder as a battery
+#: wavers around a threshold. They are not a veto on the two things that
+#: outrank the ladder.
+#:
+#: The floor is exempt because a minimum run time holding a load up while a
+#: cell sits under its floor would defeat the one rule with nothing above it.
+#:
+#: The two operator reasons are exempt because a person is standing at the
+#: machine. An override and the shedding switch are the controls somebody
+#: reaches for when the automation is wrong, and a control that does nothing
+#: for half an hour reads as a broken control: the next move is to pull the
+#: relay wire, which loses the fail-safe as well. Cycling a recorder once, by
+#: hand, on purpose, is the smaller cost.
+UNTIMED = (FLOOR, OVERRIDE, SHEDDING_DISABLED)
+
+
 def _hold(decision, spec, mono_now, state):
     """Apply the minimum run and minimum off times.
 
     A recorder should not be cycled repeatedly, so a change of mind inside
-    those windows waits. The floor is exempt: a minimum run time that held a
-    load up while a cell sat under its floor would defeat the one rule with
-    nothing above it.
+    those windows waits. What the timers do not apply to is in ``UNTIMED``.
     """
     commanded = state.get("commanded")
     since = state.get("since")
     new_state = dict(state)
 
-    if decision.reason_code == FLOOR or commanded is None or not isinstance(
+    if decision.reason_code in UNTIMED or commanded is None or not isinstance(
             since, (int, float)):
         new_state["commanded"] = decision.connected
         if commanded is not decision.connected:
