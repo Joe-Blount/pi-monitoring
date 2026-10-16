@@ -1,0 +1,583 @@
+#!/usr/bin/env python3
+"""Drive and command the load controller.
+
+    control run      --node <file>      the service: loop forever
+    control once      --node <file>     one pass, applied
+    control dry-run    --node <file>    one pass, decided and printed,
+                                         no pin touched
+    control override <load> on --for 8h
+    control override <load> off --until "2026-10-18 09:00"
+    control override clear <load>
+    control shedding on
+    control shedding off
+    control shedding status
+
+`run` is the long-running service a systemd unit starts. `once` is a single
+pass of the same thing, for a person standing at the machine. `dry-run` is
+the same decision with every relay replaced by one that only remembers what
+it was told, so looking at a node file never risks a load.
+
+`override` and `shedding` write the switches a pass of `run` or `once` reads
+back. They take no --node because the switches file is one file for the
+whole machine, not one per node: a node only ever runs one controller.
+
+Nothing here reads a sensor. The readings this acts on come from `collect`,
+by way of the cache in /run/monitoring, exactly as telegraf already reads
+collect's own output rather than polling a device twice.
+"""
+
+import argparse
+import datetime
+import os
+import signal
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from monitoring import config, duration                    # noqa: E402
+from monitoring import drivers as driver_registry           # noqa: E402
+from monitoring.control import files, loop, relay, spec, sun  # noqa: E402
+
+DEFAULT_NODE = "/etc/monitoring/node.yaml"
+
+#: Three paths the control package accepts as explicit arguments for
+#: exactly this reason: their defaults are real, fixed system paths
+#: (/run/monitoring, /var/lib/monitoring) that do not exist on every machine
+#: this runs on, including the one these tests run on. MONITORING_NODE
+#: already establishes letting an environment variable say otherwise; these
+#: get the same treatment. The state file has its own per-node override
+#: already, in control.state_file, so it needs no variable here.
+PUBLISHED_VAR = "MONITORING_PUBLISHED"
+HIGH_WATER_VAR = "MONITORING_HIGH_WATER"
+SWITCHES_VAR = "MONITORING_SWITCHES"
+
+#: The loop refuses to start without a boot identity (see loop.LoopError),
+#: read from a kernel file that does not exist on every machine either. A
+#: real deployment always has it; a hand run on a desk or in a test does
+#: not, so this is the escape hatch for that case alone. Unset, behaviour is
+#: unchanged: Loop reads the kernel's own identity.
+BOOT_VAR = "MONITORING_BOOT_ID"
+
+
+# -- the pieces a node file does not yet carry through config.py ------------
+
+def _location(node):
+    """Where the sun is measured from, for a solar shed window.
+
+    Not part of the control block: spec.py's CONTROL_KEYS guards every key
+    *inside* control against a typo, and this is a property of the machine
+    rather than of a load it drives. It lives at the top of the node file,
+    beside site/node/measurement, and it is required rather than defaulted
+    for the reason every strict check in spec.py exists: a solar tier
+    computed against an invented point is wrong in a way nothing here could
+    ever detect, found only as cameras running a schedule nobody asked for.
+    """
+    raw = node.raw.get("location")
+    if not isinstance(raw, dict):
+        raise config.ConfigError(
+            "%s: needs a top-level 'location' mapping with latitude and "
+            "longitude; a solar schedule computed against an invented "
+            "point is wrong in a way nothing here can detect" % node.path)
+    try:
+        latitude = float(raw["latitude"])
+        longitude = float(raw["longitude"])
+    except (KeyError, TypeError, ValueError):
+        raise config.ConfigError(
+            "%s: 'location' needs numeric latitude and longitude, found %r"
+            % (node.path, raw))
+    return {"latitude": latitude, "longitude": longitude}
+
+
+def _zone(node):
+    """The timezone every schedule and override is read against."""
+    import zoneinfo
+
+    name = node.raw.get("timezone")
+    if not isinstance(name, str) or not name:
+        raise config.ConfigError(
+            "%s: needs a top-level 'timezone' naming an IANA zone, such as "
+            "America/Chicago" % node.path)
+    try:
+        return zoneinfo.ZoneInfo(name)
+    except zoneinfo.ZoneInfoNotFoundError as exc:
+        raise config.ConfigError(
+            "%s: timezone %r is not a zone this machine knows: %s"
+            % (node.path, name, exc))
+
+
+def _loop_interval(node):
+    """How often `run` loops, in seconds.
+
+    Read with monitoring/duration.py like every other duration in a node
+    file, rather than as a bare number. 30s by default, matching the
+    collectors' own poll interval: deciding faster than new readings can
+    arrive buys nothing.
+    """
+    value = node.control.get("loop_interval", 30)
+    try:
+        return duration.seconds(value, "control.loop_interval")
+    except duration.DurationError as exc:
+        raise config.ConfigError("%s: %s" % (node.path, exc))
+
+
+def _build_machine(node, relays=None):
+    """A Loop for this node, with every path this binary can relocate set.
+
+    `relays` is passed straight through: None for `run` and `once`, which
+    builds Loop's own real ones, or a caller-built mapping for `dry-run`.
+    """
+    location = _location(node)
+    zone = _zone(node)
+    return loop.Loop(
+        node, location, zone, relays=relays,
+        state_path=node.control.get("state_file"),
+        published_path=os.environ.get(PUBLISHED_VAR),
+        high_water_path=os.environ.get(HIGH_WATER_VAR),
+        boot=os.environ.get(BOOT_VAR))
+
+
+def _pretend_relays(node):
+    """One relay.Pretend per load, for `dry-run`.
+
+    Built here rather than left to Loop's own default so that `dry-run` can
+    hold the same mapping it hands to Loop, and check afterwards that
+    nothing in it moved.
+    """
+    specs = spec.load_control(node)
+    return {name: relay.Pretend(load["control_pin"], load["polarity"])
+            for name, load in specs.items()}
+
+
+# -- printing what a pass decided --------------------------------------------
+
+def _suns_today(location, zone, today):
+    """Yesterday's, today's and tomorrow's sun events, in `zone`.
+
+    A second, small copy of what Loop._suns does, kept here rather than
+    reached for, for the reason monitoring/drivers/control.py gives for
+    duplicating three small helpers of its own rather than importing them
+    from this same package: this binary treats the loop as a service to
+    drive, not a class to pick apart, and the lines are cheap to keep in
+    step with by hand.
+    """
+    out = []
+    for offset in (-1, 0, 1):
+        day = today + datetime.timedelta(days=offset)
+        rise, _, set_ = sun.events(day, location["latitude"],
+                                   location["longitude"], zone)
+        out.append({"sunrise": rise, "sunset": set_})
+    return out
+
+
+def _permits_at(schedule, when, suns):
+    """A timeless copy of decide.py's own schedule evaluator, for display.
+
+    Not imported: decide._permits is private, and takes a clock-trust flag
+    and a monotonic dwell that have nothing to do with printing a preview of
+    today. One thing is deliberately different from decide.py's own
+    arithmetic: a solar offset is added here as seconds, which is what
+    spec.py's _duration actually hands a ladder. decide.py adds it as though
+    it were a timedelta, which only test doubles that build a spec by hand
+    rather than through spec.load_spec have ever supplied.
+    """
+    kind = schedule["type"]
+    if kind == "never":
+        return False
+    if kind == "clock":
+        start, end = schedule["on_from"], schedule["on_to"]
+        minute = when.hour * 60 + when.minute
+        if start <= end:
+            return start <= minute < end
+        return minute >= start or minute < end
+    for day in suns:
+        for window in schedule["on_windows"]:
+            begin = day[window["from"][0]] + datetime.timedelta(
+                seconds=window["from"][1])
+            finish = day[window["to"][0]] + datetime.timedelta(
+                seconds=window["to"][1])
+            if begin <= when < finish:
+                return True
+    return False
+
+
+def _on_periods(tiers, suns, today, zone):
+    """Minutes of `today`, in `zone`, every one of `tiers` permits running.
+
+    None when nothing is latched, which the caller reads as unrestricted; an
+    empty list when every minute is refused. Sampled a minute at a time
+    rather than solved as interval arithmetic: a latched set can mix a clock
+    window that wraps midnight with more than one solar window, and
+    intersecting an arbitrary mix of those analytically is a second piece of
+    interval logic to keep in step with decide.py's own. Sampling needs no
+    twin, and it is cheap once, for a preview nobody needs exact to the
+    second.
+    """
+    if not tiers:
+        return None
+    midnight = datetime.datetime(today.year, today.month, today.day,
+                                 tzinfo=zone)
+    end_of_day = midnight + datetime.timedelta(days=1)
+    step = datetime.timedelta(minutes=1)
+
+    windows = []
+    on = False
+    start = None
+    moment = midnight
+    while moment < end_of_day:
+        permitted = all(_permits_at(tier["schedule"], moment, suns)
+                        for tier in tiers)
+        if permitted and not on:
+            start, on = moment, True
+        elif not permitted and on:
+            windows.append((start, moment))
+            on = False
+        moment += step
+    if on:
+        windows.append((start, end_of_day))
+    return windows
+
+
+def _format_windows(windows):
+    if windows is None:
+        return "unrestricted; no shed tier is latched"
+    if not windows:
+        return "off all day"
+    return ", ".join(
+        "%s-%s" % (start.strftime("%H:%M"),
+                   # The only end that lands on 00:00 is the sentinel for
+                   # midnight at the close of the day; a window cannot
+                   # otherwise end where the scan starts.
+                   "24:00" if end.hour == 0 and end.minute == 0
+                   else end.strftime("%H:%M"))
+        for start, end in windows)
+
+
+def _print_decisions(decisions, machine=None, local_now=None):
+    """One line per load: its name, whether it is connected, its tier and
+    the reason. With `machine` given, also today's resulting on-periods, for
+    `dry-run`, where that is the only way to see the schedule rather than
+    infer it from a single decision made at one moment.
+    """
+    for name in sorted(decisions):
+        decision = decisions[name]
+        sys.stdout.write("%s: %s, tier %d, %s\n" % (
+            name, "connected" if decision.connected else "disconnected",
+            decision.tier, decision.reason))
+
+        if machine is None:
+            continue
+        load_spec = machine.specs.get(name)
+        ladder = load_spec.get("shed_ladder") if load_spec else None
+        if not ladder:
+            continue
+        latched = machine.state.get(name, {}).get("latched", {})
+        tiers = [tier for index, tier in enumerate(ladder["tiers"])
+                if latched.get(str(index))]
+        try:
+            suns = _suns_today(machine.location, machine.zone,
+                               local_now.date())
+        except sun.NoSunEvent:
+            sys.stdout.write(
+                "    today: cannot be computed; the sun does not rise or "
+                "set here on this date\n")
+            continue
+        windows = _on_periods(tiers, suns, local_now.date(), machine.zone)
+        sys.stdout.write("    today: %s\n" % _format_windows(windows))
+
+
+# -- run ----------------------------------------------------------------------
+
+def _wait(interval, should_stop, sleep=time.sleep, chunk=0.2):
+    """Sleep `interval` seconds, but give up early and often.
+
+    A plain time.sleep(interval) would leave a SIGTERM or SIGINT unnoticed
+    for up to a whole loop_interval, since this project's handler only sets
+    a flag rather than raising. Checking every `chunk` seconds instead makes
+    shutdown prompt without needing the signal to interrupt the sleep call
+    itself, which is not guaranteed.
+    """
+    remaining = interval
+    while remaining > 0 and not should_stop():
+        sleep(min(chunk, remaining))
+        remaining -= chunk
+
+
+def _run(machine, interval, should_stop, sleep=time.sleep):
+    """Loop until `should_stop()` says to, closing the relays either way.
+
+    The finally block is the point of this function existing separately
+    from cmd_run: whether the loop ends because it was asked to, or because
+    once() raised, the relays this process holds must still be released, or
+    the fail-safe every load depends on cannot take effect until something
+    else kills the process outright.
+    """
+    try:
+        while not should_stop():
+            machine.once()
+            _wait(interval, should_stop, sleep=sleep)
+    finally:
+        machine.close()
+
+
+def cmd_run(args):
+    try:
+        node = config.load(args.node, known_drivers=driver_registry.names())
+        interval = _loop_interval(node)
+        machine = _build_machine(node)
+    except (config.ConfigError, spec.SpecError) as exc:
+        # The two ways a control block can be unusable. Starting anyway
+        # would drive every pin from defaults nobody wrote.
+        sys.stderr.write("%s\n" % exc)
+        return 2
+
+    stop = {"go": False}
+
+    def _signalled(signum, frame):
+        # Set a flag and return. Anything slower risks catching the loop
+        # mid pass, which is the half-driven state the finally block in
+        # _run exists to avoid rather than to recover from.
+        stop["go"] = True
+
+    signal.signal(signal.SIGTERM, _signalled)
+    signal.signal(signal.SIGINT, _signalled)
+
+    _run(machine, interval, lambda: stop["go"])
+    return 0
+
+
+# -- once and dry-run ---------------------------------------------------------
+
+def cmd_once(args):
+    try:
+        node = config.load(args.node, known_drivers=driver_registry.names())
+        machine = _build_machine(node)
+    except (config.ConfigError, spec.SpecError) as exc:
+        sys.stderr.write("%s\n" % exc)
+        return 2
+
+    try:
+        decisions = machine.once(apply=True)
+        _print_decisions(decisions)
+    finally:
+        machine.close()
+    return 0
+
+
+def cmd_dry_run(args):
+    try:
+        node = config.load(args.node, known_drivers=driver_registry.names())
+        relays = _pretend_relays(node)
+        machine = _build_machine(node, relays=relays)
+    except (config.ConfigError, spec.SpecError) as exc:
+        sys.stderr.write("%s\n" % exc)
+        return 2
+
+    try:
+        # Captured once, ahead of once() reading its own clock a moment
+        # later. The two can differ by a fraction of a second; this display
+        # only needs today's date, not a time correct to the second.
+        local_now = datetime.datetime.now(machine.zone)
+        decisions = machine.once(apply=False)
+        _print_decisions(decisions, machine=machine, local_now=local_now)
+        # Belt and suspenders alongside apply=False above: `levels` only
+        # exists on relay.Pretend, the double that records instead of
+        # driving, so this also proves every relay here is that double
+        # rather than a real one. A dry run that moved a pin is not a dry
+        # run, whatever else went right.
+        for name, pin in relays.items():
+            assert not pin.levels, (
+                "%s moved during a dry run, which must never happen"
+                % name)
+    finally:
+        machine.close()
+    return 0
+
+
+# -- override and shedding ----------------------------------------------------
+
+def _read_switches():
+    return files.read_switches(os.environ.get(SWITCHES_VAR))
+
+
+def _write_switches(switches):
+    files.write_switches(switches, os.environ.get(SWITCHES_VAR))
+
+
+def cmd_override(args, override_parser):
+    if args.load == "clear":
+        name = args.state
+        if not name:
+            override_parser.error("override clear needs a load name")
+        switches = _read_switches()
+        loads = dict(switches["loads"])
+        loads.pop(name, None)
+        _write_switches(dict(switches, loads=loads))
+        sys.stdout.write("%s: override cleared\n" % name)
+        return 0
+
+    name = args.load
+    state = args.state
+    if state not in ("on", "off"):
+        override_parser.error(
+            "override needs 'on' or 'off' after the load name (or "
+            "'clear <load>'), found %r" % (state,))
+
+    if args.for_ and args.until:
+        override_parser.error(
+            "give --for or --until, not both; two expiries for one force "
+            "leaves it ambiguous which one actually ends it")
+    if not args.for_ and not args.until:
+        # The failure this exists to catch: a force set during a hunting
+        # trip and never cleared, which quietly flattens the battery. An
+        # override with no expiry is a force with no backstop.
+        override_parser.error(
+            "an override must carry an expiry: give --for (such as 8h) or "
+            "--until (such as \"2026-10-18 09:00\")")
+
+    now = time.time()
+    if args.for_:
+        try:
+            expires = now + duration.seconds(args.for_, "--for")
+        except duration.DurationError as exc:
+            override_parser.error(str(exc))
+    else:
+        try:
+            when = datetime.datetime.strptime(args.until, "%Y-%m-%d %H:%M")
+        except ValueError:
+            override_parser.error(
+                "--until needs a timestamp written as "
+                "\"YYYY-MM-DD HH:MM\", found %r" % args.until)
+        # Naive, and read as this machine's own local time. The command
+        # runs on the node it affects, so there is no second zone to
+        # reconcile it against.
+        expires = when.astimezone().timestamp()
+
+    switches = _read_switches()
+    loads = dict(switches["loads"])
+    loads[name] = {"force": state, "expires_epoch": expires}
+    _write_switches(dict(switches, loads=loads))
+    sys.stdout.write("%s: forced %s until %s\n" % (
+        name, state,
+        datetime.datetime.fromtimestamp(expires).astimezone()
+            .strftime("%Y-%m-%d %H:%M")))
+    return 0
+
+
+def cmd_shedding(args):
+    switches = _read_switches()
+
+    if args.shedding_action in ("on", "off"):
+        _write_switches(dict(switches, shedding_enabled=(
+            args.shedding_action == "on")))
+        sys.stdout.write("shedding: %s\n" % args.shedding_action)
+        return 0
+
+    # status
+    if not switches.get("readable", True):
+        sys.stdout.write(
+            "note: the switches file is missing or unreadable; reading as "
+            "no override and shedding enabled\n")
+    sys.stdout.write("shedding: %s\n"
+                     % ("on" if switches["shedding_enabled"] else "off"))
+
+    now = time.time()
+    any_override = False
+    for name in sorted(switches["loads"]):
+        entry = switches["loads"][name]
+        if not isinstance(entry, dict) or entry.get("force") not in (
+                "on", "off"):
+            continue
+        any_override = True
+        expires = entry.get("expires_epoch")
+        if isinstance(expires, (int, float)) and not isinstance(
+                expires, bool):
+            stamp = (datetime.datetime.fromtimestamp(expires).astimezone()
+                    .strftime("%Y-%m-%d %H:%M"))
+            when_text = ("expired %s" % stamp if now >= expires
+                        else "until %s" % stamp)
+        else:
+            when_text = "with no readable expiry, so treated as expired"
+        sys.stdout.write("override: %s forced %s, %s\n" % (
+            name, entry["force"], when_text))
+    if not any_override:
+        sys.stdout.write("override: none active\n")
+    return 0
+
+
+# -- argument parsing ---------------------------------------------------------
+
+def _add_node_argument(subparser):
+    subparser.add_argument(
+        "--node", default=os.environ.get("MONITORING_NODE", DEFAULT_NODE),
+        help="path to the node file (default: %s)" % DEFAULT_NODE)
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog="control", description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    run_p = subparsers.add_parser(
+        "run", help="the service: loop forever, applying every decision")
+    _add_node_argument(run_p)
+
+    once_p = subparsers.add_parser(
+        "once", help="one pass, applied")
+    _add_node_argument(once_p)
+
+    dry_run_p = subparsers.add_parser(
+        "dry-run", help="one pass, decided and printed, no pin touched")
+    _add_node_argument(dry_run_p)
+
+    override_p = subparsers.add_parser(
+        "override",
+        help="force a load on or off until an expiry, or clear a force")
+    override_p.add_argument(
+        "load", help="a load name, or 'clear' to remove a prior force")
+    override_p.add_argument(
+        "state", nargs="?",
+        help="'on' or 'off' after a load name; the load name itself after "
+             "'clear'")
+    override_p.add_argument(
+        "--for", dest="for_", metavar="DURATION",
+        help="how long the force lasts, such as 8h")
+    override_p.add_argument(
+        "--until", metavar="TIMESTAMP",
+        help="the local time the force lasts until, such as "
+             "\"2026-10-18 09:00\"")
+    override_p.set_defaults(override_parser=override_p)
+
+    shedding_p = subparsers.add_parser(
+        "shedding", help="enable, disable, or report the shedding switch")
+    shedding_sub = shedding_p.add_subparsers(
+        dest="shedding_action", required=True)
+    shedding_sub.add_parser("on", help="let tiers shed loads as usual")
+    shedding_sub.add_parser(
+        "off", help="hold every load on unless its floor fires")
+    shedding_sub.add_parser(
+        "status", help="whether shedding is on and any override's expiry")
+
+    return parser
+
+
+def main(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.command == "run":
+        return cmd_run(args)
+    if args.command == "once":
+        return cmd_once(args)
+    if args.command == "dry-run":
+        return cmd_dry_run(args)
+    if args.command == "override":
+        return cmd_override(args, args.override_parser)
+    if args.command == "shedding":
+        return cmd_shedding(args)
+    parser.error("unknown command %r" % args.command)  # pragma: no cover
+
+
+if __name__ == "__main__":
+    sys.exit(main())
