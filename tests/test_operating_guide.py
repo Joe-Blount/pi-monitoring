@@ -117,7 +117,7 @@ def test_the_guide_shows_the_control_subcommands_it_is_known_to_show():
     found = _control_subcommands_in_guide()
     missing = GUIDE_SUBCOMMANDS - found
     assert not missing, (
-        "the parser no longer finds %s in the guide, so those are not being "
+        "the parser does not find %s in the guide, so those are not being "
         "checked against bin/control" % sorted(missing))
 
 

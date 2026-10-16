@@ -549,7 +549,7 @@ def _hold(decision, spec, mono_now, state, operator=False):
     if held < wanted:
         return (decision._replace(
             connected=commanded, reason_code=HELD_BY_TIMER,
-            reason="%s, but held for another %.0fs by the minimum %s time"
+            reason="%s; held for another %.0fs by the minimum %s time"
                    % (decision.reason, wanted - held,
                       "run" if commanded else "off")),
                 new_state)

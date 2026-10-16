@@ -1291,6 +1291,42 @@ def test_which_rule_shed_a_load_is_forgotten_once_the_load_has_moved():
     assert decision.connected, decision.reason
 
 
+def test_a_floor_shed_that_hands_straight_into_a_tier_shed_still_binds():
+    """A floor shed does not stop binding because a tier took over.
+
+    The floor fires while a tier is latched and its schedule already forbids
+    the load, so when the cell recovers the load does not move: it was off
+    and it stays off, now on the tier's account. The pass that changes
+    nothing deliberately leaves the record of which rule shed it alone,
+    because the timer it belongs to is still measuring the same unbroken off
+    period, and the cell was weak a hundred seconds ago.
+
+    This is the history that separates the two, and both answers pass every
+    other test here: refreshing the record on a pass where nothing moved
+    would hand the load back inside the floor's own off time.
+    """
+    spec = dict(TIMED, shed_ladder=LADDER)
+
+    def pass_through(state, cell, mono, shedding=True):
+        return decide.decide(
+            at(4, 30), mono, True, reading(45.0, cell),
+            {"shedding_enabled": shedding, "loads": {}},
+            {"cameras": spec}, state, SUNS)
+
+    decisions, state = pass_through({}, 3.10, 10.0)
+    assert decisions["cameras"].reason_code == decide.FLOOR
+
+    # The cell recovers. The tier still forbids the load, so nothing moves.
+    decisions, state = pass_through(state, 3.30, 120.0)
+    assert not decisions["cameras"].connected
+    assert decisions["cameras"].reason_code == decide.STATE_OF_CHARGE
+
+    decisions, _ = pass_through(state, 3.30, 130.0, shedding=False)
+    assert not decisions["cameras"].connected, (
+        "the switch handed the load back inside the floor's own off time")
+    assert decisions["cameras"].reason_code == decide.HELD_BY_TIMER
+
+
 def test_the_ladder_itself_is_still_held_by_the_timers():
     """The exemptions are for the floor and for a person, not a loophole that
     lets the ladder cycle a recorder as a battery wavers on a threshold."""
