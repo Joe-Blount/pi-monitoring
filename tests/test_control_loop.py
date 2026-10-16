@@ -23,8 +23,9 @@ BOOT = "test-boot-identity"
 
 
 class FakeDevice:
-    def __init__(self, name):
+    def __init__(self, name, enabled=True):
         self.name = name
+        self.enabled = enabled
 
 
 class FakeNode:
@@ -38,6 +39,7 @@ LADDER = {
     "stale_after": "10m",
     "release_margin_pct": 15,
     "enter_after_readings": 1,
+    "restore_dwell": 0,
     "floor": {"sources": [
         {"device": "bms", "field": "cell_min_volts",
          "shed_below": 3.15, "restore_above": 3.25}]},

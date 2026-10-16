@@ -33,8 +33,21 @@ SCHEDULE_TYPES = ("clock", "solar", "never")
 #: Events a solar window may be measured from.
 SOLAR_EVENTS = ("sunrise", "sunset")
 
-LOAD_KEYS = {"type", "enabled", "control_pin", "polarity", "on_stale_data",
-             "shed_ladder", "min_run", "min_off", "readback"}
+#: Keys a driven load may carry. Deliberately only the ones something reads.
+#:
+#: `readback` and `on_stale_data` are specified in the node files and nothing
+#: acts on either yet, so they are absent here and a load carrying one is
+#: refused. Accepting a key nobody reads is the exact failure this module
+#: exists to prevent: the line sits in the file looking like it is in force.
+#: They go back in alongside the code that honours them.
+LOAD_KEYS = {"type", "enabled", "control_pin", "polarity",
+             "shed_ladder", "min_run", "min_off"}
+
+#: Keys the control block itself may carry. Owned by the loop rather than by
+#: a load, and listed so a misspelled loop_interval is refused rather than
+#: silently leaving the default in place.
+CONTROL_KEYS = {"enabled", "loads", "state_file", "loop_interval",
+                "publish_as", "clock"}
 LADDER_KEYS = {"source", "stale_after", "release_margin_pct",
                "enter_after_readings", "restore_dwell", "floor", "tiers"}
 FLOOR_KEYS = {"sources"}
@@ -63,6 +76,22 @@ def _only(where, mapping, allowed):
                      % ", ".join(sorted(unknown)))
 
 
+def _enabled(where, value):
+    """Whether a load is on, refusing anything that is not a yes or a no.
+
+    The same rule the device loader applies, and for the same reason: a loose
+    test is the wrong way round for a setting whose whole purpose is to stop
+    something. `enabled: "false"` is a non-empty string and would read as
+    yes, and `enabled: 0` would read as no while looking like a typo for
+    something else.
+    """
+    if not isinstance(value, bool):
+        _fail(where, "enabled must be true or false, found %r; a string or a "
+                     "number here would be read as a yes or a no by accident"
+                     % (value,))
+    return value
+
+
 def _number(where, value, what):
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         _fail(where, "%s must be a number, found %r" % (what, value))
@@ -76,19 +105,34 @@ def _minutes(where, value, what):
                      % (what, value))
     hours, _, minutes = value.partition(":")
     try:
-        total = int(hours) * 60 + int(minutes)
+        hour, minute = int(hours), int(minutes)
     except ValueError:
         _fail(where, "%s is not a time: %r" % (what, value))
-    if not 0 <= total <= 24 * 60:
+    # Each part in range, not just their sum. Checking the total accepts
+    # 12:75 as 13:15 and 23:60 as midnight, which is a typo read as a time.
+    if not 0 <= hour <= 24 or not 0 <= minute < 60 or hour * 60 + minute > 24 * 60:
         _fail(where, "%s is not a time of day: %r" % (what, value))
-    return total
+    return hour * 60 + minute
 
 
-def _duration(where, value, what):
+def _duration(where, value, what, allow_negative=False, allow_zero=True):
+    """A duration in seconds, refusing the signs that cannot be meant.
+
+    Negatives are allowed by the parser because a solar window needs them,
+    so the sign check belongs here where the meaning is known. A negative or
+    zero staleness limit makes every reading stale forever, and a negative
+    minimum time is a timer that has always expired.
+    """
     try:
-        return _seconds(value, what)
+        seconds = _seconds(value, what)
     except DurationError as exc:
         _fail(where, str(exc))
+    if not allow_negative and seconds < 0:
+        _fail(where, "%s cannot be negative, found %r" % (what, value))
+    if not allow_zero and seconds <= 0:
+        _fail(where, "%s must be positive, found %r; a staleness limit of "
+                     "zero makes every reading stale forever" % (what, value))
+    return seconds
 
 
 def _source(where, raw, devices):
@@ -97,8 +141,11 @@ def _source(where, raw, devices):
         if not isinstance(raw.get(key), str) or not raw[key]:
             _fail(where, "needs a %s" % key)
     if raw["device"] not in devices:
-        _fail(where, "names device %r, which this node does not declare. "
-                     "Known: %s" % (raw["device"], ", ".join(sorted(devices))))
+        _fail(where, "names device %r, which this node does not declare, or "
+                     "which is declared and disabled. Either way nothing will "
+                     "ever write a reading for it, so no tier would latch and "
+                     "the controller would run and do nothing. Known: %s"
+                     % (raw["device"], ", ".join(sorted(devices)) or "none"))
     return {"device": raw["device"], "field": raw["field"]}
 
 
@@ -176,14 +223,28 @@ def _schedule(where, raw):
             if event not in SOLAR_EVENTS:
                 _fail(at, "%s names %r; it must be one of %s"
                           % (edge, event, ", ".join(SOLAR_EVENTS)))
-            edges[edge] = (event, _duration(at, offset, "%s offset" % edge))
+            edges[edge] = (event, _duration(at, offset, "%s offset" % edge,
+                                            allow_negative=True))
+        if (edges["from"][0] == edges["to"][0]
+                and edges["from"][1] >= edges["to"][1]):
+            # Measured from the same event, so the comparison is exact. A
+            # window that ends before it starts is never on, and the tier
+            # then reads as scheduled while behaving as never.
+            _fail(at, "the window ends at or before it starts, so it can "
+                      "never be on")
         out.append(edges)
     return {"type": "solar", "on_windows": out}
 
 
 def _ladder(where, raw, devices):
     _only(where, raw, LADDER_KEYS)
-    for key in ("source", "stale_after", "release_margin_pct", "tiers"):
+    # restore_dwell is required rather than defaulted to nothing. Entry
+    # needs consecutive readings so one glitched sample cannot latch a tier;
+    # release with no dwell lets one glitched sample clear every tier at
+    # once, and the minimum run time then extends the mistake. A file that
+    # wants no dwell can say zero and mean it.
+    for key in ("source", "stale_after", "release_margin_pct", "tiers",
+                "restore_dwell"):
         if key not in raw:
             _fail(where, "needs %s" % key)
 
@@ -210,6 +271,9 @@ def _ladder(where, raw, devices):
             if key not in tier:
                 _fail(at, "needs %s" % key)
         below = _number(at, tier["below_pct"], "below_pct")
+        if not 0 < below <= 100:
+            _fail(at, "below_pct must be a percentage above zero, found %r"
+                      % (tier["below_pct"],))
         if previous is not None and below >= previous:
             # The latched set is a prefix of the ladder only because the
             # tiers descend strictly and share one margin. Everything that
@@ -223,13 +287,18 @@ def _ladder(where, raw, devices):
 
     return {
         "source": _source(where + " source", raw["source"], devices),
-        "stale_after": _duration(where, raw["stale_after"], "stale_after"),
+        "stale_after": _duration(where, raw["stale_after"], "stale_after",
+                                 allow_zero=False),
         "release_margin_pct": margin,
         "enter_after_readings": entered,
-        "restore_dwell": _duration(where, raw.get("restore_dwell", 0),
+        "restore_dwell": _duration(where, raw["restore_dwell"],
                                    "restore_dwell"),
+        # A floor key present and empty is refused rather than read as no
+        # floor: the likeliest cause is a half-deleted one, and silently
+        # dropping the only rule with nothing above it is the wrong way to
+        # resolve an ambiguity.
         "floor": (_floor(where + " floor", raw["floor"], devices)
-                  if raw.get("floor") else None),
+                  if "floor" in raw else None),
         "tiers": out_tiers,
     }
 
@@ -237,11 +306,18 @@ def _ladder(where, raw, devices):
 def load_spec(name, raw, devices):
     """Parse one load. Returns the spec a decision can act on."""
     where = "load %s" % name
-    _only(where, raw, LOAD_KEYS)
+    if not isinstance(raw, dict):
+        _fail(where, "expected a mapping, found %s" % type(raw).__name__)
 
     kind = raw.get("type")
+
+    # The type and the enable are read before the keys are checked, so a
+    # deferred load can keep the specification its deferral exists to
+    # preserve. Checking keys first would refuse the irrigation block for
+    # declaring an inverter and a pump, and the only accepted form would be
+    # the load stripped to two lines, which deletes the work.
     if kind in DEFERRED_TYPES:
-        if raw.get("enabled", True):
+        if _enabled(where, raw.get("enabled", True)):
             _fail(where, "type %r is specified but not driven yet, so it must "
                          "be enabled: false with the reason in a comment. An "
                          "enabled load nothing drives is indistinguishable "
@@ -251,7 +327,8 @@ def load_spec(name, raw, devices):
         _fail(where, "type %r is not a type this controller drives; known: %s"
                      % (kind, ", ".join(DRIVEN_TYPES + DEFERRED_TYPES)))
 
-    if not raw.get("enabled", True):
+    _only(where, raw, LOAD_KEYS)
+    if not _enabled(where, raw.get("enabled", True)):
         return None
 
     pin = raw.get("control_pin")
@@ -286,7 +363,10 @@ def load_control(node):
     controller running three loads out of four, on a machine nobody can
     reach, is worse than one that refuses to start and says why.
     """
-    devices = {device.name for device in node.devices}
+    _only("control", node.control, CONTROL_KEYS)
+    # Enabled devices only. A disabled one never writes the cache, so a
+    # ladder naming it would wait forever on a reading that cannot come.
+    devices = {device.name for device in node.devices if device.enabled}
     loads = {}
     for name in sorted((node.control.get("loads") or {})):
         spec = load_spec(name, node.control["loads"][name], devices)

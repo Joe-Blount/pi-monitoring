@@ -78,6 +78,13 @@ NO_READING = 7
 THERMAL = 8
 REFUSED = 9
 
+#: A decision the rules made and a timer has not let through yet. Its own
+#: code because without it the published code describes the decision while
+#: the relay sits in the opposite state: an alert matching "nothing is wrong"
+#: would see a shed load, and one matching "shedding on state of charge"
+#: would see a powered one. Only the free text explained it.
+HELD_BY_TIMER = 10
+
 
 def _reading(readings, source, stale_after):
     """One field's value, or None when it cannot be trusted.
@@ -96,53 +103,78 @@ def _reading(readings, source, stale_after):
     value = record.get("fields", {}).get(source["field"])
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    return float(value)
+    value = float(value)
+    # Not a number is not a reading. Every comparison against a NaN is
+    # false, so one arriving here would look like a value clear of every
+    # bound and would release a latched floor.
+    if value != value or value in (float("inf"), float("-inf")):
+        return None
+    return value
 
 
 # -- the ladder -------------------------------------------------------------
 
-def _step_floor(ladder, readings, was_latched):
-    """Whether the floor is tripped, and on what.
+def _source_key(source):
+    return "%s.%s" % (source["device"], source["field"])
 
-    Latched below the shedding bound and released only strictly above the
-    restoring one, so a value sagging under load cannot chatter the relay.
+
+def _step_floor(ladder, readings, was_latched, latched_by):
+    """Whether the floor is tripped, on what, and which source owns it.
 
     Each source carries its own bounds, because the sources are not in the
-    same units. One is a cell voltage and the other is a pack voltage, and a
+    same units. One is a cell voltage and the other a pack voltage, and a
     shared pair of bounds compares a healthy cell at 3.30 against a pack
     threshold of 12.6 and sheds forever.
+
+    **Any source may latch the floor. Only the source that latched it may
+    release it.** That asymmetry is the whole point of having two, and
+    getting it wrong is self-reinforcing rather than merely wrong.
+
+    A pack voltage cannot see one weak cell: a cell at 3.10 beside three at
+    3.43 reads as a 13.39 V pack, comfortably clear of any pack bound. So if
+    either source could release, a cell-tripped floor would be cleared by the
+    pack the moment the battery radio went quiet, which it does routinely.
+    And shedding this load removes most of the draw, so the pack voltage
+    rises as a direct result of the shed. The floor would release, the load
+    would reconnect onto the weak cell, the cell would sag, and the cycle
+    would repeat for as long as the radio stayed quiet.
     """
     floor = ladder.get("floor")
     if not floor:
-        return False, None, None
+        return False, None, None, None
 
     stale_after = ladder["stale_after"]
-    readable = False
+    seen = {}
     for source in floor["sources"]:
-        value = _reading(readings, source, stale_after)
-        if value is None:
-            continue
-        readable = True
-        if value < source["shed_below"]:
-            return True, value, source
-        if was_latched and value <= source["restore_above"]:
-            # Readable, above the shedding bound, not yet clear of the
-            # restoring one. Still latched, and this is the reading that says
-            # so rather than a stale guess.
-            return True, value, source
+        seen[_source_key(source)] = (source,
+                                     _reading(readings, source, stale_after))
 
-    if readable:
-        # Every source that could be read is clear of the restoring bound, so
-        # the floor releases. Whether it was latched does not matter: a
-        # reading that clears it is exactly what the latch was waiting for.
-        return False, None, None
+    # Entry: any source below its own bound, and it becomes the source that
+    # has to clear it.
+    for key, (source, value) in seen.items():
+        if value is not None and value < source["shed_below"]:
+            return True, value, source, key
 
-    if was_latched:
-        # Nothing readable said otherwise. A floor holds until a reading
-        # clears it, with no time limit, because the alternative is releasing
-        # a shed on the strength of a radio going quiet.
-        return True, None, None
-    return False, None, None
+    if not was_latched:
+        return False, None, None, None
+
+    owner = seen.get(latched_by)
+    if owner is None:
+        # The source that latched it is no longer declared at all, so nothing
+        # can speak for it. Holding is the only honest answer.
+        return True, None, None, latched_by
+
+    source, value = owner
+    if value is None:
+        # The source that latched it has gone quiet. A floor holds until a
+        # reading clears it, with no time limit, because the alternative is
+        # releasing a shed on the strength of a radio going silent.
+        return True, None, None, latched_by
+    if value <= source["restore_above"]:
+        # Readable, above its shedding bound, not yet clear of its restoring
+        # one. Still latched, and on a live reading rather than a guess.
+        return True, value, source, latched_by
+    return False, None, None, None
 
 
 def _step_tiers(ladder, value, mono_now, latched, below_counts, above_since):
@@ -234,8 +266,8 @@ def ladder_decision(name, spec, readings, now, mono_now, suns, clock_trusted,
     """Decide one sheddable load. Returns (Decision, new state)."""
     ladder = spec["shed_ladder"]
     was = state.get("floor_latched", False)
-    floor_latched, floor_value, floor_source = _step_floor(
-        ladder, readings, was)
+    floor_latched, floor_value, floor_source, floor_owner = _step_floor(
+        ladder, readings, was, state.get("floor_latched_by"))
 
     value = _reading(readings, ladder["source"], ladder["stale_after"])
     latched, counts, since = _step_tiers(
@@ -247,15 +279,22 @@ def ladder_decision(name, spec, readings, now, mono_now, suns, clock_trusted,
     new_state["below"] = counts
     new_state["above_since"] = since
     new_state["floor_latched"] = floor_latched
+    new_state["floor_latched_by"] = floor_owner
 
     if floor_latched:
         if floor_value is None:
-            reason = ("holding the cell floor with nothing readable to clear "
-                      "it")
-        else:
+            reason = ("holding the floor with nothing readable to clear it")
+        elif floor_value < floor_source["shed_below"]:
             reason = "%s=%.3f below the %.3f floor" % (
                 floor_source["field"], floor_value,
                 floor_source["shed_below"])
+        else:
+            # Between the two bounds. Saying it is below the shedding bound
+            # here would assert a comparison that is false, and an operator
+            # checking it against the dashboard would doubt the sensor.
+            reason = "%s=%.3f has not cleared the %.3f restoring bound" % (
+                floor_source["field"], floor_value,
+                floor_source["restore_above"])
         return (Decision(name, False, _depth(latched), FLOOR, reason,
                          floor_value),
                 new_state)
@@ -385,7 +424,7 @@ def _hold(decision, spec, mono_now, state):
     wanted = spec["min_run"] if commanded else spec["min_off"]
     if held < wanted:
         return (decision._replace(
-            connected=commanded,
+            connected=commanded, reason_code=HELD_BY_TIMER,
             reason="%s, but held for another %.0fs by the minimum %s time"
                    % (decision.reason, wanted - held,
                       "run" if commanded else "off")),

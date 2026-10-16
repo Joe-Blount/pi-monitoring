@@ -144,7 +144,11 @@ Nothing in the test suite needs hardware, a network or credentials.
 - The control decision logic is a pure function, snapshot in and decision out,
   so a test states a situation and asserts the outcome without waiting for
   weather.
-- Relay sequencing is tested against gpiozero's mock pin factory.
+- Relay polarity is asserted as the voltage on the pin, read through
+  gpiozero's mock pin factory, never as the state the controller wanted. The
+  library's own `active_high` inverts the claim and every level after it, and
+  `on()` is logical rather than electrical, so a double that records calls
+  cannot see the difference.
 
 ## Running it
 
@@ -220,6 +224,7 @@ imports a Bluetooth stack.
 | `jbd` | Chins and other JBD packs | Bluetooth | Identified as JBD from its characteristic UUIDs before anything was sent. Big-endian, and one reply arrives across several notifications, so replies are reassembled by their length byte. |
 | `qinglan` | QinLan coulomb-counting shunts | Bluetooth | No published protocol and nothing findable online. Reverse engineered for interoperability from the vendor's own Android application, then confirmed against the hardware. Nothing is copied from that application: this is an independent implementation of a wire format. Every request carries a bus address, and without it the device ignores you in silence and looks dead. |
 | `eg4_modbus` | EG4 all-in-one inverters | serial | Modbus RTU at 9600, not the PI30 ASCII at 2400 that the model is usually said to speak. The register map was built by changing one load at a time and watching, including disconnecting the array, which is the only way to tell solar power apart from load power while solar is carrying the load. |
+| `control` | the load controller itself | none | Not a device. The control loop is its own service and writes a small document; this reads it so what it decided reaches the database through the same path as everything else. A loop that is not running fails loudly here, because every load is then sitting at its fail-safe and nothing is managing the battery. |
 
 Every driver is read-only. Several of these battery modules accept
 unauthenticated commands that switch their charge and discharge paths, and

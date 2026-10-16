@@ -89,6 +89,11 @@ def disabled_point(node, device, now_ns):
     return lineproto.line(node.measurement, device.tags, {"enabled": 0.0}, now_ns)
 
 
+#: Said once per process. A warning on every device every interval would
+#: bury the readings it is printed beside.
+_CACHE_COMPLAINED = False
+
+
 def _cache(node, device, fields):
     """Hand a good reading to load control, if this node has any.
 
@@ -103,16 +108,34 @@ def _cache(node, device, fields):
     because a dry run before switching control on needs the cache populated
     to have anything to decide about.
 
-    A cache that cannot be written must never cost a reading. The point
-    reaching the database is the job; the cache is a convenience for a
-    process on the same machine, and it is published again in a few seconds.
+    Calibrated, because `point` calibrates too and the controller must act on
+    the same numbers the database shows. A node file's thresholds are set by
+    somebody reading a dashboard, so a controller working from raw values
+    would be comparing against bounds chosen for corrected ones. Applied here
+    from the raw fields rather than by reusing a corrected dict, because
+    scale and offset are not idempotent and applying them twice would square
+    the scale.
+
+    A cache that cannot be written must never cost a reading: the point
+    reaching the database is the job, and the cache is a convenience for a
+    process on the same machine that is offered another one in seconds. But
+    it says so once, because a cache that has never worked and a cache that
+    is working look identical from outside. The usual cause is ownership: a
+    hand run as root creates the directory, and the service can then never
+    write it.
     """
     if not node.control:
         return
     try:
-        control_files.publish_reading(fields, device.name)
-    except Exception:
-        pass
+        control_files.publish_reading(
+            calibration.apply(fields, device.calibration), device.name)
+    except Exception as exc:
+        global _CACHE_COMPLAINED
+        if not _CACHE_COMPLAINED:
+            _CACHE_COMPLAINED = True
+            sys.stderr.write(
+                "cannot write the reading cache, so load control is working "
+                "from nothing: %s\n" % exc)
 
 
 def read_device(node, device, now_ns=None):
@@ -255,8 +278,9 @@ def stream_device(node, device, out=None, err=None, max_readings=None,
         driver = build_driver(device)
         emitted = 0
         for fields in driver.stream():
-            _cache(node, device, fields)
             out.write(point(node, device, fields, int(clock() * 1e9)) + "\n")
+            out.flush()
+            _cache(node, device, fields)
             out.flush()
             emitted += 1
             if max_readings is not None and emitted >= max_readings:

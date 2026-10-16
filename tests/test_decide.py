@@ -578,6 +578,85 @@ def test_a_value_between_the_floor_bounds_does_not_shed_from_an_unlatched_start(
     assert decision.connected
 
 
+def test_a_floor_latched_by_one_source_is_not_released_by_another():
+    """Any source may latch the floor; only the one that latched it may
+    release it.
+
+    A pack voltage cannot see one weak cell: a cell at 3.10 beside three at
+    3.43 reads as a 13.39 V pack, clear of any pack bound. If either source
+    could release, the self-reinforcing trajectory is shedding most of the
+    load, which raises the pack voltage as a direct result, which clears a
+    floor the cell tripped, which reconnects the load onto the weak cell.
+    """
+    spec = dict(SPEC, shed_ladder=TWO_SOURCE)
+
+    def pass_through(state, cell_age, cell, pack):
+        readings = {"bms": {"fields": {"state_of_charge_pct": 60.0,
+                                        "cell_min_volts": cell},
+                            "age_seconds": cell_age},
+                    "mppt": {"fields": {"battery_volts": pack},
+                             "age_seconds": 1.0}}
+        return decide.decide(at(12), 0.0, True, readings,
+                             {"shedding_enabled": True, "loads": {}},
+                             {"cameras": spec}, state, SUNS)
+
+    decisions, state = pass_through({}, 1.0, 3.10, 13.2)
+    assert not decisions["cameras"].connected
+
+    # The battery radio goes quiet, which it does routinely, and the pack
+    # voltage rises because the load was just shed.
+    decisions, state = pass_through(state, 100_000.0, 3.10, 13.6)
+    assert not decisions["cameras"].connected, (
+        "the pack source released a floor the cell tripped")
+    assert "nothing readable to clear it" in decisions["cameras"].reason
+
+    # Only the cell can clear it.
+    decisions, state = pass_through(state, 1.0, 3.30, 13.6)
+    assert decisions["cameras"].connected
+
+
+def test_either_floor_source_can_latch_on_its_own():
+    """The asymmetry is only on release. A second, independently wired
+    source exists so that it can shed when the first is unreliable."""
+    spec = dict(SPEC, shed_ladder=TWO_SOURCE)
+    readings = {"bms": {"fields": {"state_of_charge_pct": 60.0,
+                                    "cell_min_volts": 3.30},
+                        "age_seconds": 1.0},
+                "mppt": {"fields": {"battery_volts": 12.1},
+                         "age_seconds": 1.0}}
+    decisions, _ = decide.decide(
+        at(12), 0.0, True, readings,
+        {"shedding_enabled": True, "loads": {}}, {"cameras": spec}, {}, SUNS)
+    assert not decisions["cameras"].connected
+    assert decisions["cameras"].reason_code == decide.FLOOR
+    assert "battery_volts" in decisions["cameras"].reason
+
+
+def test_a_value_that_is_not_a_number_is_not_a_reading():
+    """Every comparison against a NaN is false, so one arriving at the floor
+    would look like a value clear of every bound and release a latched
+    floor."""
+    _, state = run(100.0, cell=3.10)
+    decisions, _ = decide.decide(
+        at(12), 1.0, True,
+        {"bms": {"fields": {"cell_min_volts": float("nan"),
+                            "state_of_charge_pct": 60.0},
+                 "age_seconds": 1.0}},
+        {"shedding_enabled": True, "loads": {}}, {"cameras": SPEC},
+        state, SUNS)
+    assert not decisions["cameras"].connected
+
+
+def test_the_floor_reason_never_asserts_a_comparison_that_is_false():
+    """Between the two bounds the value is not below the shedding one.
+    Saying so would have an operator doubting the sensor."""
+    _, state = run(100.0, cell=3.10)
+    decision, _ = run(100.0, cell=3.20, state=state)
+    assert not decision.connected
+    assert "3.200 below" not in decision.reason
+    assert "has not cleared the 3.250 restoring bound" in decision.reason
+
+
 # -- stale readings ---------------------------------------------------------
 
 def test_a_stale_reading_holds_the_latches_and_keeps_the_schedule_running():
@@ -723,6 +802,21 @@ def test_a_minimum_off_time_holds_a_load_down():
     decision, _ = run(100.0, mono=760.0, state=state, spec=TIMED)
     assert not decision.connected
     assert "minimum off time" in decision.reason
+
+
+def test_a_timer_hold_publishes_its_own_reason_code():
+    """Without one the code describes the decision while the relay sits in
+    the opposite state. An alert matching "nothing is wrong" would see a shed
+    load, and one matching "shedding on state of charge" a powered one, and
+    only the free text would explain either."""
+    state = _shed_with_timers()
+    decision, _ = run(100.0, mono=760.0, state=state, spec=TIMED)
+    assert decision.reason_code == decide.HELD_BY_TIMER
+
+    decision, state = settle(9.0, mono=0.0, spec=TIMED,
+                             state=run(100.0, mono=0.0, spec=TIMED)[1])
+    assert decision.connected
+    assert decision.reason_code == decide.HELD_BY_TIMER
 
 
 def test_each_transition_restarts_the_clock_on_the_next_one():

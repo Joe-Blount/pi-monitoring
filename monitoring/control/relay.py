@@ -42,6 +42,16 @@ runs. That inverts the fail-safe for every load at once, and the only check
 on it is a person watching the indicator LEDs through a complete boot with
 the loads disconnected. It is in the commissioning steps for that reason.
 
+One path, not two
+-----------------
+The injected factory and the shipping one are the same call with the same
+arguments, and the dry run goes through the same ``apply``. An earlier version
+had the test double constructed differently from the real device and the dry
+run computing its own level, which left two of the three places polarity can
+invert unreachable from a test: the library's own ``active_high``, which
+inverts the claim as well as every level after it, and the branch that turns a
+level into a call.
+
 Releasing the line
 ------------------
 The whole fail-safe story rests on a dying process releasing its pins. The
@@ -63,12 +73,60 @@ ENERGIZE_TO_CONNECT = "energize_to_connect"
 POLARITIES = (ENERGIZE_TO_SHED, ENERGIZE_TO_CONNECT)
 
 #: The gpiozero backend that releases a pin when the process holding it dies.
-#: Set before gpiozero is imported, because it reads this at import time.
+#: Set before gpiozero is imported, because it reads this at import time, and
+#: set rather than defaulted: an environment that already names another one
+#: would otherwise win silently, and the one it would most likely name is the
+#: fallback that leaves a pin driven and busy when the process dies.
 PIN_FACTORY = "lgpio"
 
 
 class RelayError(RuntimeError):
     """A pin that cannot be driven."""
+
+
+def open_output(pin, initial_value=False):
+    """Claim one output pin through gpiozero.
+
+    `active_high` is stated rather than left to the library's default. It is
+    the third place polarity can invert, and the most dangerous, because it
+    inverts the state the pin is claimed in as well as every level after:
+    with it wrong, claiming the camera relay energizes it, cutting the
+    recorder, and then every later decision drives the opposite way.
+    """
+    os.environ["GPIOZERO_PIN_FACTORY"] = PIN_FACTORY
+    try:
+        from gpiozero import DigitalOutputDevice
+    except ImportError as exc:
+        raise RelayError("load control needs gpiozero: %s" % exc)
+    try:
+        return DigitalOutputDevice(pin, initial_value=initial_value,
+                                   active_high=True)
+    except Exception as exc:
+        raise RelayError("cannot drive GPIO%s: %s" % (pin, exc))
+
+
+class Recording:
+    """An output pin that remembers instead of existing.
+
+    Constructed exactly as the real one is, so a test exercises the call the
+    shipping code makes rather than a convenience signature.
+    """
+
+    def __init__(self, pin, initial_value=False, active_high=True):
+        self.pin = pin
+        self.active_high = active_high
+        self.claimed = bool(initial_value)
+        self.levels = []
+        self.closed = False
+
+    def on(self):
+        self.levels.append(True)
+
+    def off(self):
+        self.levels.append(False)
+
+    def close(self):
+        self.closed = True
 
 
 def level_for(polarity, connected):
@@ -104,32 +162,15 @@ class Relay:
                 % (pin, polarity, ", ".join(POLARITIES)))
         self.pin = pin
         self.polarity = polarity
-        self._factory = factory
+        self._factory = factory or open_output
         self._device = None
 
     def _open(self):
-        if self._device is not None:
-            return self._device
-        if self._factory is not None:
-            self._device = self._factory(self.pin)
-            return self._device
-
-        # Asked for before gpiozero is imported, because gpiozero reads it at
-        # import time and a late assignment is ignored. The sysfs fallback
-        # does not release a pin when the process dies, which is the property
-        # every fail-safe here depends on.
-        os.environ.setdefault("GPIOZERO_PIN_FACTORY", PIN_FACTORY)
-        try:
-            from gpiozero import DigitalOutputDevice
-        except ImportError as exc:
-            raise RelayError("load control needs gpiozero: %s" % exc)
-        try:
+        if self._device is None:
             # initial_value False so claiming the pin does not drive it high
             # on the way past. On a shed-to-energize load that would cut the
             # recorder for the width of the call.
-            self._device = DigitalOutputDevice(self.pin, initial_value=False)
-        except Exception as exc:
-            raise RelayError("cannot drive GPIO%s: %s" % (self.pin, exc))
+            self._device = self._factory(self.pin, initial_value=False)
         return self._device
 
     def apply(self, connected):
@@ -154,19 +195,15 @@ class Relay:
 class Pretend(Relay):
     """A relay that records instead of driving, for a dry run.
 
-    Subclasses rather than stands beside, so the polarity arithmetic under
-    test is the same code the real one uses. A separate implementation would
-    be free to agree with the tests and disagree with the hardware.
+    It swaps the device, not the logic. An earlier version overrode `apply`,
+    which left the branch turning a level into a call unreachable from a dry
+    run: a dry run on site would then have shown the right answer while the
+    real relay drove the wrong way.
     """
 
     def __init__(self, pin, polarity):
-        Relay.__init__(self, pin, polarity)
-        self.levels = []
+        Relay.__init__(self, pin, polarity, factory=Recording)
 
-    def apply(self, connected):
-        level = level_for(self.polarity, connected)
-        self.levels.append(level)
-        return level
-
-    def close(self):
-        pass
+    @property
+    def levels(self):
+        return self._device.levels if self._device is not None else []

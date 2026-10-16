@@ -544,3 +544,91 @@ def test_a_cache_that_cannot_be_written_does_not_cost_the_reading(
     written = runner.poll(node, NOW, out, io.StringIO())
     assert written == 1
     assert "value=2" in out.getvalue()
+
+
+def test_the_cache_holds_the_same_numbers_the_database_gets(tmp_path, doubles,
+                                                            cache):
+    """A node file's thresholds are chosen by somebody reading a dashboard,
+    so a controller acting on uncalibrated values would be comparing against
+    bounds picked for corrected ones.
+
+    calibration.py exists so there is one answer to where a number got
+    changed, and a second path that skipped it would make that false.
+    """
+    node = controlling_node(
+        tmp_path,
+        "  - {name: a, driver: good, mode: poll, "
+        "calibration: {value: {offset: 0.5}}}\n")
+    out = io.StringIO()
+    runner.poll(node, NOW, out, io.StringIO())
+    assert "value=2.5" in out.getvalue(), "the database should see 2.5"
+    assert cached(cache)["a"]["fields"]["value"] == 2.5, (
+        "the controller saw the uncalibrated value")
+
+
+def test_the_cache_is_calibrated_once_not_twice(tmp_path, doubles, cache):
+    """Scale and offset are not idempotent. Applying them to an already
+    corrected dict would square the scale."""
+    node = controlling_node(
+        tmp_path,
+        "  - {name: a, driver: good, mode: poll, "
+        "calibration: {value: {scale: 3}}}\n")
+    runner.poll(node, NOW, io.StringIO(), io.StringIO())
+    assert cached(cache)["a"]["fields"]["value"] == 6.0
+
+
+def test_a_cache_failure_is_said_once_rather_than_never(tmp_path, doubles,
+                                                        monkeypatch, capsys):
+    """A cache that has never worked and one that is working look identical
+    from outside. The usual cause is ownership: a hand run as root creates
+    the directory and the service can then never write it.
+
+    Once per process rather than once per device per interval, which would
+    bury the readings it is printed beside. It goes to the process's own
+    error stream rather than the collection's, because it is a fact about
+    the machine rather than about this reading.
+    """
+    monkeypatch.setattr(runner, "_CACHE_COMPLAINED", False)
+    monkeypatch.setattr(control_files, "READINGS_DIR", "/proc/nowhere/at/all")
+    node = controlling_node(
+        tmp_path, "  - {name: a, driver: good, mode: poll}\n"
+                  "  - {name: b, driver: good, mode: poll}\n")
+    runner.poll(node, NOW, io.StringIO(), io.StringIO())
+    assert capsys.readouterr().err.count(
+        "cannot write the reading cache") == 1
+
+
+def test_the_streaming_path_also_feeds_the_cache(tmp_path, stream_doubles,
+                                                 cache):
+    """The charge controller downstairs is the resident device, so this is
+    the path that will carry a real battery voltage to the controller."""
+    node = controlling_node(
+        tmp_path, "  - {name: a, driver: streamer, mode: resident}\n")
+    runner.stream_device(node, node.find("a"), io.StringIO(), io.StringIO(),
+                         max_readings=2, clock=frozen_clock)
+    assert "a" in cached(cache)
+
+
+def test_a_streamed_point_goes_out_before_the_cache_is_written(
+        tmp_path, stream_doubles, cache):
+    """The point reaching the database is the job. A slow cache write must
+    not sit between the reading and the line that carries it."""
+    order = []
+
+    class Watching(io.StringIO):
+        def flush(self):
+            order.append("point")
+
+    node = controlling_node(
+        tmp_path, "  - {name: a, driver: streamer, mode: resident}\n")
+    real = control_files.publish_reading
+
+    def watched(*args, **kwargs):
+        order.append("cache")
+        return real(*args, **kwargs)
+
+    import unittest.mock
+    with unittest.mock.patch.object(control_files, "publish_reading", watched):
+        runner.stream_device(node, node.find("a"), Watching(), io.StringIO(),
+                             max_readings=1, clock=frozen_clock)
+    assert order[:2] == ["point", "cache"], order

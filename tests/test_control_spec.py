@@ -11,13 +11,15 @@ from monitoring.control import spec
 
 
 class FakeDevice:
-    def __init__(self, name):
+    def __init__(self, name, enabled=True):
         self.name = name
+        self.enabled = enabled
 
 
 class FakeNode:
-    def __init__(self, loads, devices=("bms", "mppt")):
+    def __init__(self, loads, devices=("bms", "mppt"), disabled=()):
         self.devices = [FakeDevice(name) for name in devices]
+        self.devices += [FakeDevice(name, enabled=False) for name in disabled]
         self.control = {"loads": loads}
 
 
@@ -342,6 +344,117 @@ def test_a_load_type_nothing_drives_is_refused():
 
 def test_a_disabled_load_is_not_returned():
     assert parse(enabled=False) is None
+
+
+def test_a_ladder_naming_a_disabled_device_is_refused():
+    """A disabled device never writes the cache, so no tier would latch and
+    the controller would run and do nothing, which is the silent failure
+    this module is written against."""
+    node = FakeNode({"cameras": dict(CAMERAS, shed_ladder=dict(
+        LADDER, source={"device": "shunt",
+                        "field": "state_of_charge_pct"}))},
+        disabled=("shunt",))
+    with pytest.raises(spec.SpecError) as raised:
+        spec.load_control(node)
+    assert "declared and disabled" in str(raised.value)
+
+
+@pytest.mark.parametrize("value", ["false", "no", 0, 1, None])
+def test_enabled_must_be_a_yes_or_a_no(value):
+    """The rule the device loader already applies. A loose test is the wrong
+    way round for a setting whose purpose is to stop something: the string
+    "false" is truthy and would read as yes."""
+    assert "true or false" in refused(enabled=value)
+
+
+@pytest.mark.parametrize("key", ["readback", "on_stale_data"])
+def test_a_key_nothing_reads_yet_is_refused(key):
+    """Both are specified in the node files and nothing acts on either. A
+    key accepted and unread sits in the file looking like it is in force,
+    which is the exact failure this module exists to prevent."""
+    assert "unknown key" in refused(**{key: "whatever"})
+
+
+def test_an_unknown_key_on_the_control_block_itself_is_refused():
+    """These belong to the loop rather than to a load, and a misspelled
+    loop_interval would silently leave the default in place."""
+    node = FakeNode({"cameras": CAMERAS})
+    node.control["loop_intervall"] = "30s"
+    with pytest.raises(spec.SpecError) as raised:
+        spec.load_control(node)
+    assert "unknown key" in str(raised.value)
+
+
+def test_a_restore_dwell_is_required_rather_than_defaulted():
+    """Entry needs consecutive readings so one glitched sample cannot latch
+    a tier. Release with no dwell lets one glitched sample clear every tier
+    at once, and the minimum run time then extends the mistake. A file that
+    wants none can say zero and mean it."""
+    ladder = dict(LADDER)
+    del ladder["restore_dwell"]
+    assert "needs restore_dwell" in refused(shed_ladder=ladder)
+    assert with_ladder(restore_dwell=0)["shed_ladder"]["restore_dwell"] == 0.0
+
+
+@pytest.mark.parametrize("value", ["0s", "-5m"])
+def test_a_staleness_limit_must_be_positive(value):
+    """Zero or negative makes every reading stale forever, so nothing ever
+    latches and nothing is ever published as a reason."""
+    assert refused(shed_ladder=dict(LADDER, stale_after=value))
+
+
+def test_a_negative_minimum_time_is_refused():
+    assert "cannot be negative" in refused(min_off="-30m")
+
+
+@pytest.mark.parametrize("value", ["12:75", "23:60", "25:00", "-1:00"])
+def test_each_part_of_a_time_is_range_checked(value):
+    """Checking only the total accepts 12:75 as 13:15, which is a typo read
+    as a time."""
+    broken = dict(LADDER, tiers=[{"below_pct": 50,
+                                  "schedule": {"type": "clock",
+                                               "on_from": value,
+                                               "on_to": "22:00"}}])
+    assert refused(shed_ladder=broken)
+
+
+def test_a_solar_window_that_ends_before_it_starts_is_refused():
+    """Measured from the same event, so the comparison is exact. Such a
+    window is never on, and the tier reads as scheduled while behaving as
+    never."""
+    broken = dict(LADDER, tiers=[{"below_pct": 50, "schedule": {
+        "type": "solar",
+        "on_windows": [{"from": ["sunrise", "2h"],
+                        "to": ["sunrise", "-1h"]}]}}])
+    assert "never be on" in refused(shed_ladder=broken)
+
+
+@pytest.mark.parametrize("value", [0, -5, 101, 500])
+def test_below_pct_must_be_a_percentage(value):
+    broken = dict(LADDER, tiers=[{"below_pct": value,
+                                  "schedule": {"type": "never"}}])
+    assert "must be a percentage" in refused(shed_ladder=broken)
+
+
+def test_a_floor_present_but_empty_is_refused():
+    """The likeliest cause is a half-deleted floor, and silently dropping
+    the only rule with nothing above it is the wrong way to resolve that."""
+    assert refused(shed_ladder=dict(LADDER, floor={}))
+
+
+def test_a_disabled_deferred_load_keeps_its_specification():
+    """The whole point of deferring rather than deleting. Checking keys
+    before the type would refuse the irrigation block for declaring an
+    inverter and a pump, and the only accepted form would be two lines,
+    which deletes the work."""
+    assert spec.load_spec("irrigation", {
+        "type": "sequenced_ac",
+        "enabled": False,
+        "inverter": {"control_pin": 25, "polarity": "energize_to_connect"},
+        "pump": {"control_pin": 22, "polarity": "energize_to_connect"},
+        "guard": {"absolute_max_run": "60m"},
+        "limits": {"cooldown": "2h"},
+    }, {"bms"}) is None
 
 
 # -- the whole block --------------------------------------------------------
