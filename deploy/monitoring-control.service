@@ -1,0 +1,118 @@
+# The load controller: reads what the collectors publish, decides which
+# loads to shed, and drives the relays. See monitoring/control/loop.py for
+# the decision itself; this unit only says how and when the loop runs.
+
+[Unit]
+Description=Pi monitoring load controller
+
+# /run/monitoring is created by the tmpfiles entry in
+# deploy/tmpfiles-monitoring.conf, not by this unit -- see the note beside
+# RuntimeDirectory below for why. Both lines here matter and do different
+# jobs. After= gets the ordering right on a normal boot, where
+# systemd-tmpfiles-setup.service already runs ahead of other services as
+# part of sysinit.target; naming it explicitly ties that ordering to the one
+# unit it actually depends on, rather than to the general early-boot
+# position every service gets by default, which a later change to this
+# unit's own target could quietly lose.
+#
+# Deliberately not ConditionPathExists=/run/monitoring. A condition that
+# fails does not fail the unit: systemd skips it, logs one line, and leaves
+# it inactive with no error and no restart, because Restart= does not apply
+# to a unit that was never started. So the directory going missing would
+# produce a controller that is silently not running, on a machine nobody is
+# standing next to, with every load sitting at its fail-safe and nothing
+# managing the battery. That is the one outcome this project refuses: a
+# silence that reads as a decision somebody made.
+#
+# Nothing is lost by leaving it out, because ReadWritePaths= below already
+# requires the directory to exist. A missing one fails the unit loudly, the
+# restart below retries it, and the failure is in `systemctl status` where
+# somebody will see it.
+After=systemd-tmpfiles-setup.service
+
+# The controller reads what the collectors publish into
+# /run/monitoring/readings, so it belongs after telegraf, not before it, and
+# an ordinary boot should bring telegraf up alongside it. Wants=, not
+# Requires=: a dead telegraf still leaves this service something sane to do.
+# No readings means every reading comes back at an infinite age, the loop
+# treats that as stale and acts on no information, which is exactly the
+# fail-safe state every load already sits in. A hard dependency would mean a
+# telegraf outage also takes down the one thing watching the battery.
+After=telegraf.service
+Wants=telegraf.service
+
+[Service]
+# Not root. install.sh already puts telegraf in the gpio group and pins the
+# lgpio pin factory for it, so running the controller as telegraf reuses
+# that work instead of provisioning a second user and then negotiating which
+# user owns /run/monitoring and /var/lib/monitoring between it and the
+# collectors.
+User=telegraf
+
+ExecStart=/opt/monitoring/bin/control run --node /etc/monitoring/node.yaml
+
+# Belt and braces with what monitoring/control/relay.py already sets before
+# it imports gpiozero. This line changes nothing while that code is doing
+# its job; what it buys is a second, independent place the setting comes
+# from. The sysfs backend does not release a pin when the process holding it
+# dies, so every restart would find the pin busy and the controller would
+# never recover -- and the fail-safe story for every load, that a dead
+# controller leaves it exactly where its wiring decides, rests on that
+# release happening. Pinning it here as well means a future change to the
+# module's import order cannot silently let the environment fall through to
+# that backend instead.
+Environment=GPIOZERO_PIN_FACTORY=lgpio
+
+# The loop releases every pin it holds when it dies -- that is what the
+# lgpio backend is for -- so every load snaps back to its wired fail-safe
+# state the instant this stops, however it stops. A supervisor putting the
+# controller back is strictly better than leaving it down: the loads are
+# safe either way, but a load stuck shed for longer than it needs to be is
+# still a cost, just a quieter one. Ten seconds keeps a crash loop from
+# hammering the relay: a load wired to its normally closed contact
+# re-energizes on every restart attempt, and a recorder or a pump cycling
+# once a second is its own kind of damage.
+Restart=always
+RestartSec=10
+
+# Deliberately not RuntimeDirectory=monitoring. That option is systemd
+# creating and owning /run/monitoring: it deletes the directory the moment
+# this unit stops, restarts or fails, which would also delete
+# /run/monitoring/readings -- the collectors' cache, written by a process
+# this unit does not control and has no reason to take down with it.
+# RuntimeDirectory= looks like the obvious choice for exactly this kind of
+# path, which is why that is spelled out here rather than left for someone
+# to re-discover by watching the collectors' readings vanish on a restart.
+# The tmpfiles entry in deploy/tmpfiles-monitoring.conf creates the same
+# directory and lives for the life of the boot instead of the life of this
+# unit, which is the property actually wanted.
+
+# Hardening kept to what this service's own needs justify, not a pasted-in
+# block. Two options a boilerplate block would likely include are left out
+# on purpose: PrivateDevices would hide the real /dev, GPIO character
+# device included, behind a private one with nothing in it, which is the
+# one thing this service exists to touch; DynamicUser would run it as a
+# freshly allocated user with no group memberships at all, undoing the
+# gpio, i2c, dialout and bluetooth memberships install.sh grants telegraf
+# specifically so this controller and the collectors can share them.
+NoNewPrivileges=true
+ProtectHome=true
+
+# Everything except /proc, /sys and /dev becomes read-only, and
+# ReadWritePaths reopens exactly the two directories files.py names: the
+# tmpfs state and readings under /run/monitoring, and the switches file and
+# clock high-water mark under /var/lib/monitoring. Nothing else this service
+# does needs to write anywhere, so a bug that tried would meet a read-only
+# filesystem instead of succeeding quietly.
+#
+# Both paths must also exist, which systemd enforces at start. That is what
+# makes a missing /run/monitoring a loud failure rather than needing a
+# condition to catch it, and it is why dropping either path from this line
+# is a worse change than it looks: losing the second one leaves an override
+# unwritable and the clock's high-water mark unable to advance, which is the
+# bound that catches a reset clock.
+ProtectSystem=strict
+ReadWritePaths=/run/monitoring /var/lib/monitoring
+
+[Install]
+WantedBy=multi-user.target
