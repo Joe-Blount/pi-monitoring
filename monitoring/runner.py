@@ -15,6 +15,7 @@ import time
 
 from . import calibration, lineproto
 from . import drivers as driver_registry
+from .control import files as control_files
 from .drivers.base import DriverError
 
 
@@ -88,6 +89,32 @@ def disabled_point(node, device, now_ns):
     return lineproto.line(node.measurement, device.tags, {"enabled": 0.0}, now_ns)
 
 
+def _cache(node, device, fields):
+    """Hand a good reading to load control, if this node has any.
+
+    Only a successful read is published. A failed or disabled one leaves the
+    previous record alone to age out, which is the whole staleness mechanism:
+    refreshing the stamp without refreshing the value would make a dead
+    sensor look current forever and there would be nothing for `stale_after`
+    to measure.
+
+    Only on a node that declares a control block, so a collector on a machine
+    that controls nothing writes nothing. Declared rather than enabled,
+    because a dry run before switching control on needs the cache populated
+    to have anything to decide about.
+
+    A cache that cannot be written must never cost a reading. The point
+    reaching the database is the job; the cache is a convenience for a
+    process on the same machine, and it is published again in a few seconds.
+    """
+    if not node.control:
+        return
+    try:
+        control_files.publish_reading(fields, device.name)
+    except Exception:
+        pass
+
+
 def read_device(node, device, now_ns=None):
     """Read one device. Never raises for a device fault."""
     now_ns = _now_ns() if now_ns is None else now_ns
@@ -105,6 +132,7 @@ def read_device(node, device, now_ns=None):
             # healthy and carrying no measurement at all. A read that produced
             # no value is a failed read.
             raise DriverError("the device returned no usable values")
+        _cache(node, device, fields)
         return Result(device, lines=[point(node, device, fields, now_ns)])
     except DriverError as exc:
         return Result(device, error=str(exc))
@@ -227,6 +255,7 @@ def stream_device(node, device, out=None, err=None, max_readings=None,
         driver = build_driver(device)
         emitted = 0
         for fields in driver.stream():
+            _cache(node, device, fields)
             out.write(point(node, device, fields, int(clock() * 1e9)) + "\n")
             out.flush()
             emitted += 1

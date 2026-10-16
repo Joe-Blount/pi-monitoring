@@ -56,6 +56,12 @@ SWITCHES = os.path.join(PERSIST_DIR, "switches.json")
 HIGH_WATER = os.path.join(PERSIST_DIR, "clock-high-water.json")
 
 
+#: Every path below is resolved when the function is called, never bound as a
+#: default argument. A default is evaluated once, when the module is imported,
+#: so a caller or a test that redirects one of the constants above would be
+#: silently ignored and would read and write the real paths instead. That trap
+#: has already cost this project once, in the driver base class, which is why
+#: it is written down here rather than discovered again.
 def boot_id():
     """An identifier for this boot, or None where the kernel does not say.
 
@@ -120,7 +126,7 @@ def write_json(path, data):
 
 # -- readings ---------------------------------------------------------------
 
-def publish_reading(fields, device, directory=READINGS_DIR, now=None,
+def publish_reading(fields, device, directory=None, now=None,
                     boot=None):
     """Record what a collector just read, for the control loop to consume.
 
@@ -132,6 +138,7 @@ def publish_reading(fields, device, directory=READINGS_DIR, now=None,
     boot it was stamped in, and that is the thing most worth being able to
     lie about in a test.
     """
+    directory = READINGS_DIR if directory is None else directory
     write_json(os.path.join(directory, "%s.json" % device), {
         "device": device,
         "fields": {name: value for name, value in fields.items()
@@ -142,7 +149,7 @@ def publish_reading(fields, device, directory=READINGS_DIR, now=None,
     })
 
 
-def read_readings(directory=READINGS_DIR, now=None, this_boot=None):
+def read_readings(directory=None, now=None, this_boot=None):
     """Every device reading currently published, with its age in seconds.
 
     A reading from another boot, or one with no boot identity, comes back with
@@ -150,6 +157,7 @@ def read_readings(directory=READINGS_DIR, now=None, this_boot=None):
     stale, which is honest: the values may be real but nothing here can say
     how old they are.
     """
+    directory = READINGS_DIR if directory is None else directory
     now = monotonic() if now is None else now
     this_boot = boot_id() if this_boot is None else this_boot
     out = {}
@@ -178,14 +186,14 @@ def read_readings(directory=READINGS_DIR, now=None, this_boot=None):
 
 # -- loop state -------------------------------------------------------------
 
-def read_state(path=CONTROL_STATE, this_boot=None):
+def read_state(path=None, this_boot=None):
     """The loop's own state, with anything from another boot discarded.
 
     Returns an empty mapping rather than None, because a missing state file
     and a foreign one both mean the same thing to the caller: start from
     nothing, take no action until a reading arrives.
     """
-    record = read_json(path)
+    record = read_json(CONTROL_STATE if path is None else path)
     if not record:
         return {}
     this_boot = boot_id() if this_boot is None else this_boot
@@ -197,14 +205,15 @@ def read_state(path=CONTROL_STATE, this_boot=None):
     return record.get("loads") or {}
 
 
-def write_state(loads, path=CONTROL_STATE, boot=None):
-    write_json(path, {"boot_id": boot_id() if boot is None else boot,
-                      "loads": loads})
+def write_state(loads, path=None, boot=None):
+    write_json(CONTROL_STATE if path is None else path,
+               {"boot_id": boot_id() if boot is None else boot,
+                "loads": loads})
 
 
 # -- the clock's high-water mark --------------------------------------------
 
-def read_high_water(path=HIGH_WATER):
+def read_high_water(path=None):
     """The latest wall time this node has ever trusted, or None.
 
     On the card rather than in tmpfs, and this is the whole point of it. The
@@ -214,14 +223,14 @@ def read_high_water(path=HIGH_WATER):
     answer, have nothing to be compared against, and be trusted on its first
     boot with a wrong date.
     """
-    record = read_json(path) or {}
+    record = read_json(HIGH_WATER if path is None else path) or {}
     value = record.get("epoch")
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value)
 
 
-def note_high_water(epoch, path=HIGH_WATER):
+def note_high_water(epoch, path=None):
     """Record a trusted wall time, if it is later than the one already held.
 
     Only ever advanced, and only from a clock that was trusted when it was
@@ -229,6 +238,7 @@ def note_high_water(epoch, path=HIGH_WATER):
     reading poison the mark permanently, after which no real clock could ever
     clear it.
     """
+    path = HIGH_WATER if path is None else path
     held = read_high_water(path)
     if held is not None and epoch <= held:
         return held
@@ -238,14 +248,14 @@ def note_high_water(epoch, path=HIGH_WATER):
 
 # -- switches ---------------------------------------------------------------
 
-def read_switches(path=SWITCHES):
+def read_switches(path=None):
     """The operator's overrides and the shedding enable.
 
     An unreadable or damaged file reads as no override and shedding enabled,
     which is the state the system is in when nobody has touched it. Failing
     closed here would let a corrupt file shed loads nobody asked to shed.
     """
-    parsed = read_json(path)
+    parsed = read_json(SWITCHES if path is None else path)
     record = parsed or {}
     loads = record.get("loads")
     return {
@@ -255,8 +265,8 @@ def read_switches(path=SWITCHES):
     }
 
 
-def write_switches(switches, path=SWITCHES):
-    write_json(path, {
+def write_switches(switches, path=None):
+    write_json(SWITCHES if path is None else path, {
         "shedding_enabled": bool(switches.get("shedding_enabled", True)),
         "loads": switches.get("loads") or {},
     })

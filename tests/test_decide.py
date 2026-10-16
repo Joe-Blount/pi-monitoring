@@ -19,7 +19,17 @@ ZONE = zoneinfo.ZoneInfo("America/Chicago")
 DAY = datetime.date(2026, 6, 21)
 SUNRISE = datetime.datetime(2026, 6, 21, 6, 10, tzinfo=ZONE)
 SUNSET = datetime.datetime(2026, 6, 21, 20, 53, tzinfo=ZONE)
-SUNS = {"sunrise": SUNRISE, "sunset": SUNSET}
+
+#: Yesterday, today and tomorrow, because a window measured from an event can
+#: reach across midnight and the hour after midnight belongs to a window
+#: anchored on the day before. Times are within a minute either side at this
+#: latitude in June, which is close enough for a window measured in hours.
+DAY_BEFORE = datetime.timedelta(days=1)
+SUNS = [
+    {"sunrise": SUNRISE - DAY_BEFORE, "sunset": SUNSET - DAY_BEFORE},
+    {"sunrise": SUNRISE, "sunset": SUNSET},
+    {"sunrise": SUNRISE + DAY_BEFORE, "sunset": SUNSET + DAY_BEFORE},
+]
 
 HOUR = datetime.timedelta(hours=1)
 
@@ -340,6 +350,32 @@ def test_a_clock_window_may_wrap_midnight(hour, connected):
     assert decision.connected is connected
 
 
+@pytest.mark.parametrize("hour,minute,connected", [
+    (20, 0, True),      # inside, before sunset
+    (23, 0, True),      # inside, after sunset
+    (0, 30, True),      # inside, and anchored on yesterday's sunset
+    (1, 0, False),      # past the end at 00:53
+    (12, 0, False),
+])
+def test_a_solar_window_may_reach_past_midnight(hour, minute, connected):
+    """A window is an offset from an event, so a long enough one belongs
+    partly to the next calendar day.
+
+    The shipped offset is one hour after sunset, which at this latitude never
+    crosses midnight, so nothing else here reaches this. Checking only the
+    current day's events clips the tail silently, and the clipped hour is the
+    one after midnight.
+    """
+    reaching = dict(LADDER)
+    reaching["tiers"] = [{"below_pct": 25.0, "schedule": {
+        "type": "solar",
+        "on_windows": [{"from": ["sunset", -HOUR], "to": ["sunset", 4 * HOUR]}],
+    }}]
+    decision, _ = settle(24.0, now=at(hour, minute),
+                         spec=dict(SPEC, shed_ladder=reaching))
+    assert decision.connected is connected
+
+
 def test_the_ten_tier_never_runs():
     for hour in (0, 6, 7, 12, 19, 20, 23):
         decision, _ = settle(9.0, now=at(hour))
@@ -369,6 +405,60 @@ def test_every_latched_tier_must_permit_it_not_just_the_deepest():
     assert not decision.connected, (
         "the deeper tier's window was honoured past the shallower tier's "
         "permitted period, which is more power at a lower state of charge")
+
+
+def test_every_boundary_is_tested_on_the_boundary():
+    """Either side of a threshold cannot tell < from <=.
+
+    Each case here sits exactly on a comparison, which is the only place an
+    inclusive and an exclusive version of it disagree. Grouped in one test
+    because they are one idea, and each assertion names the comparison it
+    pins.
+    """
+    # A clock window includes its opening minute and excludes its closing one,
+    # so the period is seventeen hours rather than seventeen hours and a
+    # minute, and two adjacent windows cannot both own 22:00.
+    decision, _ = settle(45.0, now=at(5, 0))
+    assert decision.connected, "05:00 is inside the window that opens at 05:00"
+    decision, _ = settle(45.0, now=at(22, 0))
+    assert not decision.connected, "22:00 is outside the window that closes there"
+
+    # A solar window, the same way round.
+    decision, _ = settle(24.0, now=SUNRISE - HOUR)
+    assert decision.connected, "the window opens at sunrise minus an hour"
+    decision, _ = settle(24.0, now=SUNRISE + 2 * HOUR)
+    assert not decision.connected, "and closes at sunrise plus two"
+
+    # The floor sheds strictly below, so a cell resting exactly on the
+    # shedding bound is not yet a fault.
+    decision, _ = run(100.0, cell=3.15)
+    assert decision.connected, "3.15 is not below 3.15"
+
+    # And releases strictly above, so resting exactly on the restoring bound
+    # still holds.
+    _, state = run(100.0, cell=3.10)
+    decision, _ = run(100.0, cell=3.25, state=state)
+    assert not decision.connected, "3.25 is not above 3.25"
+
+    # An override expires at its expiry rather than after it.
+    expiring = {"shedding_enabled": True,
+                "loads": {"cameras": {"force": "on",
+                                      "expires_epoch": at(12).timestamp()}}}
+    decision, _ = settle(9.0, now=at(12), switches=expiring)
+    assert not decision.connected, "an override applied at its own expiry"
+
+    # A reading exactly at the staleness limit is still usable: the limit is
+    # how old a reading may be, not how old it may not be.
+    readings = {"bms": {"fields": {"state_of_charge_pct": 45.0},
+                        "age_seconds": LADDER["stale_after"]}}
+    state = {}
+    for step in range(LADDER["enter_after_readings"]):
+        decisions, state = decide.decide(
+            at(23), float(step), True, readings,
+            {"shedding_enabled": True, "loads": {}}, {"cameras": SPEC},
+            state, SUNS)
+    assert not decisions["cameras"].connected, (
+        "a reading exactly at the staleness limit was discarded")
 
 
 # -- the floor --------------------------------------------------------------

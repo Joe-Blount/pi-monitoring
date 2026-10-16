@@ -4,6 +4,7 @@ import pathlib
 import pytest
 
 from monitoring import config, runner
+from monitoring.control import files as control_files
 from monitoring.drivers import REGISTRY
 from monitoring.drivers.base import Driver, DriverError
 
@@ -460,3 +461,86 @@ def test_the_collector_search_ignores_an_unrelated_process(tmp_path, doubles):
     # under test, so the search must come back empty rather than matching the
     # test runner's own command line.
     assert runner.collector_holding(node.find("mppt")) is None
+
+
+# -- handing readings to load control ---------------------------------------
+
+def controlling_node(tmp_path, body, control="""
+control:
+  enabled: false
+  loads:
+    cameras: {type: dc_branch, control_pin: 23}
+"""):
+    path = tmp_path / "node.yaml"
+    path.write_text("site: s\nnode: n\nmeasurement: m\ndevices:\n" + body
+                    + control)
+    return config.load(path, set(REGISTRY))
+
+
+@pytest.fixture
+def cache(tmp_path, monkeypatch):
+    """Point the reading cache somewhere a test can read it."""
+    directory = tmp_path / "readings"
+    monkeypatch.setattr(control_files, "READINGS_DIR", str(directory))
+    return directory
+
+
+def cached(directory):
+    if not directory.is_dir():
+        return {}
+    return control_files.read_readings(
+        str(directory), now=0.0, this_boot=control_files.boot_id())
+
+
+def test_a_good_reading_is_handed_to_load_control(tmp_path, doubles, cache):
+    node = controlling_node(tmp_path, "  - {name: a, driver: good, mode: poll}\n")
+    runner.poll(node, NOW, io.StringIO(), io.StringIO())
+    assert "a" in cached(cache)
+
+
+def test_a_failed_read_does_not_refresh_the_cache(tmp_path, doubles, cache):
+    """The dangerous direction, and the one that makes staleness meaningless.
+
+    Refreshing the stamp without refreshing the value would leave a dead
+    sensor looking current forever, and the ladder would go on trusting a
+    number from before the device died. The old record is left to age out,
+    which is what `stale_after` is measuring.
+    """
+    node = controlling_node(
+        tmp_path, "  - {name: a, driver: good, mode: poll}\n")
+    runner.poll(node, NOW, io.StringIO(), io.StringIO())
+    record = cache / "a.json"
+    before = record.read_text()
+
+    broken = controlling_node(
+        tmp_path, "  - {name: a, driver: bad, mode: poll}\n")
+    runner.poll(broken, NOW, io.StringIO(), io.StringIO())
+    assert record.read_text() == before, (
+        "a failed read rewrote the cache record")
+
+
+def test_a_disabled_device_does_not_reach_the_cache(tmp_path, doubles, cache):
+    node = controlling_node(
+        tmp_path, "  - {name: a, driver: good, mode: poll, enabled: false}\n")
+    runner.poll(node, NOW, io.StringIO(), io.StringIO())
+    assert cached(cache) == {}
+
+
+def test_a_node_that_controls_nothing_writes_no_cache(tmp_path, doubles, cache):
+    """A collector on a machine with no loads should not be creating runtime
+    directories for a process that will never run there."""
+    node = node_with(tmp_path, "  - {name: a, driver: good, mode: poll}\n")
+    runner.poll(node, NOW, io.StringIO(), io.StringIO())
+    assert cached(cache) == {}
+
+
+def test_a_cache_that_cannot_be_written_does_not_cost_the_reading(
+        tmp_path, doubles, monkeypatch):
+    """The point reaching the database is the job. The cache is a convenience
+    for a process on the same machine and it is published again in seconds."""
+    monkeypatch.setattr(control_files, "READINGS_DIR", "/proc/nowhere/at/all")
+    node = controlling_node(tmp_path, "  - {name: a, driver: good, mode: poll}\n")
+    out = io.StringIO()
+    written = runner.poll(node, NOW, out, io.StringIO())
+    assert written == 1
+    assert "value=2" in out.getvalue()

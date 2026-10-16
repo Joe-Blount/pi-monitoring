@@ -213,11 +213,18 @@ def _permits(tier, now, suns, clock_trusted):
         # ends of the day rather than the gap between them.
         return minute >= start or minute < end
     if kind == "solar":
-        for window in schedule["on_windows"]:
-            begin = suns[window["from"][0]] + window["from"][1]
-            finish = suns[window["to"][0]] + window["to"][1]
-            if begin <= now < finish:
-                return True
+        # Every window is tried against each day's events, not just today's.
+        # A window is an offset from an event, so one reaching far enough
+        # past sunset belongs partly to the next calendar day, and the hour
+        # after midnight is inside a window anchored on yesterday. Checking
+        # today alone silently clips that tail, and the shipped offset of one
+        # hour is only one edit away from reaching it.
+        for day in suns:
+            for window in schedule["on_windows"]:
+                begin = day[window["from"][0]] + window["from"][1]
+                finish = day[window["to"][0]] + window["to"][1]
+                if begin <= now < finish:
+                    return True
         return False
     raise AssertionError("unknown schedule type %r" % kind)
 
@@ -406,6 +413,10 @@ def decide(local_now, mono_now, clock_trusted, readings, switches,
     `local_now` is a timezone-aware datetime. The schedules compare against
     it, and an override's expiry comes from its own timestamp, so there is one
     source for both and no way to pass a pair that disagree.
+
+    `suns` is a sequence of per-day event mappings covering the day before,
+    the day itself and the day after, because a solar window can reach across
+    midnight in either direction.
 
     `mono_now` drives every age and every timer, because the wall clock steps
     by hours the first time it synchronises after a restored time, and every
