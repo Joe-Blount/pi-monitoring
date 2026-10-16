@@ -214,6 +214,26 @@ install -d -m 0755 /var/lib/monitoring
 chgrp telegraf /var/lib/monitoring 2>/dev/null || true
 chmod g+w /var/lib/monitoring 2>/dev/null || true
 
+echo "==> where this machine is"
+# A solar shed window needs a latitude, a longitude and a timezone. They are
+# not in the node file on purpose: node files are committed and the
+# repository is public, so coordinates in one would publish where the owner
+# lives. See monitoring/control/location.py.
+#
+# A template is written, never values. Guessing a location produces a
+# schedule that is wrong in a way nothing downstream can detect, which shows
+# up months later as cameras keeping hours nobody asked for. An existing file
+# is left exactly as it is, because this script is run again on every update
+# and overwriting it would undo the one thing a person had to type.
+if [[ -e /etc/monitoring/location.yaml ]]; then
+    echo "    /etc/monitoring/location.yaml exists, left alone"
+elif [[ -f "$REPO/location.yaml.example" ]]; then
+    install -m 0644 "$REPO/location.yaml.example" /etc/monitoring/location.yaml
+    echo "    wrote a TEMPLATE to /etc/monitoring/location.yaml"
+    echo "    Edit it before enabling load control: the coordinates in it are"
+    echo "    a nearby town, not this machine."
+fi
+
 echo "==> node file"
 ln -sfn "$NODE_FILE" /etc/monitoring/node.yaml
 echo "    /etc/monitoring/node.yaml -> $NODE_FILE"
@@ -375,6 +395,75 @@ if [[ "$check_status" != "0" ]]; then
         echo "    some devices failed. Continuing: this is a warning, because a"
         echo "    dead sensor must not block an update at a site nobody can reach."
     fi
+fi
+
+echo "==> load controller"
+# Installed on every node, started only where the node file asks for it. The
+# files cost nothing idle, and having them already in place is what makes
+# enabling control later a one line edit rather than another visit.
+#
+# The unit is installed before the decision about starting it, so that a node
+# which turns control on tomorrow needs no deploy of its own.
+if [[ -f "$REPO/deploy/monitoring-control.service" ]]; then
+    install -m 0644 "$REPO/deploy/monitoring-control.service" \
+        /etc/systemd/system/monitoring-control.service
+    install -d -m 0755 /etc/tmpfiles.d
+    install -m 0644 "$REPO/deploy/tmpfiles-monitoring.conf" \
+        /etc/tmpfiles.d/monitoring.conf
+    # Applied now rather than at the next boot. The unit's writable paths
+    # must exist before it starts, and this script may be the thing starting
+    # it a few lines below.
+    systemd-tmpfiles --create /etc/tmpfiles.d/monitoring.conf || true
+    systemctl daemon-reload
+
+    # Whether this node runs control at all comes from the node file, read
+    # with the same loader the controller uses rather than by grepping for a
+    # line: a commented-out block must not count, and neither must the word
+    # appearing in a comment.
+    # Read with the loader the controller itself uses, the same way the
+    # Bluetooth check above does and for the same reason: matching the text
+    # counts a commented-out block, and the word appears in comments.
+    CONTROL_WANTED=$(
+        cd "$REPO" && python3 - "$NODE_FILE" <<'WANTS' 2>/dev/null
+import sys
+try:
+    from monitoring import config, drivers
+    node = config.load(sys.argv[1], drivers.names())
+    print("yes" if node.control.get("enabled") else "no")
+except Exception:
+    print("unknown")
+WANTS
+    )
+    CONTROL_WANTED="${CONTROL_WANTED:-unknown}"
+
+    case "$CONTROL_WANTED" in
+    yes)
+        systemctl enable monitoring-control >/dev/null 2>&1 || true
+        systemctl restart monitoring-control
+        sleep 2
+        if systemctl is-active --quiet monitoring-control; then
+            echo "    monitoring-control is running"
+        else
+            # Not fatal. A controller that will not start must not block a
+            # software update on a machine nobody can reach, and every load
+            # is sitting at its wired fail-safe while it is down.
+            echo "    monitoring-control did NOT start. Loads are at their" >&2
+            echo "    fail-safe. Check: journalctl -u monitoring-control -n 30" >&2
+        fi
+        ;;
+    no)
+        # Stopped as well as left disabled. A node whose control block was
+        # switched off while the service was running would otherwise keep
+        # driving relays from the block it started with.
+        systemctl disable monitoring-control >/dev/null 2>&1 || true
+        systemctl stop monitoring-control >/dev/null 2>&1 || true
+        echo "    installed, not started: this node file has control disabled"
+        ;;
+    *)
+        echo "    installed, not started: could not read the node file to" >&2
+        echo "    tell whether this node runs control" >&2
+        ;;
+    esac
 fi
 
 echo "==> restarting telegraf"

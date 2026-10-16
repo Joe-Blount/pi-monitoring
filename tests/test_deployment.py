@@ -490,3 +490,91 @@ def test_the_readme_does_not_describe_drivers_that_are_gone():
     unknown = _described_drivers() - drivers.names()
     assert not unknown, (
         "the README describes drivers that do not exist: %s" % sorted(unknown))
+
+
+# -- installing the controller ----------------------------------------------
+
+def test_the_install_script_installs_the_unit_and_the_tmpfiles_entry():
+    """Installed on every node, started only where the node file asks. The
+    files cost nothing idle, and having them in place is what makes enabling
+    control later an edit rather than another visit."""
+    assert "monitoring-control.service" in INSTALL_CODE
+    assert "/etc/systemd/system/monitoring-control.service" in INSTALL_CODE
+    assert "tmpfiles-monitoring.conf" in INSTALL_CODE
+    assert "/etc/tmpfiles.d/" in INSTALL_CODE
+
+
+def test_the_install_script_creates_the_runtime_directories_immediately():
+    """The unit's writable paths must exist before it starts, and this
+    script may be the thing starting it moments later. Waiting for the next
+    boot would mean the first install never brings the controller up."""
+    assert "systemd-tmpfiles --create" in INSTALL_CODE
+
+
+def test_the_install_script_reloads_systemd_after_writing_a_unit():
+    """A unit file written and not reloaded is a unit systemd does not know
+    about, and the start a few lines later fails with a message about the
+    name being wrong."""
+    unit = INSTALL_CODE.index("monitoring-control.service")
+    reload_after = INSTALL_CODE.index("systemctl daemon-reload", unit)
+    start = INSTALL_CODE.index("systemctl restart monitoring-control")
+    assert reload_after < start, (
+        "the unit is started before systemd has been told it exists")
+
+
+def test_the_install_script_asks_the_node_file_whether_control_is_wanted():
+    """Read with the loader rather than matched in the text, the same way the
+    Bluetooth check is. Matching counts a commented-out block, and the word
+    appears in comments."""
+    wanted = INSTALL_CODE.index("CONTROL_WANTED")
+    assert "config.load" in INSTALL_CODE[wanted:wanted + 900]
+    assert "node.control" in INSTALL_CODE[wanted:wanted + 900]
+
+
+def test_the_install_script_stops_the_controller_when_control_is_switched_off():
+    """Disabling alone leaves a running controller driving relays from the
+    block it started with, which is the opposite of what switching control
+    off in a node file is asking for."""
+    assert "systemctl stop monitoring-control" in INSTALL_CODE
+
+
+def test_a_controller_that_will_not_start_does_not_fail_the_install():
+    """The same rule as a dead sensor: a five dollar part, or one service,
+    must never block a software update on a machine nobody can reach. Every
+    load sits at its wired fail-safe while the controller is down."""
+    section = INSTALL_CODE[INSTALL_CODE.index("monitoring-control is running"):]
+    section = section[:section.index("echo \"==> restarting telegraf\"")]
+    assert "exit 1" not in section, (
+        "a controller that will not start aborts the install")
+
+
+def test_the_install_script_writes_a_location_template_and_never_values():
+    """A guessed location produces a schedule wrong in a way nothing
+    downstream can detect, showing up months later as cameras keeping hours
+    nobody asked for."""
+    assert "location.yaml.example" in INSTALL_CODE
+    assert "/etc/monitoring/location.yaml" in INSTALL_CODE
+    assert "TEMPLATE" in INSTALL
+
+
+def test_the_install_script_never_overwrites_an_existing_location():
+    """This script runs again on every update, and overwriting it would undo
+    the one thing a person had to type."""
+    section = INSTALL_CODE[INSTALL_CODE.index("where this machine is"):]
+    section = section[:section.index("node file")]
+    assert "-e /etc/monitoring/location.yaml" in section, (
+        "nothing checks whether the file already exists")
+    assert "left alone" in INSTALL
+
+
+def test_the_location_example_is_not_a_real_site():
+    """It ships in a public repository, so it must be a rounded nearby town
+    rather than anybody's coordinates."""
+    example = (REPO / "location.yaml.example").read_text()
+    for line in example.splitlines():
+        for key in ("latitude:", "longitude:"):
+            if line.startswith(key):
+                value = line.split(":", 1)[1].strip()
+                assert len(value.split(".")[-1]) <= 1, (
+                    "%s is given to more than a tenth of a degree, which is "
+                    "more precision than an example should carry" % line)
