@@ -118,6 +118,40 @@ control dry-run --node <file>
 It reads the same inputs and reaches the same decision as a real pass, and
 prints it. No pin moves.
 
+## Turn load control on for this machine
+
+Two switches, both in the node file, and both have to move on the same
+visit.
+
+```
+control:
+  enabled: true
+```
+
+and the device that reports what the controller decided:
+
+```
+  - name: control
+    driver: control
+    enabled: true
+```
+
+Then:
+
+```
+sudo systemctl enable --now monitoring-control
+```
+
+Each switch alone is wrong in its own direction. The controller on with the
+reporting device off is a machine that sheds loads and tells nobody: the
+shed level and the reason code reach no dashboard, and a controller that has
+died looks exactly like one with nothing to do. The reporting device on with
+the controller off is a collector that fails every interval saying the
+controller has published nothing, which is true, and is noise.
+
+The suite refuses a node file where the two disagree, so a mistake here
+shows up before the machine does.
+
 ## Why are the cameras off, and which number turned them off
 
 Read the controller's own last decision straight from the file it writes,

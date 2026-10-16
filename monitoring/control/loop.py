@@ -101,14 +101,23 @@ class Loop:
 
     # -- one pass -----------------------------------------------------------
 
-    def once(self, apply=True):
-        """Gather, decide, apply, publish. Returns the decisions."""
+    def once(self, apply=True, persist=True):
+        """Gather, decide, apply, publish. Returns the decisions.
+
+        `persist` false leaves no trace: no state file, no published
+        document, no advance of the clock's high-water mark. A dry run has
+        to be that, or looking at a machine changes it. The published
+        document is what the controller reports to the database, so a dry
+        run writing it would replace a live load's status with a decision
+        that was never carried out, and somebody reading a dashboard would
+        see a shed that never happened.
+        """
         local_now = self._now()
         mono_now = self._monotonic()
 
         held = files.read_high_water(self._high_water_path)
         verdict = self._trust(high_water=held)
-        if verdict.trusted:
+        if verdict.trusted and persist:
             # Only from a clock that was trusted when it was read.
             files.note_high_water(local_now.timestamp(),
                                   self._high_water_path)
@@ -135,8 +144,9 @@ class Loop:
             self._apply(decisions)
 
         self.passes += 1
-        files.write_state(self.state, self._state_path, boot=self._boot)
-        self._publish_state(decisions, local_now, mono_now, verdict)
+        if persist:
+            files.write_state(self.state, self._state_path, boot=self._boot)
+            self._publish_state(decisions, local_now, mono_now, verdict)
         return decisions
 
     def _apply(self, decisions):

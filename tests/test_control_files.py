@@ -23,6 +23,37 @@ def test_a_reading_round_trips_with_an_age(tmp_path):
     assert out["bms"]["age_seconds"] == 30.0
 
 
+def test_a_reading_carries_the_moment_it_was_taken(tmp_path):
+    """A ladder counting readings needs to tell one sample from the same
+    sample read again, and the age cannot say: it moves on every call, so two
+    passes over one cached sample report two different ages. The publish
+    stamp does not move, so it is the sample's identity.
+    """
+    directory = str(tmp_path / "readings")
+    files.publish_reading({"state_of_charge_pct": 45.0}, "bms",
+                          directory=directory, now=100.0, boot=BOOT)
+    first = files.read_readings(directory, now=130.0, this_boot=BOOT)
+    second = files.read_readings(directory, now=190.0, this_boot=BOOT)
+    assert first["bms"]["taken_at"] == 100.0
+    assert second["bms"]["taken_at"] == first["bms"]["taken_at"]
+    assert second["bms"]["age_seconds"] != first["bms"]["age_seconds"]
+
+    files.publish_reading({"state_of_charge_pct": 44.0}, "bms",
+                          directory=directory, now=280.0, boot=BOOT)
+    third = files.read_readings(directory, now=290.0, this_boot=BOOT)
+    assert third["bms"]["taken_at"] == 280.0
+
+
+def test_an_unageable_reading_carries_no_moment(tmp_path):
+    """A stamp from a clock that has restarted identifies nothing, and
+    offering it would let a caller treat two unrelated samples as one."""
+    directory = str(tmp_path / "readings")
+    files.publish_reading({"x": 1.0}, "bms", directory=directory,
+                          now=400000.0, boot=BOOT)
+    out = files.read_readings(directory, now=60.0, this_boot="another-boot")
+    assert out["bms"]["taken_at"] is None
+
+
 def test_a_reading_from_another_boot_is_infinitely_old(tmp_path):
     """The monotonic clock restarts at zero every boot, so a stamp from a
     previous one cannot be aged. Reporting it as fresh would hand the ladder
@@ -184,10 +215,51 @@ def test_the_high_water_mark_only_ever_advances(tmp_path):
     """A clock that has gone backwards must not drag the mark with it, or the
     check it exists for stops catching anything."""
     path = str(tmp_path / "hw.json")
+    step = files.ADVANCE_STEP
     files.note_high_water(2000.0, path)
     assert files.note_high_water(1000.0, path) == 2000.0
     assert files.read_high_water(path) == 2000.0
-    assert files.note_high_water(3000.0, path) == 3000.0
+    assert files.note_high_water(2000.0 + 2 * step, path) == 2000.0 + 2 * step
+
+
+def test_the_high_water_mark_is_not_rewritten_for_every_passing_second(
+        tmp_path):
+    """This is the only file the loop writes to the card.
+
+    The wall clock moves on every pass, so a mark rewritten whenever the
+    clock is later is a mark rewritten every pass: at a ten second interval,
+    thousands of fsynced writes a day on the one part of the machine with no
+    spare and nothing to fall back on.
+
+    Coarse granularity costs the check nothing, which is why it is allowed.
+    What the mark catches is a board whose clock resets, and a reset clock
+    does not read an hour early, it reads 1970 or the year its chip powers up
+    in.
+    """
+    path = pathlib.Path(tmp_path) / "hw.json"
+    files.note_high_water(2000.0, str(path))
+    first = path.stat().st_mtime_ns
+
+    # A loop interval's worth of passes, each with a later clock.
+    for second in range(1, 200):
+        assert files.note_high_water(2000.0 + second, str(path)) == 2000.0
+    assert path.stat().st_mtime_ns == first, "the mark was rewritten"
+    assert files.read_high_water(str(path)) == 2000.0
+
+    # Far enough on, it does move, or it would stop tightening and a reset
+    # board would be compared against the day the machine was installed.
+    moved = 2000.0 + files.ADVANCE_STEP * 2
+    assert files.note_high_water(moved, str(path)) == moved
+    assert files.read_high_water(str(path)) == moved
+
+
+def test_the_first_mark_is_written_at_once(tmp_path):
+    """Until the file exists the hardware clock has nothing to be compared
+    against and is trusted on sight, so the first trusted reading has to land
+    whatever the granularity."""
+    path = str(tmp_path / "hw.json")
+    assert files.note_high_water(2000.0, path) == 2000.0
+    assert files.read_high_water(path) == 2000.0
 
 
 def test_a_damaged_high_water_file_reads_as_absent(tmp_path):

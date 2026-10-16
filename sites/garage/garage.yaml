@@ -113,14 +113,31 @@ devices:
 #
 # Leave control disabled until the relay is wired and the probe reads. Turning
 # it on with no heater attached does nothing useful and makes the dashboard
-# claim a load exists.
+# claim a load exists.  # The load controller, read as though it were a device.
+  #
+  # The controller is a separate service, not a collector. What it decided
+  # still has to reach the database, and this is how: the loop writes a small
+  # document to tmpfs, this reads it, and telegraf's existing poll fragment
+  # carries it like any other device. No second output path, no second set of
+  # credentials, nothing new in the telegraf configuration.
+  #
+  # Enabled together with control above, never separately. Enabled here with
+  # the controller off, every poll fails with "the controller has published
+  # nothing", which is true but is noise rather than news. Disabled here with
+  # the controller on, the shed level and the reason code reach nobody, and a
+  # controller that has stopped looks exactly like one that is content.
+  - name: control
+    driver: control
+    mode: poll
+    interval: 30s
+    enabled: false
+    params: {path: /run/monitoring/control.json}
+    tags: {location: control}
+
+
 control:
   enabled: false
-  state_file: /var/lib/monitoring/garage-control.json
   loop_interval: 30s
-  publish_as:
-    location: control
-
   loads:
 
     battery_heating:

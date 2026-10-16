@@ -48,8 +48,33 @@ LOAD_KEYS = {"type", "enabled", "control_pin", "polarity",
 #: Keys the control block itself may carry. Owned by the loop rather than by
 #: a load, and listed so a misspelled loop_interval is refused rather than
 #: silently leaving the default in place.
-CONTROL_KEYS = {"enabled", "loads", "state_file", "loop_interval",
-                "publish_as", "clock"}
+#:
+#: There is deliberately no key for where the loop's state goes. It belongs
+#: in tmpfs and nowhere else, and the reason is in two halves. It is rewritten
+#: every pass, so on the card it is thousands of fsynced writes a day on a
+#: machine whose card is the one part with no spare. And it would buy nothing,
+#: because the state carries the boot identity and a reader discards state
+#: from a previous boot: the monotonic stamps inside are from a clock that has
+#: since restarted at zero, so keeping them would hold a dwell for as long as
+#: the machine had previously been up. A path here could only move the writes
+#: onto the card in exchange for state that is thrown away on arrival.
+CONTROL_KEYS = {"enabled", "loads", "loop_interval", "clock"}
+
+#: Keys that were once meaningful here and now have an answer this module
+#: will not let a file override, with the reason an operator needs. Refused
+#: rather than ignored, and named rather than left to the general unknown-key
+#: message, because somebody reading that message would otherwise go looking
+#: for a typo in a key they spelled correctly.
+RETIRED_CONTROL_KEYS = {
+    "publish_as": "the controller's decisions reach the database through a "
+                  "device declared like any other, so the tags they carry "
+                  "belong on that device. Declare a device with driver: "
+                  "control and move these tags to its tags block",
+    "state_file": "the loop's state is held in tmpfs so it never reaches the "
+                  "card, and it is discarded on reboot in any case because "
+                  "its timers are measured on a clock that restarts at zero. "
+                  "Remove the line",
+}
 LADDER_KEYS = {"source", "stale_after", "release_margin_pct",
                "enter_after_readings", "restore_dwell", "floor", "tiers"}
 FLOOR_KEYS = {"sources"}
@@ -66,6 +91,29 @@ class SpecError(ValueError):
 
 def _fail(where, message):
     raise SpecError("%s: %s" % (where, message))
+
+
+def check_control_keys(control):
+    """Refuse a control block whose own keys are wrong, and nothing more.
+
+    Separate from the rest because it can be applied to every node file in
+    the repository, including the ones that specify loads for hardware and
+    load types this controller does not drive yet. Those cannot be fully
+    validated, but their block-level keys can, and a wrong key there is the
+    kind that lies quiet: the validator is otherwise reached only when a
+    controller starts, a controller starts only where control is enabled, so
+    a refused key sits in a file with control off until the day somebody
+    turns it on, an hour from the nearest road.
+    """
+    _retired("control", control, RETIRED_CONTROL_KEYS)
+    _only("control", control, CONTROL_KEYS)
+
+
+def _retired(where, mapping, retired):
+    if not isinstance(mapping, dict):
+        return
+    for key in sorted(set(mapping) & set(retired)):
+        _fail(where, "%s is no longer read: %s" % (key, retired[key]))
 
 
 def _only(where, mapping, allowed):
@@ -372,7 +420,7 @@ def load_control(node):
     controller running three loads out of four, on a machine nobody can
     reach, is worse than one that refuses to start and says why.
     """
-    _only("control", node.control, CONTROL_KEYS)
+    check_control_keys(node.control)
     # Enabled devices only. A disabled one never writes the cache, so a
     # ladder naming it would wait forever on a reading that cannot come.
     devices = {device.name for device in node.devices if device.enabled}

@@ -165,6 +165,13 @@ def read_readings(directory=None, now=None, this_boot=None):
     an infinite age rather than being dropped. The caller then treats it as
     stale, which is honest: the values may be real but nothing here can say
     how old they are.
+
+    Each reading also carries ``taken_at``, the monotonic moment the collector
+    published it. The age is derived from it and moves on every call, so an
+    age cannot tell a caller whether two reads saw the same sample; the stamp
+    can, and a ladder that counts readings has to be able to. It is None
+    whenever the age is infinite, because a stamp from a clock that has since
+    restarted identifies nothing.
     """
     directory = READINGS_DIR if directory is None else directory
     now = monotonic() if now is None else now
@@ -186,10 +193,13 @@ def read_readings(directory=None, now=None, this_boot=None):
         same_boot = (this_boot is not None
                      and record.get("boot_id") == this_boot)
         if same_boot and isinstance(stamp, (int, float)):
-            age = max(0.0, now - float(stamp))
+            taken_at = float(stamp)
+            age = max(0.0, now - taken_at)
         else:
+            taken_at = None
             age = float("inf")
-        out[device] = {"fields": record["fields"], "age_seconds": age}
+        out[device] = {"fields": record["fields"], "age_seconds": age,
+                       "taken_at": taken_at}
     return out
 
 
@@ -239,17 +249,42 @@ def read_high_water(path=None):
     return float(value)
 
 
+#: How far the wall clock must move before the mark is rewritten.
+#:
+#: This is the only file the loop writes to the card, and the wall clock
+#: moves on every pass, so writing whenever it is later means writing every
+#: pass: at a ten second interval, about nine thousand fsynced writes a day
+#: on a card with no spare.
+#:
+#: Coarse granularity costs the check nothing. What the mark catches is a
+#: board whose clock resets, and a reset clock does not read an hour early,
+#: it reads 1970 or the year its chip powers up in. The margin being hours
+#: rather than seconds does not bring that anywhere near the bound. What the
+#: mark would not catch at any granularity is a restored stale time, which
+#: comes back within seconds of the last shutdown; the synchronisation
+#: marker is what covers that, and it is in tmpfs.
+ADVANCE_STEP = 3600.0
+
+
 def note_high_water(epoch, path=None):
-    """Record a trusted wall time, if it is later than the one already held.
+    """Record a trusted wall time, if it is well past the one already held.
 
     Only ever advanced, and only from a clock that was trusted when it was
     read. Advancing it from an untrusted clock would let one fast wrong
-    reading poison the mark permanently, after which no real clock could ever
-    clear it.
+    reading poison the mark permanently, after which no real clock could
+    ever clear it.
+
+    Returns the mark in force, which is the held value when the clock has
+    not moved far enough to be worth a write.
     """
     path = HIGH_WATER if path is None else path
     held = read_high_water(path)
-    if held is not None and epoch <= held:
+    if held is None:
+        # Nothing on the card yet, so write at once. Until this exists the
+        # RTC has nothing to be compared against and is trusted on sight.
+        write_json(path, {"epoch": float(epoch)})
+        return float(epoch)
+    if epoch <= held + ADVANCE_STEP:
         return held
     write_json(path, {"epoch": float(epoch)})
     return float(epoch)

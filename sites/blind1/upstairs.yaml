@@ -41,10 +41,10 @@ devices:
     params:
       device_id: 28-3ce1d44326bf
 
-  # rain_inches now counts up and is persisted, where the original script
-  # held it in memory and it silently reset on every power event. A dashboard
-  # panel should therefore ask for the increase over a window rather than
-  # expect the number itself to return to zero.
+  # rain_inches counts up and is persisted across power events; it does not
+  # reset to zero on a restart. A dashboard panel should therefore ask for
+  # the increase over a window rather than expect the number itself to
+  # return to zero.
   - name: rain
     driver: rain_gauge
     mode: resident
@@ -89,7 +89,7 @@ devices:
   # it cleanly through a floor, and data in the database today beats data in a
   # plan.
   #
-  # The driver declares itself slow, so the collector with the five minute
+  # The driver declares itself slow, so the collector with the three minute
   # interval and the two minute timeout reads it rather than the fast one.
   # These packs allow one connection at a time, so every read locks the owner
   # out of the application for its duration.
@@ -99,10 +99,9 @@ devices:
     tags: {location: battery}
     params:
       address: "A5:C2:37:4C:80:F7"    # chins320
-      # A total budget for the whole exchange: scanning, connecting,
-      # every command and the disconnect. It used to bound only the
-      # connect, so the same number now means something stricter. A
-      # real read of this device takes about nine seconds, and the
+      # A total budget for the whole exchange -- scanning, connecting,
+      # every command and the disconnect -- not only the connect step.
+      # A real read of this device takes about nine seconds, and the
       # node's slow devices together must fit the collector's 120
       # second timeout, counting five seconds of grace each.
       timeout: 40s
@@ -140,15 +139,33 @@ devices:
 # and the outside sensor are all here. A decision must not depend on the
 # network, so a controller reads its own machine's sensors and nothing else.
 #
-# Enable once the relay is wired. The fan runs continuously today, so leaving
-# this disabled is the current behaviour rather than a regression.
+# Enable once the relay is wired. Until then the fan simply runs
+# continuously with nothing to enable: this flag disabled matches that
+# unmanaged state rather than changing it.  # The load controller, read as though it were a device.
+  #
+  # The controller is a separate service, not a collector. What it decided
+  # still has to reach the database, and this is how: the loop writes a small
+  # document to tmpfs, this reads it, and telegraf's existing poll fragment
+  # carries it like any other device. No second output path, no second set of
+  # credentials, nothing new in the telegraf configuration.
+  #
+  # Enabled together with control above, never separately. Enabled here with
+  # the controller off, every poll fails with "the controller has published
+  # nothing", which is true but is noise rather than news. Disabled here with
+  # the controller on, the shed level and the reason code reach nobody, and a
+  # controller that has stopped looks exactly like one that is content.
+  - name: control
+    driver: control
+    mode: poll
+    interval: 30s
+    enabled: false
+    params: {path: /run/monitoring/control.json}
+    tags: {location: control}
+
+
 control:
   enabled: false
-  state_file: /var/lib/monitoring/blind1-upstairs-control.json
   loop_interval: 30s
-  publish_as:
-    location: control
-
   loads:
 
     # A tiny fan, half an amp. This is the one load that needs no second relay

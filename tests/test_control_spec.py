@@ -390,6 +390,31 @@ def test_an_unknown_key_on_the_control_block_itself_is_refused():
     assert "unknown key" in str(raised.value)
 
 
+def test_a_path_for_the_loop_state_is_refused_by_name():
+    """The loop's state belongs in tmpfs and nowhere else.
+
+    It is rewritten every pass, so a path on the card is thousands of fsynced
+    writes a day on the one part of the machine with no spare, and it buys
+    nothing: the state carries the boot identity and a reader discards state
+    from a previous boot, because the timers inside it are measured on a
+    clock that restarts at zero.
+
+    Refused by name rather than by the general unknown-key message, because
+    somebody reading that message would go hunting for a typo in a key they
+    spelled correctly.
+    """
+    node = FakeNode({"cameras": CAMERAS})
+    node.control["state_file"] = "/var/lib/monitoring/somewhere.json"
+    with pytest.raises(spec.SpecError) as raised:
+        spec.load_control(node)
+    message = str(raised.value)
+    assert "state_file" in message
+    assert "no longer read" in message
+    assert "tmpfs" in message
+    assert "unknown key" not in message, (
+        "the general message sends the reader looking for a typo")
+
+
 def test_a_restore_dwell_is_required_rather_than_defaulted():
     """Entry needs consecutive readings so one glitched sample cannot latch
     a tier. Release with no dwell lets one glitched sample clear every tier

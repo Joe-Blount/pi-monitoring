@@ -237,20 +237,49 @@ devices:
     enabled: false
     tags: {location: rack}
     params: {address: "YY:YY:YY:YY:YY:YY"}
+  # The load controller, read as though it were a device.
+  #
+  # The controller is a separate service, not a collector. What it decided
+  # still has to reach the database, and this is how: the loop writes a small
+  # document to tmpfs, this reads it, and telegraf's existing poll fragment
+  # carries it like any other device. No second output path, no second set of
+  # credentials, nothing new in the telegraf configuration.
+  #
+  # Enabled together with control above, never separately. Enabled here with
+  # the controller off, every poll fails with "the controller has published
+  # nothing", which is true but is noise rather than news. Disabled here with
+  # the controller on, the shed level and the reason code reach nobody, and a
+  # controller that has stopped looks exactly like one that is content.
+  - name: control
+    driver: control
+    mode: poll
+    interval: 30s
+    enabled: false
+    params: {path: /run/monitoring/control.json}
+    tags: {location: control}
+
 
 control:
   enabled: false              # default off. A node switches loads only when
                               # this is deliberately turned on.
 
-  state_file: /var/lib/monitoring/example-control.json
-                              # lockouts, counters, cooldowns and the last
-                              # full-charge timestamp. The controller discards
-                              # in-memory state on restart by design, so
-                              # anything that must brake a restart loop has to
-                              # live here.
+                              # There is no key here for where the loop keeps
+                              # its state. It is held in tmpfs, rewritten
+                              # every pass, and discarded on reboot: its
+                              # timers are measured on a clock that restarts
+                              # at zero, so a stamp carried across a reboot
+                              # would hold a dwell for as long as the machine
+                              # had previously been up. On the card it would
+                              # be thousands of fsynced writes a day on the
+                              # one part with no spare.
+                              #
+                              # A load that needs something to survive a
+                              # restart -- a lockout, a daily counter, the
+                              # last full-charge time -- needs its own file
+                              # and its own rules about what a stale entry
+                              # means, written alongside the code that
+                              # honours it.
   loop_interval: 10s
-  publish_as:
-    location: control         # where decisions and readbacks are published
 
   clock:
     # The Pi has no real-time clock. After a power cut it boots with whatever

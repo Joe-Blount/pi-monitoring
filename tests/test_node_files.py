@@ -14,6 +14,7 @@ import re
 import pytest
 
 from monitoring import config, drivers, lineproto, runner
+from monitoring.control import files as control_files
 from monitoring.control import spec as control_spec
 from monitoring.drivers.base import Driver
 
@@ -599,6 +600,85 @@ def enabled_everywhere(path):
     for device in node.devices:
         device.enabled = True
     return control_spec.load_control(node)
+
+
+@pytest.mark.parametrize("path", NODE_FILES, ids=IDS)
+def test_every_control_block_has_keys_the_loop_still_reads(path):
+    """The block-level keys, for every file in the repository.
+
+    The other tests here reach into one named file, and the files for the
+    garage and the example specify load types this controller does not drive,
+    so they cannot be validated whole. Their own keys can be, and that is
+    where the quiet failure lives: the validator is otherwise reached only
+    when a controller starts, a controller starts only where control is
+    enabled, so a key the validator refuses can sit in a file with control
+    off until the day somebody turns it on, an hour from the nearest road.
+    """
+    node = load(path)
+    if not node.control:
+        pytest.skip("no control block")
+    control_spec.check_control_keys(node.control)
+
+
+@pytest.mark.parametrize("path", NODE_FILES, ids=IDS)
+def test_a_node_that_controls_loads_also_reports_what_it_decided(path):
+    """A controller nobody can see is worse than no controller.
+
+    The decisions, the shed level, the reason code and the controller's own
+    age are the only evidence that load shedding is working, and the one
+    thing most worth knowing is that the controller has stopped: every load
+    is then sitting at its fail-safe and nothing is managing the battery. The
+    loop reaches the database through a device declared like any other, so a
+    control block with no such device publishes nothing at all.
+    """
+    node = load(path)
+    if not node.control:
+        pytest.skip("no control block")
+    control = [d for d in node.devices if d.driver == "control"]
+    assert len(control) == 1, (
+        "a node with a control block needs exactly one device reading the "
+        "controller's published document")
+
+
+@pytest.mark.parametrize("path", NODE_FILES, ids=IDS)
+def test_the_control_device_reads_the_file_the_loop_writes(path):
+    """Two files name this path and they have to agree.
+
+    The driver takes the path from the node file rather than importing it,
+    because a driver here may import the driver base and nothing else, so
+    that any of them can be lifted out by moving one file. That boundary is
+    worth keeping and this is what pays for it: a node file pointing
+    anywhere else gives a collector that reports a stopped controller for
+    ever while the controller runs perfectly.
+    """
+    node = load(path)
+    if not node.control:
+        pytest.skip("no control block")
+    for device in node.devices:
+        if device.driver == "control":
+            assert device.params.get("path") == control_files.PUBLISHED
+
+
+@pytest.mark.parametrize("path", NODE_FILES, ids=IDS)
+def test_the_control_device_and_the_controller_are_switched_together(path):
+    """Each half alone is a reporting fault in one direction.
+
+    The device enabled with the controller off is a poll that fails every
+    interval saying the controller has published nothing, which is true and
+    is noise. The controller on with the device disabled is a shed nobody can
+    see, and a controller that has died looks exactly like one with nothing
+    to do.
+    """
+    node = load(path)
+    if not node.control:
+        pytest.skip("no control block")
+    wanted = bool(node.control.get("enabled"))
+    for device in node.devices:
+        if device.driver == "control":
+            assert device.enabled is wanted, (
+                "control is %s and its reporting device is %s"
+                % ("enabled" if wanted else "disabled",
+                   "enabled" if device.enabled else "disabled"))
 
 
 def test_the_shipped_camera_ladder_is_the_one_that_was_agreed():
