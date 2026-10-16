@@ -31,6 +31,7 @@ import signal
 import subprocess
 import sys
 import time
+import zoneinfo
 
 import pytest
 
@@ -78,20 +79,43 @@ LADDER = """\
           - {below_pct: 10, schedule: {type: never}}
 """
 
+#: A ladder with one solar tier rather than one clock tier, matching the
+#: shape of the 25 percent tier in sites/blind1/downstairs.yaml. Exists so a
+#: dry-run test can latch a tier whose schedule is measured from sunrise and
+#: sunset rather than the clock, which is the one shape the clock-only
+#: ladder above never exercises.
+SOLAR_LADDER = """\
+      shed_ladder:
+        source: {device: bms, field: state_of_charge_pct}
+        stale_after: 10m
+        release_margin_pct: 15
+        enter_after_readings: 1
+        restore_dwell: 0
+        tiers:
+          - below_pct: 25
+            schedule:
+              type: solar
+              on_windows:
+                - {from: [sunrise, -1h], to: [sunrise, 2h]}
+                - {from: [sunset, -2h], to: [sunset, 1h]}
+"""
 
-def controlled_node(tmp_path, loop_interval=None, polarity="energize_to_shed"):
+
+def controlled_node(tmp_path, loop_interval=None, polarity="energize_to_shed",
+                    ladder=LADDER):
     """A node with one real load, a real GPIO pin, and no reading for it.
 
     No loop_interval line at all when `loop_interval` is None, so a test can
-    tell the default apart from a value that happens to match it.
+    tell the default apart from a value that happens to match it. `ladder`
+    defaults to the clock-tier fixture above; a test that needs a solar tier
+    latched passes SOLAR_LADDER instead.
     """
     body = NODE_HEADER + "control:\n  enabled: true\n"
-    body += "  state_file: %s\n" % (tmp_path / "state.json")
     if loop_interval is not None:
         body += "  loop_interval: %s\n" % loop_interval
     body += "  loads:\n    cameras:\n      type: dc_branch\n"
     body += "      control_pin: 23\n      polarity: %s\n" % polarity
-    body += LADDER
+    body += ladder
     path = tmp_path / "node.yaml"
     path.write_text(body)
     return path
@@ -100,7 +124,6 @@ def controlled_node(tmp_path, loop_interval=None, polarity="energize_to_shed"):
 def empty_node(tmp_path, loop_interval=None):
     """Control declared but switched off, and no load at all."""
     body = NODE_HEADER + "control:\n  enabled: false\n"
-    body += "  state_file: %s\n" % (tmp_path / "state.json")
     if loop_interval is not None:
         body += "  loop_interval: %s\n" % loop_interval
     path = tmp_path / "node.yaml"
@@ -110,7 +133,6 @@ def empty_node(tmp_path, loop_interval=None):
 
 def bad_polarity_node(tmp_path):
     body = NODE_HEADER + "control:\n  enabled: true\n"
-    body += "  state_file: %s\n" % (tmp_path / "state.json")
     body += "  loads:\n    cameras:\n      type: dc_branch\n"
     body += "      control_pin: 23\n      polarity: sideways\n"
     body += LADDER
@@ -119,15 +141,22 @@ def bad_polarity_node(tmp_path):
     return path
 
 
-def node_with_no_control(tmp_path):
-    body = NODE_HEADER + "control:\n  enabled: false\n"
-    path = tmp_path / "node.yaml"
-    path.write_text(body)
-    return path
+#: The system zone every one of these subprocesses runs in, deliberately not
+#: the site's.
+#:
+#: The commands here read and print expiries, and they must do it against the
+#: zone in the location file rather than the machine's own. On a developer's
+#: machine already set to the site's zone the two agree, so code that reads
+#: the wrong one passes every test and fails only on the Pi, which is left at
+#: the Debian default. Pinning a third zone here means neither the site's zone
+#: nor a bare UTC default can be mistaken for correct.
+SYSTEM_ZONE = "Asia/Tokyo"
 
 
 def run_control(tmp_path, *args, extra_env=None, timeout=30):
     env = dict(os.environ)
+    env["TZ"] = SYSTEM_ZONE
+    env["MONITORING_STATE"] = str(tmp_path / "state.json")
     env["MONITORING_PUBLISHED"] = str(tmp_path / "published.json")
     env["MONITORING_HIGH_WATER"] = str(tmp_path / "hw.json")
     env["MONITORING_BOOT_ID"] = BOOT
@@ -170,7 +199,7 @@ def test_the_environment_variable_overrides_the_default_path(tmp_path):
 
 
 def test_the_node_flag_overrides_the_environment_variable(tmp_path):
-    node = empty_node(tmp_path)
+    node = controlled_node(tmp_path)
     result = run_control(
         tmp_path, "once", "--node", str(node),
         extra_env={"MONITORING_NODE": str(tmp_path / "nowhere.yaml")})
@@ -199,12 +228,32 @@ def test_run_refuses_an_unreadable_node_file(tmp_path):
     assert "Traceback" not in result.stderr
 
 
+def test_run_refuses_a_disabled_node_and_does_not_start(tmp_path):
+    """`enabled: false` is somebody saying this machine does not control
+    anything, and that has to be told to whoever is standing at it without
+    first demanding a location file: the refusal comes before the location
+    is ever read, and names the key that would change it."""
+    node = empty_node(tmp_path)
+    result = run_control(tmp_path, "run", "--node", str(node))
+    assert result.returncode == 2
+    assert "control.enabled" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_once_refuses_a_disabled_node(tmp_path):
+    node = empty_node(tmp_path)
+    result = run_control(tmp_path, "once", "--node", str(node))
+    assert result.returncode == 2
+    assert "control.enabled" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
 def test_run_refuses_a_machine_with_no_location_file(tmp_path):
     """A solar schedule computed against an invented point is wrong in a way
     nothing downstream can detect, so this is required rather than
     defaulted, and a machine where nobody wrote the file must say which file
     and what goes in it rather than run on a guess."""
-    node = node_with_no_control(tmp_path)
+    node = controlled_node(tmp_path)
     result = run_control(tmp_path, "run", "--node", str(node),
                          extra_env={"MONITORING_LOCATION":
                                     str(tmp_path / "absent.yaml")})
@@ -216,7 +265,7 @@ def test_run_refuses_a_machine_with_no_location_file(tmp_path):
 
 
 def test_run_refuses_an_unknown_timezone(tmp_path):
-    node = node_with_no_control(tmp_path)
+    node = controlled_node(tmp_path)
     path = location_file(tmp_path, LOCATION.replace("America/Chicago",
                                                     "Nowhere/Fake"))
     result = run_control(tmp_path, "run", "--node", str(node),
@@ -230,7 +279,7 @@ def test_run_refuses_degrees_and_minutes_written_as_a_decimal(tmp_path):
     What it can do is say which mistake it is, since writing 37 degrees 2
     minutes as 37.02 rather than 37.05 is the error somebody converting by
     hand actually makes, and it is two miles of it."""
-    node = node_with_no_control(tmp_path)
+    node = controlled_node(tmp_path)
     path = location_file(tmp_path, "latitude: ninety\nlongitude: -97.4\n"
                                    "timezone: America/Chicago\n")
     result = run_control(tmp_path, "run", "--node", str(node),
@@ -242,7 +291,7 @@ def test_run_refuses_degrees_and_minutes_written_as_a_decimal(tmp_path):
 def test_run_refuses_a_location_with_a_key_nobody_reads(tmp_path):
     """The same rule the control spec applies: a key accepted and unread
     sits in the file looking like it is in force."""
-    node = node_with_no_control(tmp_path)
+    node = controlled_node(tmp_path)
     path = location_file(tmp_path, LOCATION + "elevation: 350\n")
     result = run_control(tmp_path, "run", "--node", str(node),
                          extra_env={"MONITORING_LOCATION": str(path)})
@@ -288,16 +337,19 @@ def test_dry_run_prints_a_line_per_load_too(tmp_path):
 
 
 def test_dry_run_does_not_write_the_state_file(tmp_path):
-    """Not strictly one of the stated requirements, but the clearest
-    available sign that a dry run never reached _apply at all: once()
-    writes the state file inside Loop.once regardless of `apply`, so this
-    only shows apply never ran. Kept as a secondary signal alongside the
-    GPIO-safety tests below rather than the only one."""
+    """`persist=False` has to reach every file a real pass leaves behind:
+    the loop's own working state, the document published for a dashboard
+    to read, and the clock's high-water mark. Looking at a node file must
+    never leave a trace that a pass actually ran."""
     node = controlled_node(tmp_path)
-    run_control(tmp_path, "dry-run", "--node", str(node))
-    # once() writes state unconditionally, so this file existing either way
-    # is expected; what matters is the process did not crash reaching a
-    # relay, asserted in the tests below.
+    result = run_control(tmp_path, "dry-run", "--node", str(node))
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / "state.json").exists(), (
+        "dry-run wrote the loop's own state file")
+    assert not (tmp_path / "published.json").exists(), (
+        "dry-run published a document meant for a real pass")
+    assert not (tmp_path / "hw.json").exists(), (
+        "dry-run advanced the clock's high-water mark")
 
 
 # -- dry-run touches no GPIO, and says what it would have done --------------
@@ -350,10 +402,30 @@ def test_dry_run_prints_off_all_day_for_a_latched_never_tier(tmp_path):
     assert "off all day" in result.stdout
 
 
+def test_dry_run_reports_real_output_for_a_latched_solar_tier(tmp_path):
+    """A latched tier whose schedule is measured from sunrise and sunset
+    has to be walked by the same preview that already walks a latched
+    clock tier, and has to come back with a real report rather than a
+    traceback."""
+    node = controlled_node(tmp_path, ladder=SOLAR_LADDER)
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps({
+        "boot_id": BOOT,
+        "loads": {"cameras": {"latched": {"0": True}, "below": {},
+                              "above_since": {}, "floor_latched": False,
+                              "floor_latched_by": None}}}))
+    result = run_control(tmp_path, "dry-run", "--node", str(node))
+    assert result.returncode == 0, result.stderr
+    assert "Traceback" not in result.stderr
+    assert "cameras:" in result.stdout
+    assert "today:" in result.stdout
+
+
 # -- run handles SIGTERM and SIGINT cleanly ----------------------------------
 
 def _start_run(tmp_path, node, extra_env=None):
     env = dict(os.environ)
+    env["MONITORING_STATE"] = str(tmp_path / "state.json")
     env["MONITORING_PUBLISHED"] = str(tmp_path / "published.json")
     env["MONITORING_HIGH_WATER"] = str(tmp_path / "hw.json")
     env["MONITORING_BOOT_ID"] = BOOT
@@ -468,17 +540,41 @@ def test_override_for_sets_an_expiry_roughly_that_far_out(tmp_path):
     assert abs(entry["expires_epoch"] - (before + 8 * 3600)) < 30
 
 
-def test_override_until_sets_the_given_local_time(tmp_path):
+def test_override_until_sets_the_given_time_in_the_sites_own_zone(tmp_path):
+    """The zone has to come from location.yaml, the file the loop's own
+    schedules are placed against, not from whatever zone this machine's
+    clock happens to be set to -- a Pi left at the Debian default would
+    otherwise set and report an expiry hours away from the one meant."""
     result = run_switches(tmp_path, "override", "cameras", "off",
                           "--until", "2026-10-18 09:00")
     assert result.returncode == 0, result.stderr
-    expected = datetime.datetime.strptime(
-        "2026-10-18 09:00", "%Y-%m-%d %H:%M").astimezone().timestamp()
+    expected = datetime.datetime(
+        2026, 10, 18, 9, 0,
+        tzinfo=zoneinfo.ZoneInfo("America/Chicago")).timestamp()
     with open(switches_path(tmp_path)) as handle:
         switches = json.load(handle)
     entry = switches["loads"]["cameras"]
     assert entry["force"] == "off"
     assert entry["expires_epoch"] == pytest.approx(expected)
+
+    # And the line the operator reads back has to name the hour they typed,
+    # not the same instant renamed in another zone.
+    assert "2026-10-18 09:00" in result.stdout, result.stdout
+
+
+def test_override_refuses_a_machine_with_no_location_file(tmp_path):
+    """An expiry that cannot be placed against the site's own zone is not
+    worth writing, so override fails the same way run, once and dry-run
+    already do rather than falling back to a guess."""
+    result = run_control(
+        tmp_path, "override", "cameras", "off", "--until",
+        "2026-10-18 09:00",
+        extra_env={"MONITORING_LOCATION": str(tmp_path / "absent.yaml"),
+                  "MONITORING_SWITCHES": str(switches_path(tmp_path))})
+    assert result.returncode == 2
+    assert "absent.yaml" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert not switches_path(tmp_path).exists()
 
 
 def test_override_clear_removes_a_prior_force(tmp_path):
@@ -521,6 +617,46 @@ def test_shedding_status_reports_an_active_override(tmp_path):
     assert result.returncode == 0, result.stderr
     assert "cameras" in result.stdout
     assert "forced on" in result.stdout
+
+
+def test_the_status_listing_names_the_same_hour_the_override_was_set_for(
+        tmp_path):
+    """Setting an override and reading it back have to agree.
+
+    Both name an hour, and each would otherwise pick its own zone: one
+    answer against the site, one against whatever this machine's clock is
+    set to. Two different answers for one override leave an operator with no
+    way to tell which the loop will act on, and the number they would most
+    reasonably trust is the one printed second.
+    """
+    set_result = run_switches(tmp_path, "override", "cameras", "on",
+                              "--until", "2026-10-18 09:00")
+    assert set_result.returncode == 0, set_result.stderr
+    listed = run_switches(tmp_path, "shedding", "status")
+    assert listed.returncode == 0, listed.stderr
+    assert "2026-10-18 09:00" in listed.stdout, listed.stdout
+
+
+def test_the_status_listing_works_without_a_location_file(tmp_path):
+    """Whether shedding is on is the thing this command exists to answer, and
+    it has to answer on a machine where no controller could start: a fresh
+    card, before anybody has written the location file.
+
+    It must not name an hour it cannot place, though, because an hour
+    computed against the wrong zone is worse than an admission.
+    """
+    switches_path(tmp_path).write_text(json.dumps({
+        "shedding_enabled": False,
+        "loads": {"cameras": {"force": "on", "expires_epoch": 99999999999.0}}}))
+    result = run_control(
+        tmp_path, "shedding", "status",
+        extra_env={"MONITORING_SWITCHES": str(switches_path(tmp_path)),
+                   "MONITORING_LOCATION": str(tmp_path / "absent.yaml")})
+    assert result.returncode == 0, result.stderr
+    assert "shedding: off" in result.stdout
+    assert "cannot read its location file" in result.stdout
+    assert "2286" not in result.stdout, (
+        "an hour was named against a zone this machine could not establish")
 
 
 def test_shedding_status_with_no_override_says_so(tmp_path):

@@ -6,7 +6,7 @@
     control dry-run    --node <file>    one pass, decided and printed,
                                          no pin touched
     control override <load> on --for 8h
-    control override <load> off --until "2026-10-18 09:00"
+    control override <load> off --until "YYYY-MM-DD HH:MM"
     control override clear <load>
     control shedding on
     control shedding off
@@ -38,20 +38,29 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from monitoring import config, duration                    # noqa: E402
 from monitoring import drivers as driver_registry           # noqa: E402
 from monitoring.control import (                            # noqa: E402
-    files, location, loop, relay, spec, sun)
+    decide, files, location, loop, relay, spec, sun)
 
 DEFAULT_NODE = "/etc/monitoring/node.yaml"
 
-#: Three paths the control package accepts as explicit arguments for
-#: exactly this reason: their defaults are real, fixed system paths
-#: (/run/monitoring, /var/lib/monitoring) that do not exist on every machine
-#: this runs on, including the one these tests run on. MONITORING_NODE
-#: already establishes letting an environment variable say otherwise; these
-#: get the same treatment. The state file has its own per-node override
-#: already, in control.state_file, so it needs no variable here.
+#: Four paths the control package accepts as explicit arguments for exactly
+#: this reason: their defaults are real, fixed system paths (/run/monitoring,
+#: /var/lib/monitoring) that do not exist on every machine this runs on,
+#: including the one these tests run on. MONITORING_NODE already establishes
+#: letting an environment variable say otherwise; these get the same
+#: treatment. There is no key in a node file for any of the four: a node
+#: file is a property of the load being controlled, and where the loop keeps
+#: its own working state is not that.
+STATE_VAR = "MONITORING_STATE"
 PUBLISHED_VAR = "MONITORING_PUBLISHED"
 HIGH_WATER_VAR = "MONITORING_HIGH_WATER"
 SWITCHES_VAR = "MONITORING_SWITCHES"
+
+#: The readings the controller acts on. Overridable for the same reason as
+#: the three above, and it is the one that makes a dry run worth running
+#: anywhere else: without it a machine with no /run/monitoring can never see
+#: a reading, so every preview comes back with nothing latched and looks
+#: reassuring whatever the node file says.
+READINGS_VAR = "MONITORING_READINGS"
 
 #: The loop refuses to start without a boot identity (see loop.LoopError),
 #: read from a kernel file that does not exist on every machine either. A
@@ -85,6 +94,40 @@ def _loop_interval(node):
         raise config.ConfigError("%s: %s" % (node.path, exc))
 
 
+def _readings_reader(boot):
+    """A reader for a relocated readings directory, or None for the default.
+
+    The boot identity has to go in as well. A reading is aged against the
+    boot it was stamped in, so a reader that leaves it to be looked up finds
+    nothing on a machine with no kernel identity and reports every reading
+    as infinitely old. Every tier then stays unlatched and the preview comes
+    back reassuring whatever the node file says, which is the most
+    misleading answer this command can give.
+    """
+    directory = os.environ.get(READINGS_VAR)
+    if not directory:
+        return None
+    return lambda: files.read_readings(
+        directory, this_boot=boot or files.boot_id())
+
+
+def _refuse_if_control_is_off(node):
+    """Refuse to drive a relay on a node whose control block is switched off.
+
+    The validator reads the loads whether or not control is enabled, which is
+    what lets a dry run preview a block before it is trusted. Driving one is
+    different: `enabled: false` in a node file is somebody saying this
+    machine does not control anything, and a hand run that energized a pin
+    anyway would be the file and the hardware disagreeing with nothing to
+    show which won.
+    """
+    if not node.control.get("enabled"):
+        raise config.ConfigError(
+            "%s has control disabled, so nothing here will drive a relay. "
+            "Use dry-run to see what it would decide, or set "
+            "control.enabled: true in the node file" % node.path)
+
+
 def _build_machine(node, relays=None):
     """A Loop for this node, with every path this binary can relocate set.
 
@@ -96,7 +139,8 @@ def _build_machine(node, relays=None):
         node, {"latitude": where["latitude"],
                "longitude": where["longitude"]}, where["zone"],
         relays=relays,
-        state_path=node.control.get("state_file"),
+        state_path=os.environ.get(STATE_VAR),
+        readings=_readings_reader(os.environ.get(BOOT_VAR)),
         published_path=os.environ.get(PUBLISHED_VAR),
         high_water_path=os.environ.get(HIGH_WATER_VAR),
         boot=os.environ.get(BOOT_VAR))
@@ -135,37 +179,6 @@ def _suns_today(location, zone, today):
     return out
 
 
-def _permits_at(schedule, when, suns):
-    """A timeless copy of decide.py's own schedule evaluator, for display.
-
-    Not imported: decide._permits is private, and takes a clock-trust flag
-    and a monotonic dwell that have nothing to do with printing a preview of
-    today. One thing is deliberately different from decide.py's own
-    arithmetic: a solar offset is added here as seconds, which is what
-    spec.py's _duration actually hands a ladder. decide.py adds it as though
-    it were a timedelta, which only test doubles that build a spec by hand
-    rather than through spec.load_spec have ever supplied.
-    """
-    kind = schedule["type"]
-    if kind == "never":
-        return False
-    if kind == "clock":
-        start, end = schedule["on_from"], schedule["on_to"]
-        minute = when.hour * 60 + when.minute
-        if start <= end:
-            return start <= minute < end
-        return minute >= start or minute < end
-    for day in suns:
-        for window in schedule["on_windows"]:
-            begin = day[window["from"][0]] + datetime.timedelta(
-                seconds=window["from"][1])
-            finish = day[window["to"][0]] + datetime.timedelta(
-                seconds=window["to"][1])
-            if begin <= when < finish:
-                return True
-    return False
-
-
 def _on_periods(tiers, suns, today, zone):
     """Minutes of `today`, in `zone`, every one of `tiers` permits running.
 
@@ -190,7 +203,7 @@ def _on_periods(tiers, suns, today, zone):
     start = None
     moment = midnight
     while moment < end_of_day:
-        permitted = all(_permits_at(tier["schedule"], moment, suns)
+        permitted = all(decide.permitted_at(tier["schedule"], moment, suns)
                         for tier in tiers)
         if permitted and not on:
             start, on = moment, True
@@ -288,6 +301,7 @@ def _run(machine, interval, should_stop, sleep=time.sleep):
 def cmd_run(args):
     try:
         node = config.load(args.node, known_drivers=driver_registry.names())
+        _refuse_if_control_is_off(node)
         interval = _loop_interval(node)
         machine = _build_machine(node)
     except (config.ConfigError, spec.SpecError,
@@ -317,6 +331,7 @@ def cmd_run(args):
 def cmd_once(args):
     try:
         node = config.load(args.node, known_drivers=driver_registry.names())
+        _refuse_if_control_is_off(node)
         machine = _build_machine(node)
     except (config.ConfigError, spec.SpecError,
             location.LocationError) as exc:
@@ -346,7 +361,7 @@ def cmd_dry_run(args):
         # later. The two can differ by a fraction of a second; this display
         # only needs today's date, not a time correct to the second.
         local_now = datetime.datetime.now(machine.zone)
-        decisions = machine.once(apply=False)
+        decisions = machine.once(apply=False, persist=False)
         _print_decisions(decisions, machine=machine, local_now=local_now)
         # Belt and suspenders alongside apply=False above: `levels` only
         # exists on relay.Pretend, the double that records instead of
@@ -370,6 +385,31 @@ def _read_switches():
 
 def _write_switches(switches):
     files.write_switches(switches, os.environ.get(SWITCHES_VAR))
+
+
+def _expiry_text(expires, now, zone):
+    """One override's expiry, written the way it was set.
+
+    An override is set against the site's zone, so printing it against the
+    machine's system zone would answer a different question from the one the
+    operator asked. A Pi left at the Debian default has a system zone of UTC,
+    which at this site is five or six hours out: long enough for somebody to
+    read "until 09:00" and stand in a dark blind at dawn.
+
+    The zone may be absent, because this prints on a machine whose location
+    file might not be written yet, and a status command has to keep working
+    where a controller could not start. Then it says so rather than naming an
+    hour it cannot place.
+    """
+    if not isinstance(expires, (int, float)) or isinstance(expires, bool):
+        return "with no readable expiry, so treated as expired"
+    if zone is None:
+        return ("%s at an hour this machine cannot place, because it cannot "
+                "read its location file" % (
+                    "expired" if now >= expires else "set to expire"))
+    stamp = datetime.datetime.fromtimestamp(expires, zone).strftime(
+        "%Y-%m-%d %H:%M")
+    return "expired %s" % stamp if now >= expires else "until %s" % stamp
 
 
 def cmd_override(args, override_parser):
@@ -401,7 +441,21 @@ def cmd_override(args, override_parser):
         # override with no expiry is a force with no backstop.
         override_parser.error(
             "an override must carry an expiry: give --for (such as 8h) or "
-            "--until (such as \"2026-10-18 09:00\")")
+            "--until (such as \"YYYY-MM-DD HH:MM\")")
+
+    # The zone the loop's own schedules are placed against, not this
+    # machine's system zone. A Pi left at the Debian default zone has a
+    # system zone of UTC, and reading --until against that would set an
+    # expiry hours away from the one actually printed back, with the
+    # operator none the wiser until the load dies early or late. Read the
+    # same way every other subcommand here does, and fail the same way
+    # too: an expiry nobody can place against the site is not worth
+    # writing.
+    try:
+        zone = location.read()["zone"]
+    except location.LocationError as exc:
+        sys.stderr.write("%s\n" % exc)
+        return 2
 
     now = time.time()
     if args.for_:
@@ -416,19 +470,22 @@ def cmd_override(args, override_parser):
             override_parser.error(
                 "--until needs a timestamp written as "
                 "\"YYYY-MM-DD HH:MM\", found %r" % args.until)
-        # Naive, and read as this machine's own local time. The command
-        # runs on the node it affects, so there is no second zone to
-        # reconcile it against.
-        expires = when.astimezone().timestamp()
+        # Naive, and read as the site's own local time -- the zone the
+        # control loop's schedules run in, not whatever zone this machine's
+        # clock happens to be set to.
+        expires = when.replace(tzinfo=zone).timestamp()
 
     switches = _read_switches()
     loads = dict(switches["loads"])
     loads[name] = {"force": state, "expires_epoch": expires}
     _write_switches(dict(switches, loads=loads))
-    sys.stdout.write("%s: forced %s until %s\n" % (
-        name, state,
-        datetime.datetime.fromtimestamp(expires).astimezone()
-            .strftime("%Y-%m-%d %H:%M")))
+    # The same formatter the status listing uses, so the line confirming an
+    # override and the line reporting it later cannot disagree about the
+    # hour. Two formatters would be two chances to pick a zone, and an
+    # operator reading two different answers has no way to tell which one
+    # the loop will act on.
+    sys.stdout.write("%s: forced %s %s\n" % (
+        name, state, _expiry_text(expires, time.time(), zone)))
     return 0
 
 
@@ -449,6 +506,13 @@ def cmd_shedding(args):
     sys.stdout.write("shedding: %s\n"
                      % ("on" if switches["shedding_enabled"] else "off"))
 
+    # Absent rather than fatal. Printing whether shedding is on is the job
+    # here, and it has to work on a machine where no controller could start.
+    try:
+        zone = location.read()["zone"]
+    except location.LocationError:
+        zone = None
+
     now = time.time()
     any_override = False
     for name in sorted(switches["loads"]):
@@ -457,17 +521,9 @@ def cmd_shedding(args):
                 "on", "off"):
             continue
         any_override = True
-        expires = entry.get("expires_epoch")
-        if isinstance(expires, (int, float)) and not isinstance(
-                expires, bool):
-            stamp = (datetime.datetime.fromtimestamp(expires).astimezone()
-                    .strftime("%Y-%m-%d %H:%M"))
-            when_text = ("expired %s" % stamp if now >= expires
-                        else "until %s" % stamp)
-        else:
-            when_text = "with no readable expiry, so treated as expired"
         sys.stdout.write("override: %s forced %s, %s\n" % (
-            name, entry["force"], when_text))
+            name, entry["force"],
+            _expiry_text(entry.get("expires_epoch"), now, zone)))
     if not any_override:
         sys.stdout.write("override: none active\n")
     return 0
@@ -514,7 +570,7 @@ def build_parser():
     override_p.add_argument(
         "--until", metavar="TIMESTAMP",
         help="the local time the force lasts until, such as "
-             "\"2026-10-18 09:00\"")
+             "a local time written as \"YYYY-MM-DD HH:MM\"")
     override_p.set_defaults(override_parser=override_p)
 
     shedding_p = subparsers.add_parser(
