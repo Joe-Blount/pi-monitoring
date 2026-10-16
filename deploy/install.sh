@@ -528,7 +528,12 @@ WANTS
     case "$CONTROL_WANTED" in
     yes)
         systemctl enable monitoring-control >/dev/null 2>&1 || true
-        systemctl restart monitoring-control
+        # Guarded, because errexit makes a bare failing command end the
+        # script. A restart that fails would otherwise exit here, before the
+        # check below that exists to report it as non-fatal, so the one
+        # outcome this whole block is written to handle could never be
+        # reached.
+        systemctl restart monitoring-control || true
         sleep 2
         if systemctl is-active --quiet monitoring-control; then
             echo "    monitoring-control is running"

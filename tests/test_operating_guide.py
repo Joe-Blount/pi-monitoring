@@ -76,16 +76,25 @@ def test_every_collect_flag_the_guide_shows_exists_in_bin_collect():
 
 def _control_subcommands_in_guide():
     """Every word the guide shows right after "control" inside a code block,
-    including inside a quoted pattern such as `pkill -f "control run"`."""
+    including behind a sudo prefix and inside a quoted pattern such as
+    `pkill -f "control run"`.
+
+    The sudo prefix matters to this parser rather than only to the reader: an
+    anchored match would find nothing once the guide shows the commands the
+    way somebody has to type them, and every subcommand would silently stop
+    being checked against bin/control.
+    """
     subcommands = set()
     for line in CODE_LINES:
         text = line
         if text.startswith('"'):
             text = text[1:]
+        if text.startswith("sudo "):
+            text = text[len("sudo "):]
         match = re.match(r'control ([a-z][a-z-]*)', text)
         if match:
             subcommands.add(match.group(1))
-        for quoted in re.findall(r'"control ([a-z][a-z-]*)', line):
+        for quoted in re.findall(r'"(?:sudo )?control ([a-z][a-z-]*)', line):
             subcommands.add(quoted)
     return subcommands
 
@@ -107,6 +116,23 @@ def test_every_control_subcommand_the_guide_shows_exists_in_bin_control(
         "`control %s --help` exited %d, so %r is not a subcommand bin/control "
         "recognises:\n%s" % (subcommand, result.returncode, subcommand,
                              result.stderr))
+
+
+def test_every_control_command_the_guide_shows_carries_sudo():
+    """The overrides, the shedding switch and the readings the controller
+    decides from all live where only the service user may read and write.
+
+    A command shown without it fails with a permission error for the person
+    this guide is written for: somebody standing at a Pi, logged in as
+    themselves, with nobody to ask. The installer puts no login user in the
+    service group, so being told to type the command that cannot work is
+    worse than being told nothing.
+    """
+    shown = [line for line in CODE_LINES
+             if line.startswith("control ") or line.startswith("sudo control ")]
+    assert shown, "the guide shows no control command, so this proves nothing"
+    bare = [line for line in shown if not line.startswith("sudo ")]
+    assert bare == [], "shown without sudo: %s" % "; ".join(bare)
 
 
 # -- file paths -----------------------------------------------------------
@@ -234,37 +260,62 @@ def readable_text():
             continue
 
 
+#: The forbidden literals, assembled rather than written out.
+#:
+#: Each rule below applies to every tracked file, this one included, so a
+#: guard that spelled its own target would have to exempt itself and an
+#: exemption is a hole: the one file nobody checks is the file most likely to
+#: be edited when a rule is being worked around. Built from pieces, these
+#: never appear in the repository, so nothing needs exempting and the guards
+#: cover themselves.
+EM_DASH = chr(0x2014)
+FORBIDDEN_NAMES = ("cl" + "aude", "anthro" + "pic", "chat" + "gpt",
+                   "cop" + "ilot", "assist" + "ant")
+
+#: Anything more precise about this place than the tenth of a degree the
+#: repository is allowed to hold. Checked as text rather than only on the
+#: keys that carry a value, because a position is published just as
+#: completely by a worked example in a comment, an error message or a test
+#: docstring, and in degrees and minutes it does not look like a coordinate
+#: at all.
+PRECISE_DEGREES = re.compile(r"-?\b(?:37|97)\.[0-9]{2,}")
+
+
 def test_no_tracked_file_uses_an_em_dash():
-    """Two hyphens instead, everywhere, because it is a rule about the
-    writing rather than about one document. Checked across the repository
-    because the character arrives by paste and by autocorrect, and the place
-    it lands is whichever file was being edited at the time.
-
-    The exception is this file, which has to contain the character in order
-    to look for it.
-    """
+    """Two hyphens instead, everywhere. It is a rule about the writing
+    rather than about one document, and the character arrives by paste and
+    by autocorrect, so the file it lands in is whichever one was open."""
     found = [str(path.relative_to(REPO)) for path, text in readable_text()
-             if "—" in text and path.resolve() != pathlib.Path(
-                 __file__).resolve()]
-    assert found == [], "em dash in %s" % ", ".join(found)
+             if EM_DASH in text]
+    assert found == [], "em dash in %s" % ", ".join(sorted(found))
 
 
-def test_no_tracked_file_mentions_an_assistant():
+def test_no_tracked_file_names_a_model_or_its_maker():
     """The work stands on its own. Checked across the repository rather than
-    in the guide alone, since the names turn up in a comment or a commit
-    body as readily as in prose.
+    in the guide alone, since a name turns up in a comment as readily as in
+    prose.
 
-    This file is exempt for the same reason as above.
+    The identifiers here are deliberately neutral. This guard covers its own
+    file, so a name spelled out to describe the rule would trip it, and the
+    answer to that is a better name rather than an exemption.
     """
-    words = ("claude", "anthropic", "chatgpt", "copilot", "assistant")
     found = []
     for path, text in readable_text():
-        if path.resolve() == pathlib.Path(__file__).resolve():
-            continue
         lowered = text.lower()
         found += ["%s: %s" % (path.relative_to(REPO), word)
-                  for word in words if word in lowered]
-    assert found == [], "; ".join(found)
+                  for word in FORBIDDEN_NAMES if word in lowered]
+    assert found == [], "; ".join(sorted(found))
+
+
+def test_no_tracked_file_carries_a_position_more_precise_than_agreed():
+    """A tenth of a degree is about ten kilometres of fuzz and under a
+    minute of error in a sunrise, which is the whole precision this
+    repository may hold. It is public."""
+    found = []
+    for path, text in readable_text():
+        for number in set(PRECISE_DEGREES.findall(text)):
+            found.append("%s: %s" % (path.relative_to(REPO), number))
+    assert found == [], "; ".join(sorted(found))
 
 
 def test_the_guide_links_to_bringup_for_the_dht_explanation():
@@ -280,10 +331,10 @@ def test_the_readme_links_to_the_guide():
 
 
 def test_the_guide_names_the_real_service_unit():
-    """The guide was written before the unit existed and hedged by telling
-    the reader to go and find its name. Naming it is only an improvement
-    while the name is right, and a unit renamed in deploy with the guide left
-    behind sends somebody hunting for a service that is not there.
+    """Naming the unit is only a kindness while the name is right. A unit
+    renamed under deploy with the guide left behind sends somebody standing
+    at a machine hunting for a service that is not there, which is worse
+    than telling them to look it up.
     """
     unit = REPO / "deploy" / "monitoring-control.service"
     assert unit.is_file(), "the unit this guide names does not exist"

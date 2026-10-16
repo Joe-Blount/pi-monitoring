@@ -179,8 +179,8 @@ def parse_basic(body):
         "cycles": float(_unsigned(body, 8)),
         "protection_flags": float(_unsigned(body, 16)),
         # Which cells the management system is actively balancing, as a
-        # bitfield across two sixteen bit words. Zero means none. Worth having
-        # on a site whose balance problems have already cost it batteries.
+        # bitfield across two sixteen bit words. Zero means none. Worth
+        # having on a site where cell balance is what kills packs.
         "balancing_flags": float((_unsigned(body, 14) << 16) | _unsigned(body, 12)),
         "state_of_charge_pct": float(body[19]),
         # Bit 0 is the charge switch, bit 1 the discharge switch.

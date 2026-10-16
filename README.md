@@ -32,9 +32,9 @@ credentials and no database.
 
 **Telegraf is the agent**, not something this project reimplements. Scheduling,
 buffering through an outage, retry, batching and authentication are exactly the
-parts that are tedious to write and easy to get wrong, and getting them wrong
-is how an earlier version of this system silently ignored authentication
-failures for an unknown length of time.
+parts that are tedious to write and easy to get wrong, and the way they go
+wrong is quiet: an authentication failure that nothing surfaces can discard
+readings for an unknown length of time while every machine looks healthy.
 
 **Control is separate from telemetry.** On a site that switches loads, the
 controller is its own supervised service, not a telegraf input. It reads only

@@ -709,7 +709,22 @@ def test_the_install_script_stops_the_controller_when_control_is_switched_off():
 def test_a_controller_that_will_not_start_does_not_fail_the_install():
     """The same rule as a dead sensor: a five dollar part, or one service,
     must never block a software update on a machine nobody can reach. Every
-    load sits at its wired fail-safe while the controller is down."""
+    load sits at its wired fail-safe while the controller is down.
+
+    Asserted on the guard rather than on the absence of an explicit exit.
+    Under errexit a bare failing command ends the script with no exit line
+    anywhere, so a check for one passes while the restart aborts the install
+    before the branch written to report it non-fatally can run.
+    """
+    lines = INSTALL_CODE.splitlines()
+    restarts = [l.strip() for l in lines
+                if "systemctl restart monitoring-control" in l]
+    assert restarts, "found no restart to check, so this proves nothing"
+    for statement in restarts:
+        assert "||" in statement or "&&" in statement, (
+            "unguarded under set -e, so a controller that will not start "
+            "ends the install here: %s" % statement)
+
     section = INSTALL_CODE[INSTALL_CODE.index("monitoring-control is running"):]
     section = section[:section.index("echo \"==> restarting telegraf\"")]
     assert "exit 1" not in section, (

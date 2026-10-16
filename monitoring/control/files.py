@@ -68,9 +68,9 @@ HIGH_WATER = os.path.join(PERSIST_DIR, "clock-high-water.json")
 #: Every path below is resolved when the function is called, never bound as a
 #: default argument. A default is evaluated once, when the module is imported,
 #: so a caller or a test that redirects one of the constants above would be
-#: silently ignored and would read and write the real paths instead. That trap
-#: has already cost this project once, in the driver base class, which is why
-#: it is written down here rather than discovered again.
+#: silently ignored and would read and write the real paths instead. It is
+#: written down because the failure is quiet in the worst way: the test still
+#: passes, answered out of the real directory.
 def boot_id():
     """An identifier for this boot, or None where the kernel does not say.
 

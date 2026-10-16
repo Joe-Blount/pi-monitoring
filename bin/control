@@ -73,10 +73,10 @@ BOOT_VAR = "MONITORING_BOOT_ID"
 # -- where the machine is ---------------------------------------------------
 #
 # Read from its own file rather than from the node file. A node file is the
-# natural home for a property of the machine, and that is where this started,
-# but node files are committed and this repository is public, so coordinates
-# in one would publish the owner's location. See
-# monitoring/control/location.py.
+# natural home for a property of the machine, which is what makes it the
+# tempting place to put this, but node files are committed and this
+# repository is public, so a coordinate in one publishes the owner's
+# location. See monitoring/control/location.py.
 
 
 def _loop_interval(node):
@@ -141,6 +141,10 @@ def _build_machine(node, relays=None):
         relays=relays,
         state_path=os.environ.get(STATE_VAR),
         readings=_readings_reader(os.environ.get(BOOT_VAR)),
+        # The same file the override and shedding subcommands write. Without
+        # this the loop reads the default path while those write elsewhere,
+        # so a dry run shows decisions taken against switches nobody set.
+        switches=_read_switches,
         published_path=os.environ.get(PUBLISHED_VAR),
         high_water_path=os.environ.get(HIGH_WATER_VAR),
         boot=os.environ.get(BOOT_VAR))

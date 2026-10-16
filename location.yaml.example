@@ -14,8 +14,10 @@
 # meridian: without it every sunrise is half an hour out, which for a window
 # built around legal shooting light is the whole feature.
 #
-# Degrees and decimals, not degrees and minutes. 37 degrees 2 minutes north
-# is 37.05, not 37.02. West and south are negative.
+# Degrees and decimals, not degrees and minutes. 40 degrees 30 minutes north
+# is 40.5, not 40.30. West and south are negative. The example here is not
+# this site, and neither is that one: a worked example carrying any part of
+# a real position, even in another notation, publishes it.
 latitude: 37.0
 longitude: -97.4
 

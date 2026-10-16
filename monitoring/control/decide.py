@@ -464,6 +464,17 @@ def _override(name, switches, now, clock_trusted):
 def _apply_switches(decision, name, switches, now, clock_trusted):
     """Let an operator's switches override a state-of-charge decision.
 
+    Returns the decision and whether an operator instruction is in force for
+    this load, which is what exempts it from the run and off timers.
+
+    That second value is deliberately not read off the reason code. An
+    instruction can be in force and still leave the reason code saying
+    something else: with shedding switched off and the ladder already
+    wanting the load on, the reason is whatever the ladder said, and keying
+    the exemption on the code would let a timer hold the load down anyway.
+    The operator would then watch their switch do nothing for the rest of
+    the minimum off time.
+
     Never reached when the floor has fired. A floor an override can defeat is
     not a floor, and the number it defends is the one standing between a
     forgotten command and a damaged cell.
@@ -472,48 +483,45 @@ def _apply_switches(decision, name, switches, now, clock_trusted):
     if force is not None:
         return decision._replace(
             connected=(force == "on"), reason_code=OVERRIDE,
-            reason="forced %s by an operator" % force)
+            reason="forced %s by an operator" % force), True
 
-    if not switches.get("shedding_enabled", True) and not decision.connected:
-        return decision._replace(
-            connected=True, reason_code=SHEDDING_DISABLED,
-            reason="would shed (%s) but shedding is switched off"
-                   % decision.reason)
-    return decision
+    if not switches.get("shedding_enabled", True):
+        if not decision.connected:
+            return decision._replace(
+                connected=True, reason_code=SHEDDING_DISABLED,
+                reason="would shed (%s) but shedding is switched off"
+                       % decision.reason), True
+        return decision, True
+    return decision, False
 
 
 # -- the timers -------------------------------------------------------------
 
-#: Reasons the run and off timers do not apply to.
-#:
-#: The timers exist to stop the ladder cycling a recorder as a battery
-#: wavers around a threshold. They are not a veto on the two things that
-#: outrank the ladder.
-#:
-#: The floor is exempt because a minimum run time holding a load up while a
-#: cell sits under its floor would defeat the one rule with nothing above it.
-#:
-#: The two operator reasons are exempt because a person is standing at the
-#: machine. An override and the shedding switch are the controls somebody
-#: reaches for when the automation is wrong, and a control that does nothing
-#: for half an hour reads as a broken control: the next move is to pull the
-#: relay wire, which loses the fail-safe as well. Cycling a recorder once, by
-#: hand, on purpose, is the smaller cost.
-UNTIMED = (FLOOR, OVERRIDE, SHEDDING_DISABLED)
-
-
-def _hold(decision, spec, mono_now, state):
+def _hold(decision, spec, mono_now, state, untimed=False):
     """Apply the minimum run and minimum off times.
 
     A recorder should not be cycled repeatedly, so a change of mind inside
-    those windows waits. What the timers do not apply to is in ``UNTIMED``.
+    those windows waits.
+
+    The timers exist to stop the ladder cycling a recorder as a battery
+    wavers around a threshold. They are not a veto on the two things that
+    outrank the ladder, and `untimed` says one of those is in play.
+
+    The floor is one: a minimum run time holding a load up while a cell sits
+    under its floor would defeat the one rule with nothing above it.
+
+    An operator instruction is the other, because a person is standing at the
+    machine. An override and the shedding switch are the controls somebody
+    reaches for when the automation is wrong, and a control that does nothing
+    for half an hour reads as a broken control: the next move is to pull the
+    relay wire, which loses the fail-safe as well. Cycling a recorder once,
+    by hand, on purpose, is the smaller cost.
     """
     commanded = state.get("commanded")
     since = state.get("since")
     new_state = dict(state)
 
-    if decision.reason_code in UNTIMED or commanded is None or not isinstance(
-            since, (int, float)):
+    if untimed or commanded is None or not isinstance(since, (int, float)):
         new_state["commanded"] = decision.connected
         if commanded is not decision.connected:
             new_state["since"] = mono_now
@@ -574,8 +582,9 @@ def decide(local_now, mono_now, clock_trusted, readings, switches,
             decision, load_state = ladder_decision(
                 name, spec, readings, local_now, mono_now, suns,
                 clock_trusted, prior)
-            if decision.reason_code != FLOOR:
-                decision = _apply_switches(
+            untimed = decision.reason_code == FLOOR
+            if not untimed:
+                decision, untimed = _apply_switches(
                     decision, name, switches, local_now, clock_trusted)
         else:
             decision = Decision(
@@ -583,8 +592,10 @@ def decide(local_now, mono_now, clock_trusted, readings, switches,
                 "load type %r is declared but this controller does not drive "
                 "it" % spec["type"], None)
             load_state = dict(prior)
+            untimed = False
 
-        decision, load_state = _hold(decision, spec, mono_now, load_state)
+        decision, load_state = _hold(decision, spec, mono_now, load_state,
+                                     untimed)
         decisions[name] = decision
         new_state[name] = load_state
 

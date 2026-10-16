@@ -333,8 +333,8 @@ def parse(messages):
         out["cell_spread_volts"] = round((max(cells) - min(cells)) / 1000.0, 3)
         # Each cell by itself. The summary says the pack is fine; only the
         # individual series shows one cell walking away from the others over
-        # weeks, which is the failure that has already cost this site a pair
-        # of batteries and currently has no early warning.
+        # weeks. That drift is what kills a pack at this site, and the
+        # summary fields give no warning of it at all.
         for number, millivolts in enumerate(cells, start=1):
             out["cell_%02d_volts" % number] = round(millivolts / 1000.0, 3)
 

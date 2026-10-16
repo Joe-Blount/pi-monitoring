@@ -105,7 +105,20 @@ RestartSec=10
 # gpio, i2c, dialout and bluetooth memberships install.sh grants telegraf
 # specifically so this controller and the collectors can share them.
 NoNewPrivileges=true
-ProtectHome=true
+
+# read-only, not true. The installer symlinks /opt/monitoring at wherever it
+# was run from, and a copy in a home directory is a documented way to install
+# this, so ExecStart can resolve through /home. ProtectHome=true replaces
+# /home with an empty directory for this service, which would turn that
+# layout into a unit that cannot start at all: the executable it is told to
+# run is simply not there, and the failure names a path that exists and is
+# readable to anyone who goes looking by hand.
+#
+# read-only keeps what the setting is for. This service has no business
+# writing to anybody's home directory, and its own writable state is
+# elsewhere: HOME is set to /var/lib/monitoring above, and ReadWritePaths
+# below lists the only two directories it may write at all.
+ProtectHome=read-only
 
 # Everything except /proc, /sys and /dev becomes read-only, and
 # ReadWritePaths reopens exactly the two directories files.py names: the

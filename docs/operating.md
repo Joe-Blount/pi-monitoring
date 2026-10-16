@@ -20,6 +20,12 @@ collect --node <file> --list
 It also prints `control: enabled` or `control: disabled`. The commands below
 that touch a relay only do anything on a machine where control is enabled.
 
+Every `control` command below is shown with `sudo`, and needs it. The
+overrides, the shedding switch and the readings the controller decides from
+all live where only the service user can read and write them, so the same
+command without `sudo` stops with a permission error rather than doing
+nothing silently. `collect` needs no `sudo`.
+
 ---
 
 ## Two things that look like a fault and are not
@@ -46,20 +52,20 @@ sensor. The full explanation, and the kernel version that fixes it, is in
 ## Force the cameras on right now
 
 ```
-control override cameras on --for 8h
+sudo control override cameras on --for 8h
 ```
 
 It runs for the time you gave and then returns to normal control on its own.
 Clear it sooner:
 
 ```
-control override clear cameras
+sudo control override clear cameras
 ```
 
 ## Force the cameras off
 
 ```
-control override cameras off --until "YYYY-MM-DD HH:MM"
+sudo control override cameras off --until "YYYY-MM-DD HH:MM"
 ```
 
 Always give an end time. An override with no end time is treated as already
@@ -69,20 +75,20 @@ than none.
 ## Stop the controller shedding anything, without stopping the controller
 
 ```
-control shedding off
+sudo control shedding off
 ```
 
 Every load currently shed by a tier is handed back immediately. Check the
 state with:
 
 ```
-control shedding status
+sudo control shedding status
 ```
 
 Turn it back on the same way:
 
 ```
-control shedding on
+sudo control shedding on
 ```
 
 This switch cannot save a battery from itself. A cell under its own voltage
@@ -112,7 +118,7 @@ that is per load. Cameras keep running. Irrigation and heating stay off.
 ## See what the controller would do, without letting it touch a relay
 
 ```
-control dry-run --node <file>
+sudo control dry-run --node <file>
 ```
 
 It reads the same inputs and reaches the same decision as a real pass, and

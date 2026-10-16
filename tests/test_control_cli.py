@@ -275,10 +275,15 @@ def test_run_refuses_an_unknown_timezone(tmp_path):
 
 
 def test_run_refuses_degrees_and_minutes_written_as_a_decimal(tmp_path):
-    """Not a refusal this can make in general: 37.02 is a valid latitude.
-    What it can do is say which mistake it is, since writing 37 degrees 2
-    minutes as 37.02 rather than 37.05 is the error somebody converting by
-    hand actually makes, and it is two miles of it."""
+    """Not a refusal this can make in general, because the mistaken form is
+    itself a valid latitude. What it can do is name the mistake, since
+    writing degrees and minutes where degrees and decimals belong is the
+    error somebody converting by hand actually makes, and at this latitude
+    it is a couple of miles of it.
+
+    The worked example in that message is deliberately nowhere near this
+    site. A number carrying part of a real position publishes it whatever
+    notation it is written in."""
     node = controlled_node(tmp_path)
     path = location_file(tmp_path, "latitude: ninety\nlongitude: -97.4\n"
                                    "timezone: America/Chicago\n")
@@ -617,6 +622,33 @@ def test_shedding_status_reports_an_active_override(tmp_path):
     assert result.returncode == 0, result.stderr
     assert "cameras" in result.stdout
     assert "forced on" in result.stdout
+
+
+def test_a_dry_run_reads_the_switches_the_override_command_writes(tmp_path):
+    """One file, written by one subcommand and read by the loop.
+
+    A dry run exists to show what the controller would do, so it has to see
+    the same overrides the controller would. Reading a different file means
+    an operator sets an override, is told it is set, runs a dry run to check
+    it, and is shown a decision taken as though they had set nothing.
+
+    An override is the switch this can assert through the binary. The
+    shedding switch needs a trusted clock before it changes any decision,
+    and a trusted clock is a property of the machine rather than something a
+    subprocess can be handed, so its behaviour is pinned in the decision's
+    own tests instead.
+    """
+    node = controlled_node(tmp_path)
+    env = {"MONITORING_SWITCHES": str(switches_path(tmp_path))}
+
+    set_result = run_control(tmp_path, "override", "cameras", "off",
+                             "--for", "8h", extra_env=env)
+    assert set_result.returncode == 0, set_result.stderr
+
+    seen = run_control(tmp_path, "dry-run", "--node", str(node),
+                       extra_env=env)
+    assert seen.returncode == 0, seen.stderr
+    assert "operator" in seen.stdout, seen.stdout
 
 
 def test_the_status_listing_names_the_same_hour_the_override_was_set_for(

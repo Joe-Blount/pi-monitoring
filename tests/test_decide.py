@@ -1124,6 +1124,70 @@ def test_switching_shedding_off_hands_a_load_back_immediately():
     assert decision.reason_code == decide.SHEDDING_DISABLED
 
 
+def _held_by_the_off_timer_with_the_ladder_wanting_it_on():
+    """Shed by a tier, then inside the window again, with the off timer still
+    running.
+
+    This is the state an operator's switch has to be able to reach through,
+    and it is the state where the reason code does not mention them: the
+    ladder permits the load, so the reason is the ladder's, and only the
+    timer is holding it down.
+    """
+    state = {}
+    for step in range(LADDER["enter_after_readings"]):
+        decision, state = run(45.0, now=at(4, 30), mono=float(step),
+                              spec=TIMED, state=state)
+    decision, state = run(45.0, now=at(4, 40), mono=700.0, spec=TIMED,
+                          state=state)
+    assert not decision.connected, "expected the tier to have shed it"
+
+    decision, _ = run(45.0, now=at(5, 1), mono=760.0, spec=TIMED,
+                      state=dict(state))
+    assert not decision.connected
+    assert decision.reason_code == decide.HELD_BY_TIMER
+    return state
+
+
+def test_switching_shedding_off_reaches_through_the_off_timer():
+    """The switch has to work in the state an operator reaches for it.
+
+    A load shed by a tier and then held down by the off timer is still a load
+    shed by a tier as far as anybody standing at the machine is concerned,
+    and the guide promises it comes back immediately. Keying the exemption on
+    the reason code would miss this, because by now the reason belongs to the
+    ladder, which permits the load, and only the timer disagrees.
+    """
+    state = _held_by_the_off_timer_with_the_ladder_wanting_it_on()
+    decision, _ = run(45.0, now=at(5, 1), mono=760.0, spec=TIMED,
+                      state=state,
+                      switches={"shedding_enabled": False, "loads": {}})
+    assert decision.connected, decision.reason
+    assert decision.reason_code != decide.HELD_BY_TIMER
+
+
+def test_an_override_reaches_through_the_off_timer_as_well():
+    """The same state, the other control."""
+    state = _held_by_the_off_timer_with_the_ladder_wanting_it_on()
+    decision, _ = run(45.0, now=at(5, 1), mono=760.0, spec=TIMED,
+                      state=state,
+                      switches={"shedding_enabled": True,
+                                "loads": {"cameras": {
+                                    "force": "on",
+                                    "expires_epoch": LATER}}})
+    assert decision.connected, decision.reason
+    assert decision.reason_code == decide.OVERRIDE
+
+
+def test_shedding_switched_off_does_not_disturb_a_load_already_running():
+    """The switch stops loads being shed. It is not an instruction to do
+    anything to a load the ladder is happy with, and it must not report one
+    either, or every dashboard reads as though an operator intervened."""
+    decision, _ = settle(60.0, switches={"shedding_enabled": False,
+                                         "loads": {}})
+    assert decision.connected
+    assert decision.reason_code == decide.NONE
+
+
 def test_the_ladder_itself_is_still_held_by_the_timers():
     """The exemptions are for the floor and for a person, not a loophole that
     lets the ladder cycle a recorder as a battery wavers on a threshold."""

@@ -181,6 +181,36 @@ def test_the_unit_does_not_decline_to_start_on_a_condition():
             "failure" % directive.strip())
 
 
+def test_the_service_can_still_reach_an_install_under_a_home_directory():
+    """The installer symlinks /opt/monitoring at wherever it was run from,
+    and a copy in a home directory is a documented way to install this.
+
+    ProtectHome=true replaces /home with an empty directory for the service,
+    so that layout becomes a unit that cannot start at all: the executable
+    named in ExecStart is not there. The failure is especially unhelpful
+    because the path exists and is readable to anybody who checks by hand.
+    read-only keeps the part of the setting that matters, since this service
+    has no business writing to a home directory and its own writable state
+    is listed explicitly elsewhere.
+    """
+    assert _value("ProtectHome", UNIT) == "read-only", (
+        "ProtectHome must not hide /home from a service whose executable "
+        "can be reached through it")
+    assert "ExecStart=/opt/monitoring/" in UNIT, (
+        "this test is pinned to the path the installer links; if ExecStart "
+        "moved, check whether it can still be reached through a symlink")
+
+
+def test_the_installer_really_does_link_opt_monitoring_anywhere():
+    """The other half of the test above. It asserts a hardening setting is
+    loosened for a layout the installer creates, so it is only worth
+    anything while the installer still creates it."""
+    install = (REPO / "deploy" / "install.sh").read_text()
+    assert "ln -sfn" in install and "/opt/monitoring" in install, (
+        "nothing links /opt/monitoring any more, so ProtectHome could be "
+        "tightened again")
+
+
 def test_the_writable_paths_cover_everything_the_code_writes():
     """With ProtectSystem=strict the rest of the filesystem is read-only, so
     a path the code writes and this line omits fails at run time rather than

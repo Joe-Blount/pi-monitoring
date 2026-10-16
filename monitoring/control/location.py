@@ -10,9 +10,9 @@ built around legal shooting light, half an hour is the whole feature.
 Why it is not in the node file
 ------------------------------
 The node files are committed, and this repository is public. A node file is
-otherwise the right home for a property of the machine, and that is where
-this started, but it would publish the owner's coordinates to anyone who
-reads the repository.
+otherwise the right home for a property of the machine, which is what makes
+this the tempting place to put it, but a coordinate there is published to
+anyone who reads the repository.
 
 So it lives beside the credentials instead, in a file the install script
 creates and nothing commits, and the repository carries only an example.
@@ -109,8 +109,8 @@ def _degrees(where, raw, name, bounds):
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise LocationError(
             "%s: %s must be a number in degrees, found %r. Degrees and "
-            "decimals, not degrees and minutes: 37 degrees 2 minutes north "
-            "is 37.05, not 37.02" % (where, name, value))
+            "decimals, not degrees and minutes: 40 degrees 30 minutes north "
+            "is 40.5, not 40.30" % (where, name, value))
     value = float(value)
     low, high = bounds
     if not low <= value <= high:

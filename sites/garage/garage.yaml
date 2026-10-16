@@ -55,8 +55,7 @@ devices:
     params:
       address: "0B:9F:98:99:13:78"
       # A total budget for the whole exchange: scanning, connecting,
-      # every command and the disconnect. It used to bound only the
-      # connect, so the same number now means something stricter. A
+      # every command and the disconnect, not only the connect step. A
       # real read of this device takes about nine seconds, and the
       # node's slow devices together must fit the collector's 120
       # second timeout, counting five seconds of grace each.
