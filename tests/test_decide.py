@@ -7,6 +7,7 @@ any hour.
 """
 
 import datetime
+import itertools
 import zoneinfo
 
 import pytest
@@ -793,6 +794,58 @@ def test_a_recovered_owner_hands_the_floor_over_only_on_a_live_reading():
         {"shedding_enabled": True, "loads": {}}, {"cameras": spec}, state,
         SUNS)
     assert decisions["cameras"].connected, decisions["cameras"].reason
+
+
+#: Each floor source, at every position that means something to it: under
+#: its shedding bound, between the two bounds, clear of its restoring bound,
+#: and unreadable.
+FLOOR_CELLS = (3.10, 3.20, 3.30, None)
+FLOOR_PACKS = (12.1, 12.8, 13.6, None)
+
+
+def test_the_floor_never_lets_a_load_run_under_any_source_bound():
+    """The one invariant the floor exists for, over every path into it.
+
+    The hand-written tests above each walk one route. This walks all of them:
+    three conditions in sequence, from every combination of the two sources'
+    meaningful positions, each held several passes. The state machine has
+    enough memory in it -- which source owns the latch, whether it was
+    latched, the counters -- that reaching a bad state takes a particular
+    history rather than a particular reading, and a history is the thing a
+    hand-written test is least likely to guess.
+
+    A load connected while a readable source sits under its own shedding
+    bound is a fault whatever the route, so that is what is asserted.
+    """
+    spec = dict(SPEC, shed_ladder=dict(
+        TWO_SOURCE, enter_after_readings=1, restore_dwell=0.0))
+    bounds = {"bms": 3.15, "mppt": 12.6}
+
+    def readings(cell, pack):
+        return {"bms": {"fields": {
+                    "state_of_charge_pct": 90.0,
+                    **({} if cell is None else {"cell_min_volts": cell})},
+                    "age_seconds": 1.0},
+                "mppt": {"fields": (
+                    {} if pack is None else {"battery_volts": pack}),
+                    "age_seconds": 1.0}}
+
+    conditions = list(itertools.product(FLOOR_CELLS, FLOOR_PACKS))
+    for history in itertools.product(conditions, repeat=3):
+        state = {}
+        for cell, pack in history:
+            for _ in range(3):
+                decisions, state = decide.decide(
+                    at(12), 0.0, True, readings(cell, pack),
+                    {"shedding_enabled": True, "loads": {}},
+                    {"cameras": spec}, state, SUNS)
+                decision = decisions["cameras"]
+                under = [name for name, bound in bounds.items()
+                         if (cell if name == "bms" else pack) is not None
+                         and (cell if name == "bms" else pack) < bound]
+                assert not (decision.connected and under), (
+                    "connected with %s under bound, after %s: %s"
+                    % (", ".join(under), history, decision.reason))
 
 
 def test_either_floor_source_can_latch_on_its_own():
