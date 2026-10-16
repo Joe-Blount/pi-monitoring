@@ -5,6 +5,8 @@ exists because the alternative is a relay doing the opposite of what somebody
 meant, found weeks later from a gap in the data.
 """
 
+import datetime
+
 import pytest
 
 from monitoring.control import spec
@@ -95,9 +97,12 @@ def test_times_and_durations_are_converted_not_passed_through():
     ladder = parse()["shed_ladder"]
     assert ladder["tiers"][0]["schedule"]["on_from"] == 300
     assert ladder["tiers"][0]["schedule"]["on_to"] == 1320
+    # A solar offset comes out as a timedelta, not a number of seconds,
+    # because the decision adds it to a datetime. Every other duration here
+    # stays a float, since those are compared against a monotonic clock.
     window = ladder["tiers"][1]["schedule"]["on_windows"][0]
-    assert window["from"] == ("sunrise", -3600.0)
-    assert window["to"] == ("sunrise", 7200.0)
+    assert window["from"] == ("sunrise", datetime.timedelta(hours=-1))
+    assert window["to"] == ("sunrise", datetime.timedelta(hours=2))
 
 
 # -- a typo must not read as a comment --------------------------------------

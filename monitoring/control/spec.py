@@ -14,6 +14,8 @@ which this project has already been bitten by: the type yields no loads, and
 every test about that load passes by finding nothing to check.
 """
 
+import datetime
+
 from ..duration import DurationError
 from ..duration import seconds as _seconds
 from . import relay
@@ -223,8 +225,15 @@ def _schedule(where, raw):
             if event not in SOLAR_EVENTS:
                 _fail(at, "%s names %r; it must be one of %s"
                           % (edge, event, ", ".join(SOLAR_EVENTS)))
-            edges[edge] = (event, _duration(at, offset, "%s offset" % edge,
-                                            allow_negative=True))
+            # A timedelta, not a number of seconds. Every other duration
+            # here is compared against the monotonic clock and stays a
+            # float, but a solar offset is added to a datetime, and adding a
+            # float to a datetime raises rather than guessing at a unit.
+            # Converting at the point where the unit is known keeps the
+            # choice in one place.
+            edges[edge] = (event, datetime.timedelta(
+                seconds=_duration(at, offset, "%s offset" % edge,
+                                  allow_negative=True)))
         if (edges["from"][0] == edges["to"][0]
                 and edges["from"][1] >= edges["to"][1]):
             # Measured from the same event, so the comparison is exact. A

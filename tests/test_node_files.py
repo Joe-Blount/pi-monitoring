@@ -630,10 +630,13 @@ def test_the_shipped_camera_ladder_is_the_one_that_was_agreed():
         "type": "clock", "on_from": 5 * 60, "on_to": 22 * 60}
     assert ladder["tiers"][2]["schedule"] == {"type": "never"}
 
+    import datetime as _dt
     windows = ladder["tiers"][1]["schedule"]["on_windows"]
     assert windows == [
-        {"from": ("sunrise", -3600.0), "to": ("sunrise", 7200.0)},
-        {"from": ("sunset", -7200.0), "to": ("sunset", 3600.0)},
+        {"from": ("sunrise", _dt.timedelta(hours=-1)),
+         "to": ("sunrise", _dt.timedelta(hours=2))},
+        {"from": ("sunset", _dt.timedelta(hours=-2)),
+         "to": ("sunset", _dt.timedelta(hours=1))},
     ], "the deer movement windows"
 
     floor = ladder["floor"]["sources"]
@@ -674,7 +677,7 @@ def test_the_camera_windows_stay_inside_the_tier_above_them_all_year():
         for window in windows:
             for edge in ("from", "to"):
                 event, offset = window[edge]
-                when = events[event] + datetime.timedelta(seconds=offset)
+                when = events[event] + offset
                 minute = when.hour * 60 + when.minute
                 room = min(minute - clock_tier["on_from"],
                            clock_tier["on_to"] - minute)
