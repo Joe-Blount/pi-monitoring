@@ -11,6 +11,7 @@ Therefore silence always means failure, never intent.
 """
 
 import sys
+import threading
 import time
 
 from . import calibration, lineproto
@@ -22,11 +23,16 @@ from .drivers.base import DriverError
 class Result:
     """What came of asking one device for a reading."""
 
-    def __init__(self, device, lines=None, error=None, skipped=False):
+    def __init__(self, device, lines=None, error=None, skipped=False,
+                 stamp=None):
         self.device = device
         self.lines = lines or []
         self.error = error
         self.skipped = skipped
+        #: When this reading was taken, in nanoseconds. Carried so a failure
+        #: point can be stamped at the moment the failure was established
+        #: rather than at the moment the collection began.
+        self.stamp = stamp
 
     @property
     def ok(self):
@@ -138,12 +144,29 @@ def _cache(node, device, fields):
                 "from nothing: %s\n" % exc)
 
 
-def read_device(node, device, now_ns=None):
-    """Read one device. Never raises for a device fault."""
-    now_ns = _now_ns() if now_ns is None else now_ns
+def read_device(node, device, now_ns=None, clock=None):
+    """Read one device. Never raises for a device fault.
+
+    The reading is stamped when it completes, not when the collection
+    started. Those are the same thing for a sensor read in a millisecond and
+    very different for a Bluetooth pack that takes nine seconds: one
+    timestamp for a whole collection claims two devices were measured
+    together when they were tens of seconds apart, and a ratio computed from
+    the pair then measures the gap rather than the batteries.
+
+    `now_ns` pins the stamp, for a caller that genuinely wants one time for
+    everything. `clock` replaces the source of time, which is what a test
+    should do, because then production and the test take the same path.
+    """
+    clock = _now_ns if clock is None else clock
+
+    def stamp():
+        return clock() if now_ns is None else now_ns
 
     if not device.enabled:
-        return Result(device, lines=[disabled_point(node, device, now_ns)], skipped=True)
+        at = stamp()
+        return Result(device, lines=[disabled_point(node, device, at)],
+                      skipped=True, stamp=at)
 
     driver = None
     try:
@@ -155,12 +178,15 @@ def read_device(node, device, now_ns=None):
             # healthy and carrying no measurement at all. A read that produced
             # no value is a failed read.
             raise DriverError("the device returned no usable values")
+        at = stamp()
         _cache(node, device, fields)
-        return Result(device, lines=[point(node, device, fields, now_ns)])
+        return Result(device, lines=[point(node, device, fields, at)],
+                      stamp=at)
     except DriverError as exc:
-        return Result(device, error=str(exc))
+        return Result(device, error=str(exc), stamp=stamp())
     except Exception as exc:  # a driver bug must not look like a dead sensor
-        return Result(device, error="%s: %s" % (type(exc).__name__, exc))
+        return Result(device, error="%s: %s" % (type(exc).__name__, exc),
+                      stamp=stamp())
     finally:
         if driver is not None:
             try:
@@ -195,7 +221,22 @@ def poll_devices(node, speed="all"):
     return devices
 
 
-def poll(node, now_ns=None, out=None, err=None, speed="all"):
+def _new_lock():
+    """The lock that keeps concurrent writes from interleaving.
+
+    A named function rather than a bare constructor so a test can see that
+    the writes are taken under it. That guarantee has no black-box proxy: a
+    write to an in-memory stream is atomic under the interpreter lock and so
+    never interleaves in a test, while a write to the real pipe telegraf
+    reads is not, and what is at stake is half a line of protocol, which
+    telegraf rejects as a malformed point. "Usually fine" is not the
+    standard, so the mechanism is asserted instead of the symptom.
+    """
+    return threading.Lock()
+
+
+def poll(node, now_ns=None, out=None, err=None, speed="all", clock=None,
+         concurrent=False):
     """Read poll-mode devices in this one process.
 
     One process per interval rather than one per device. Several interpreters
@@ -203,39 +244,73 @@ def poll(node, now_ns=None, out=None, err=None, speed="all"):
     disturb a bit-banged sensor that is being read at the same moment, and the
     sensor is always the one that loses.
 
+    With `concurrent`, the devices are read at the same time rather than one
+    after another. That is for a group whose cost is waiting rather than
+    working: two Bluetooth packs are two separate connections to two separate
+    peripherals, so reading them together takes as long as the slower one
+    instead of the sum, and both readings land within a second or two of each
+    other instead of tens of seconds apart. Neither driver scans, so there is
+    no discovery to contend over, and each already runs its own event loop on
+    its own thread.
+
+    It is off by default and asked for explicitly, because it changes when a
+    reading is taken. The cheap sensors have nothing to gain from it: they
+    are read in milliseconds, and starting several at once is the kind of
+    contention the one-process rule above exists to avoid.
+
     Returns the number of lines written, which is what decides the exit
     code: anything written is worth keeping, including a point that reports a
     failure.
     """
     out = sys.stdout if out is None else out
     err = sys.stderr if err is None else err
-    now_ns = _now_ns() if now_ns is None else now_ns
-
+    devices = poll_devices(node, speed)
     written = 0
-    for device in poll_devices(node, speed):
-        result = read_device(node, device, now_ns)
-        if result.ok:
-            for one in result.lines:
-                out.write(one + "\n")
-                written += 1
-        else:
-            # Both: the point so it reaches a dashboard, the log line so it
-            # reaches whoever is reading journalctl at the time.
-            out.write(failure_point(node, device, result.error, now_ns) + "\n")
-            written += 1
-            err.write("device %s (%s): %s\n"
-                      % (device.name, device.driver,
-                         str(result.error)[:STDERR_REASON]))
+    lock = _new_lock()
 
-        # Flushed per device, not once at the end. Standard output to a pipe
-        # is block buffered, so a process killed on timeout while reading a
-        # later device would otherwise lose every reading already taken,
-        # including the points reporting the failures.
+    def emit(device, result):
+        """Write one device's outcome. Holds the lock, so lines never
+        interleave when several reads finish together."""
+        nonlocal written
+        with lock:
+            if result.ok:
+                for one in result.lines:
+                    out.write(one + "\n")
+                    written += 1
+            else:
+                # Both: the point so it reaches a dashboard, the log line so
+                # it reaches whoever is reading journalctl at the time.
+                out.write(failure_point(node, device, result.error,
+                                        result.stamp) + "\n")
+                written += 1
+                err.write("device %s (%s): %s\n"
+                          % (device.name, device.driver,
+                             str(result.error)[:STDERR_REASON]))
+
+            # Flushed as each device finishes, not once at the end. Standard
+            # output to a pipe is block buffered, so a process killed on
+            # timeout would otherwise lose every reading already taken,
+            # including the points reporting the failures.
+            out.flush()
+            err.flush()
+
+    def work(device):
+        emit(device, read_device(node, device, now_ns, clock))
+
+    if concurrent and len(devices) > 1:
+        workers = [threading.Thread(target=work, args=(device,), daemon=True)
+                   for device in devices]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join()
+    else:
+        for device in devices:
+            work(device)
+
+    with lock:
         out.flush()
         err.flush()
-
-    out.flush()
-    err.flush()
     return written
 
 

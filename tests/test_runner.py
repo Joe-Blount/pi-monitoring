@@ -1,5 +1,7 @@
 import io
 import pathlib
+import threading
+import time
 
 import pytest
 
@@ -123,7 +125,8 @@ def test_a_long_failure_reason_is_shortened_for_the_log_but_not_the_point(
 
     import monitoring.runner as mod
     original = mod.read_device
-    mod.read_device = lambda n, d, ns=None: runner.Result(d, error=long_reason)
+    mod.read_device = lambda n, d, ns=None, clock=None: runner.Result(
+        d, error=long_reason, stamp=NOW)
     try:
         runner.poll(node, NOW, out, err)
     finally:
@@ -632,3 +635,184 @@ def test_a_streamed_point_goes_out_before_the_cache_is_written(
         runner.stream_device(node, node.find("a"), Watching(), io.StringIO(),
                              max_readings=1, clock=frozen_clock)
     assert order[:2] == ["point", "cache"], order
+
+
+# -- when a reading was taken, and reading several at once ------------------
+
+class SlowDriver(Driver):
+    """Takes measurable time, like a Bluetooth pack."""
+
+    description = "test double that is slow to answer"
+    slow_read = True
+    delay = 0.05
+
+    def read(self):
+        time.sleep(self.delay)
+        return {"value": 1.0}
+
+
+@pytest.fixture
+def slow_doubles():
+    original = dict(REGISTRY)
+    REGISTRY["slow"] = ("tests.test_runner", "SlowDriver")
+    yield
+    REGISTRY.clear()
+    REGISTRY.update(original)
+
+
+def stamps_in(text):
+    return [int(line.rsplit(" ", 1)[1]) for line in text.strip().splitlines()]
+
+
+def ticking(start=NOW, step=10 ** 9):
+    """A clock that advances every time it is read."""
+    state = {"now": start}
+
+    def clock():
+        state["now"] += step
+        return state["now"]
+
+    return clock
+
+
+def test_each_reading_is_stamped_when_it_completes(tmp_path, doubles):
+    """One timestamp for a whole collection claims two devices were measured
+    together when a Bluetooth pack read takes nine seconds and the next
+    starts afterwards. A ratio computed from such a pair measures the gap
+    between the reads rather than the difference between the batteries.
+    """
+    node = node_with(tmp_path, "  - {name: a, driver: good, mode: poll}\n"
+                               "  - {name: b, driver: good, mode: poll}\n")
+    out = io.StringIO()
+    runner.poll(node, out=out, err=io.StringIO(), clock=ticking())
+    first, second = stamps_in(out.getvalue())
+    assert first != second, "both readings carry one timestamp"
+
+
+def test_a_reading_is_stamped_after_the_device_answered(tmp_path,
+                                                        slow_doubles):
+    """Not when the read began. A pack that takes nine seconds produced its
+    answer at the end of that, and stamping the start puts the reading nine
+    seconds before the value existed.
+
+    Measured against the real clock around a driver that genuinely takes
+    time, because a clock that only advances when it is read cannot tell the
+    two apart.
+    """
+    node = node_with(tmp_path, "  - {name: a, driver: slow, mode: poll}\n")
+    before = time.time_ns()
+    out = io.StringIO()
+    runner.poll(node, out=out, err=io.StringIO())
+    taken = stamps_in(out.getvalue())[0]
+    assert taken - before >= SlowDriver.delay * 10 ** 9 * 0.9, (
+        "stamped %.3fs after the collection began, which is before the "
+        "device had answered" % ((taken - before) / 10 ** 9))
+
+
+def test_a_caller_may_still_pin_one_timestamp(tmp_path, doubles):
+    """For a caller that genuinely wants one time for everything."""
+    node = node_with(tmp_path, "  - {name: a, driver: good, mode: poll}\n"
+                               "  - {name: b, driver: good, mode: poll}\n")
+    out = io.StringIO()
+    runner.poll(node, NOW, out, io.StringIO(), clock=ticking())
+    assert stamps_in(out.getvalue()) == [NOW, NOW]
+
+
+def test_a_failed_read_is_stamped_when_the_failure_was_established(
+        tmp_path, doubles):
+    """Not when the collection began. A pack that spends forty seconds
+    failing to connect failed at the end of that, not the start."""
+    node = node_with(tmp_path, "  - {name: a, driver: bad, mode: poll}\n")
+    out = io.StringIO()
+    runner.poll(node, out=out, err=io.StringIO(), clock=ticking())
+    assert stamps_in(out.getvalue()) == [NOW + 10 ** 9]
+
+
+def test_concurrent_reads_take_as_long_as_the_slowest_not_the_sum(
+        tmp_path, slow_doubles):
+    """Two Bluetooth packs are two connections to two peripherals. Read
+    together the collection costs the slower one; read in turn it costs
+    both."""
+    node = node_with(tmp_path, "  - {name: a, driver: slow, mode: poll}\n"
+                               "  - {name: b, driver: slow, mode: poll}\n"
+                               "  - {name: c, driver: slow, mode: poll}\n")
+
+    start = time.monotonic()
+    runner.poll(node, out=io.StringIO(), err=io.StringIO(), concurrent=True)
+    together = time.monotonic() - start
+
+    start = time.monotonic()
+    runner.poll(node, out=io.StringIO(), err=io.StringIO())
+    in_turn = time.monotonic() - start
+
+    assert together < in_turn / 2, (
+        "three reads of %.2fs each took %.2fs together and %.2fs in turn"
+        % (SlowDriver.delay, together, in_turn))
+
+
+def test_concurrent_readings_land_close_together(tmp_path, slow_doubles):
+    """The point of it. Read in turn, the stamps are a read apart; read
+    together they are within the jitter of starting three threads."""
+    node = node_with(tmp_path, "  - {name: a, driver: slow, mode: poll}\n"
+                               "  - {name: b, driver: slow, mode: poll}\n")
+    out = io.StringIO()
+    runner.poll(node, out=out, err=io.StringIO(), concurrent=True)
+    stamps = stamps_in(out.getvalue())
+    spread = (max(stamps) - min(stamps)) / 10 ** 6
+    assert spread < SlowDriver.delay * 1000 / 2, (
+        "readings %gms apart, which is most of one read" % spread)
+
+
+def test_the_output_is_written_under_a_lock(tmp_path, slow_doubles,
+                                            monkeypatch):
+    """Coupled to the mechanism, because the race has no reliable black-box
+    proxy: small writes to one stream usually survive without a lock and
+    occasionally do not.
+
+    What is at stake is half a line of protocol, which telegraf rejects as a
+    malformed point, so "usually fine" is not the standard. The lock is
+    therefore asserted rather than inferred.
+    """
+    held = []
+    real = threading.Lock()
+
+    class Watched:
+        def __enter__(self):
+            held.append(True)
+            return real.__enter__()
+
+        def __exit__(self, *info):
+            return real.__exit__(*info)
+
+    monkeypatch.setattr(runner, "_new_lock", Watched)
+    node = node_with(tmp_path, "  - {name: a, driver: slow, mode: poll}\n"
+                               "  - {name: b, driver: slow, mode: poll}\n")
+    runner.poll(node, out=io.StringIO(), err=io.StringIO(), concurrent=True)
+    assert len(held) >= 2, "each write was not taken under the lock"
+
+
+def test_every_line_is_whole_when_several_reads_finish_together(
+        tmp_path, slow_doubles):
+    """Three threads writing one stream will interleave without a lock, and
+    half a line of protocol is a point telegraf rejects."""
+    node = node_with(tmp_path, "".join(
+        "  - {name: d%d, driver: slow, mode: poll}\n" % index
+        for index in range(6)))
+    out = io.StringIO()
+    written = runner.poll(node, out=out, err=io.StringIO(), concurrent=True)
+    lines = out.getvalue().strip().splitlines()
+    assert len(lines) == written == 6
+    for line in lines:
+        assert line.startswith("m,device=d"), line
+        assert line.count("value=1") == 1, line
+
+
+def test_reading_in_turn_is_the_default(tmp_path, slow_doubles):
+    """The cheap sensors have nothing to gain and starting several at once is
+    the contention the one-process rule exists to avoid, so it is asked for
+    explicitly."""
+    node = node_with(tmp_path, "  - {name: a, driver: slow, mode: poll}\n"
+                               "  - {name: b, driver: slow, mode: poll}\n")
+    start = time.monotonic()
+    runner.poll(node, out=io.StringIO(), err=io.StringIO())
+    assert time.monotonic() - start >= SlowDriver.delay * 2

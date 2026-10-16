@@ -41,6 +41,14 @@ def main(argv=None):
                              "telemetry down with it")
     parser.add_argument("--poll", action="store_true",
                         help="read every poll-mode device, once")
+    parser.add_argument("--concurrent", action="store_true",
+                        help="with --poll: read the devices at the same time "
+                             "rather than one after another. For a group "
+                             "whose cost is waiting, such as Bluetooth packs: "
+                             "the collection then takes as long as the slowest "
+                             "device instead of the sum, and the readings land "
+                             "within a second or two of each other instead of "
+                             "tens of seconds apart")
     parser.add_argument("--list", action="store_true",
                         help="print what this node declares")
     parser.add_argument("--check", action="store_true",
@@ -74,7 +82,8 @@ def main(argv=None):
     if args.poll:
         if args.device:
             parser.error("give a device name or --poll, not both")
-        written = runner.poll(node, speed=args.speed)
+        written = runner.poll(node, speed=args.speed,
+                              concurrent=args.concurrent)
         # Exit zero whenever anything was written, including points that
         # report a failure. telegraf's exec input discards a command's stdout
         # entirely when the exit code is non-zero, so failing here would throw
