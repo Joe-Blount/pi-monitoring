@@ -47,7 +47,16 @@ BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id"
 #: Where readings and loop state live. tmpfs, so writes never reach the card.
 RUNTIME_DIR = "/run/monitoring"
 READINGS_DIR = os.path.join(RUNTIME_DIR, "readings")
-CONTROL_STATE = os.path.join(RUNTIME_DIR, "control.json")
+
+#: The loop's own working state: latches, floor, transition stamps. Private to
+#: the loop and meaningless to anything else.
+CONTROL_STATE = os.path.join(RUNTIME_DIR, "control-state.json")
+
+#: What the loop says it did, for the publishing driver to turn into fields.
+#: Separate from the working state so the driver reads a document written for
+#: it rather than the loop's internals, and so a change to one does not have
+#: to care about the other.
+PUBLISHED = os.path.join(RUNTIME_DIR, "control.json")
 
 #: Where the things that must outlive a reboot live. On the card,
 #: deliberately, and written rarely enough that the wear does not matter.
