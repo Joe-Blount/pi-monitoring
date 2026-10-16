@@ -37,7 +37,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from monitoring import config, duration                    # noqa: E402
 from monitoring import drivers as driver_registry           # noqa: E402
-from monitoring.control import files, loop, relay, spec, sun  # noqa: E402
+from monitoring.control import (                            # noqa: E402
+    files, location, loop, relay, spec, sun)
 
 DEFAULT_NODE = "/etc/monitoring/node.yaml"
 
@@ -60,50 +61,13 @@ SWITCHES_VAR = "MONITORING_SWITCHES"
 BOOT_VAR = "MONITORING_BOOT_ID"
 
 
-# -- the pieces a node file does not yet carry through config.py ------------
-
-def _location(node):
-    """Where the sun is measured from, for a solar shed window.
-
-    Not part of the control block: spec.py's CONTROL_KEYS guards every key
-    *inside* control against a typo, and this is a property of the machine
-    rather than of a load it drives. It lives at the top of the node file,
-    beside site/node/measurement, and it is required rather than defaulted
-    for the reason every strict check in spec.py exists: a solar tier
-    computed against an invented point is wrong in a way nothing here could
-    ever detect, found only as cameras running a schedule nobody asked for.
-    """
-    raw = node.raw.get("location")
-    if not isinstance(raw, dict):
-        raise config.ConfigError(
-            "%s: needs a top-level 'location' mapping with latitude and "
-            "longitude; a solar schedule computed against an invented "
-            "point is wrong in a way nothing here can detect" % node.path)
-    try:
-        latitude = float(raw["latitude"])
-        longitude = float(raw["longitude"])
-    except (KeyError, TypeError, ValueError):
-        raise config.ConfigError(
-            "%s: 'location' needs numeric latitude and longitude, found %r"
-            % (node.path, raw))
-    return {"latitude": latitude, "longitude": longitude}
-
-
-def _zone(node):
-    """The timezone every schedule and override is read against."""
-    import zoneinfo
-
-    name = node.raw.get("timezone")
-    if not isinstance(name, str) or not name:
-        raise config.ConfigError(
-            "%s: needs a top-level 'timezone' naming an IANA zone, such as "
-            "America/Chicago" % node.path)
-    try:
-        return zoneinfo.ZoneInfo(name)
-    except zoneinfo.ZoneInfoNotFoundError as exc:
-        raise config.ConfigError(
-            "%s: timezone %r is not a zone this machine knows: %s"
-            % (node.path, name, exc))
+# -- where the machine is ---------------------------------------------------
+#
+# Read from its own file rather than from the node file. A node file is the
+# natural home for a property of the machine, and that is where this started,
+# but node files are committed and this repository is public, so coordinates
+# in one would publish the owner's location. See
+# monitoring/control/location.py.
 
 
 def _loop_interval(node):
@@ -127,10 +91,11 @@ def _build_machine(node, relays=None):
     `relays` is passed straight through: None for `run` and `once`, which
     builds Loop's own real ones, or a caller-built mapping for `dry-run`.
     """
-    location = _location(node)
-    zone = _zone(node)
+    where = location.read()
     return loop.Loop(
-        node, location, zone, relays=relays,
+        node, {"latitude": where["latitude"],
+               "longitude": where["longitude"]}, where["zone"],
+        relays=relays,
         state_path=node.control.get("state_file"),
         published_path=os.environ.get(PUBLISHED_VAR),
         high_water_path=os.environ.get(HIGH_WATER_VAR),
@@ -325,7 +290,8 @@ def cmd_run(args):
         node = config.load(args.node, known_drivers=driver_registry.names())
         interval = _loop_interval(node)
         machine = _build_machine(node)
-    except (config.ConfigError, spec.SpecError) as exc:
+    except (config.ConfigError, spec.SpecError,
+            location.LocationError) as exc:
         # The two ways a control block can be unusable. Starting anyway
         # would drive every pin from defaults nobody wrote.
         sys.stderr.write("%s\n" % exc)
@@ -352,7 +318,8 @@ def cmd_once(args):
     try:
         node = config.load(args.node, known_drivers=driver_registry.names())
         machine = _build_machine(node)
-    except (config.ConfigError, spec.SpecError) as exc:
+    except (config.ConfigError, spec.SpecError,
+            location.LocationError) as exc:
         sys.stderr.write("%s\n" % exc)
         return 2
 
@@ -369,7 +336,8 @@ def cmd_dry_run(args):
         node = config.load(args.node, known_drivers=driver_registry.names())
         relays = _pretend_relays(node)
         machine = _build_machine(node, relays=relays)
-    except (config.ConfigError, spec.SpecError) as exc:
+    except (config.ConfigError, spec.SpecError,
+            location.LocationError) as exc:
         sys.stderr.write("%s\n" % exc)
         return 2
 

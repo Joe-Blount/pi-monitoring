@@ -46,11 +46,24 @@ NODE_HEADER = """\
 site: test
 node: test
 measurement: test
-location: {latitude: 37.0, longitude: -97.4}
-timezone: America/Chicago
 devices:
   - {name: bms, driver: host, mode: poll}
 """
+
+#: Where the machine is, in its own file rather than in the node file,
+#: because node files are committed and this repository is public. The
+#: binary reads it from MONITORING_LOCATION, which every run below sets.
+LOCATION = """\
+latitude: 37.0
+longitude: -97.4
+timezone: America/Chicago
+"""
+
+
+def location_file(tmp_path, body=LOCATION):
+    path = tmp_path / "location.yaml"
+    path.write_text(body)
+    return path
 
 LADDER = """\
       shed_ladder:
@@ -106,18 +119,8 @@ def bad_polarity_node(tmp_path):
     return path
 
 
-def no_location_node(tmp_path):
-    body = "site: test\nnode: test\nmeasurement: test\ndevices:\n"
-    body += "  - {name: bms, driver: host, mode: poll}\n"
-    body += "control:\n  enabled: false\n"
-    path = tmp_path / "node.yaml"
-    path.write_text(body)
-    return path
-
-
-def bad_timezone_node(tmp_path):
-    body = NODE_HEADER.replace("America/Chicago", "Nowhere/Fake")
-    body += "control:\n  enabled: false\n"
+def node_with_no_control(tmp_path):
+    body = NODE_HEADER + "control:\n  enabled: false\n"
     path = tmp_path / "node.yaml"
     path.write_text(body)
     return path
@@ -128,6 +131,10 @@ def run_control(tmp_path, *args, extra_env=None, timeout=30):
     env["MONITORING_PUBLISHED"] = str(tmp_path / "published.json")
     env["MONITORING_HIGH_WATER"] = str(tmp_path / "hw.json")
     env["MONITORING_BOOT_ID"] = BOOT
+    env.setdefault("MONITORING_LOCATION",
+                   str(location_file(tmp_path)) if not (
+                       tmp_path / "location.yaml").exists()
+                   else str(tmp_path / "location.yaml"))
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
@@ -192,23 +199,55 @@ def test_run_refuses_an_unreadable_node_file(tmp_path):
     assert "Traceback" not in result.stderr
 
 
-def test_run_refuses_a_node_with_no_declared_location(tmp_path):
-    """A solar schedule computed against an invented point is wrong in a
-    way nothing can detect, so the location is required rather than
-    defaulted, and a node file written before it existed must say so
-    clearly rather than run on a guessed one."""
-    node = no_location_node(tmp_path)
-    result = run_control(tmp_path, "run", "--node", str(node))
+def test_run_refuses_a_machine_with_no_location_file(tmp_path):
+    """A solar schedule computed against an invented point is wrong in a way
+    nothing downstream can detect, so this is required rather than
+    defaulted, and a machine where nobody wrote the file must say which file
+    and what goes in it rather than run on a guess."""
+    node = node_with_no_control(tmp_path)
+    result = run_control(tmp_path, "run", "--node", str(node),
+                         extra_env={"MONITORING_LOCATION":
+                                    str(tmp_path / "absent.yaml")})
     assert result.returncode == 2
-    assert "location" in result.stderr
+    assert "absent.yaml" in result.stderr
+    assert "location.yaml.example" in result.stderr, (
+        "the message must say what to copy")
     assert "Traceback" not in result.stderr
 
 
-def test_run_refuses_a_node_with_an_unknown_timezone(tmp_path):
-    node = bad_timezone_node(tmp_path)
-    result = run_control(tmp_path, "run", "--node", str(node))
+def test_run_refuses_an_unknown_timezone(tmp_path):
+    node = node_with_no_control(tmp_path)
+    path = location_file(tmp_path, LOCATION.replace("America/Chicago",
+                                                    "Nowhere/Fake"))
+    result = run_control(tmp_path, "run", "--node", str(node),
+                         extra_env={"MONITORING_LOCATION": str(path)})
     assert result.returncode == 2
     assert "Nowhere/Fake" in result.stderr
+
+
+def test_run_refuses_degrees_and_minutes_written_as_a_decimal(tmp_path):
+    """Not a refusal this can make in general: 37.02 is a valid latitude.
+    What it can do is say which mistake it is, since writing 37 degrees 2
+    minutes as 37.02 rather than 37.05 is the error somebody converting by
+    hand actually makes, and it is two miles of it."""
+    node = node_with_no_control(tmp_path)
+    path = location_file(tmp_path, "latitude: ninety\nlongitude: -97.4\n"
+                                   "timezone: America/Chicago\n")
+    result = run_control(tmp_path, "run", "--node", str(node),
+                         extra_env={"MONITORING_LOCATION": str(path)})
+    assert result.returncode == 2
+    assert "degrees and decimals" in result.stderr.lower()
+
+
+def test_run_refuses_a_location_with_a_key_nobody_reads(tmp_path):
+    """The same rule the control spec applies: a key accepted and unread
+    sits in the file looking like it is in force."""
+    node = node_with_no_control(tmp_path)
+    path = location_file(tmp_path, LOCATION + "elevation: 350\n")
+    result = run_control(tmp_path, "run", "--node", str(node),
+                         extra_env={"MONITORING_LOCATION": str(path)})
+    assert result.returncode == 2
+    assert "unknown key" in result.stderr
 
 
 def test_once_and_dry_run_refuse_the_same_bad_block_as_run(tmp_path):
@@ -318,6 +357,10 @@ def _start_run(tmp_path, node, extra_env=None):
     env["MONITORING_PUBLISHED"] = str(tmp_path / "published.json")
     env["MONITORING_HIGH_WATER"] = str(tmp_path / "hw.json")
     env["MONITORING_BOOT_ID"] = BOOT
+    env.setdefault("MONITORING_LOCATION",
+                   str(location_file(tmp_path)) if not (
+                       tmp_path / "location.yaml").exists()
+                   else str(tmp_path / "location.yaml"))
     if extra_env:
         env.update(extra_env)
     return subprocess.Popen(

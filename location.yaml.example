@@ -1,0 +1,24 @@
+# Where this machine is. Copy to /etc/monitoring/location.yaml and edit.
+#
+# NOT in this repository on purpose. The node files are committed and this
+# repository is public, so coordinates in one would be published to anyone who
+# reads it. The install script creates the real file; this example stays.
+#
+# The numbers below are a nearby town rounded to a tenth of a degree, which
+# is about ten kilometres of fuzz and under a minute of error in a sunrise.
+# So the example gives nothing away and still shows the shape.
+#
+# Both numbers are needed. Latitude sets how long the day is. Longitude sets
+# what time solar noon happens, which is what turns a day length into clock
+# times, and this site is about seven degrees off its timezone's central
+# meridian: without it every sunrise is half an hour out, which for a window
+# built around legal shooting light is the whole feature.
+#
+# Degrees and decimals, not degrees and minutes. 37 degrees 2 minutes north
+# is 37.05, not 37.02. West and south are negative.
+latitude: 37.0
+longitude: -97.4
+
+# An IANA zone name, not an offset. The schedules have to follow daylight
+# saving, and two days a year an offset is an hour wrong.
+timezone: America/Chicago

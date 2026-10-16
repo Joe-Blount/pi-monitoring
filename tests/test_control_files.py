@@ -2,8 +2,11 @@
 
 import json
 import os
+import pathlib
 
-from monitoring.control import clock, files
+import pytest
+
+from monitoring.control import clock, files, location
 
 #: A boot identity the tests control. The real one is read from /proc, which
 #: does not exist on every machine the suite runs on, and a test that depended
@@ -244,3 +247,93 @@ def test_synchronisation_outranks_a_backwards_clock(tmp_path):
     rtc = tmp_path / "since_epoch"
     rtc.write_text("1")
     assert clock.assess(high_water=2000000.0, marker=str(marker), rtc=str(rtc))
+
+
+# -- where the machine is ----------------------------------------------------
+
+GOOD_LOCATION = "latitude: 37.0\nlongitude: -97.4\ntimezone: America/Chicago\n"
+
+
+def written(tmp_path, body):
+    path = tmp_path / "location.yaml"
+    path.write_text(body)
+    return str(path)
+
+
+def test_a_location_round_trips(tmp_path):
+    out = location.read(written(tmp_path, GOOD_LOCATION))
+    assert out["latitude"] == 37.0
+    assert out["longitude"] == -97.4
+    assert out["zone"].key == "America/Chicago"
+
+
+def test_it_is_not_read_from_the_node_file(tmp_path):
+    """Node files are committed and this repository is public, so the owner's
+    coordinates must not be in one. The example in the repository is a nearby
+    town rounded to a tenth of a degree, which gives nothing away."""
+    assert location.DEFAULT_PATH.startswith("/etc/monitoring/")
+    example = pathlib.Path(__file__).resolve().parent.parent / \
+        "location.yaml.example"
+    assert example.is_file(), "the example the error message tells people to copy"
+    assert location.read(str(example))["zone"].key == "America/Chicago"
+
+
+def test_a_swapped_pair_is_refused(tmp_path):
+    """The mistake that looks most like a working value. This site's
+    longitude read as a latitude is a point in the Arctic Ocean, and the
+    schedule it produces is wrong rather than absent."""
+    with pytest.raises(location.LocationError) as raised:
+        location.read(written(tmp_path, "latitude: -97.4\nlongitude: 37.0\n"
+                                        "timezone: America/Chicago\n"))
+    assert "outside" in str(raised.value)
+
+
+@pytest.mark.parametrize("body,wanted", [
+    ("longitude: -97.4\ntimezone: America/Chicago\n", "needs a latitude"),
+    ("latitude: 37.0\ntimezone: America/Chicago\n", "needs a longitude"),
+    ("latitude: 37.0\nlongitude: -97.4\n", "IANA zone"),
+])
+def test_every_part_is_required(tmp_path, body, wanted):
+    """None of the three has a defensible default. A missing timezone would
+    place every schedule in UTC, which here is five or six hours out."""
+    with pytest.raises(location.LocationError) as raised:
+        location.read(written(tmp_path, body))
+    assert wanted in str(raised.value)
+
+
+def test_an_offset_instead_of_a_zone_name_is_refused(tmp_path):
+    """The schedules have to follow daylight saving. Two days a year a fixed
+    offset is an hour wrong, and an hour is most of a movement window."""
+    with pytest.raises(location.LocationError) as raised:
+        location.read(written(tmp_path, "latitude: 37.0\nlongitude: -97.4\n"
+                                        "timezone: '-06:00'\n"))
+    assert "IANA" in str(raised.value) or "not a zone" in str(raised.value)
+
+
+def test_a_missing_file_says_which_file_and_what_to_copy(tmp_path):
+    """Read by somebody standing at the machine, so it has to name the path
+    and the thing to copy into it."""
+    with pytest.raises(location.LocationError) as raised:
+        location.read(str(tmp_path / "absent.yaml"))
+    message = str(raised.value)
+    assert "absent.yaml" in message
+    assert "location.yaml.example" in message
+
+
+def test_a_key_nobody_reads_is_refused(tmp_path):
+    with pytest.raises(location.LocationError) as raised:
+        location.read(written(tmp_path, GOOD_LOCATION + "elevation: 350\n"))
+    assert "unknown key" in str(raised.value)
+
+
+def test_damaged_yaml_is_refused_rather_than_read_as_nothing(tmp_path):
+    """The reason has to name the real fault.
+
+    Reading a damaged file as an empty mapping also raises, because the
+    latitude is then missing, so a test asking only for an error passes
+    against it. The message would send somebody looking for a key they had
+    written rather than at the syntax error above it.
+    """
+    with pytest.raises(location.LocationError) as raised:
+        location.read(written(tmp_path, "latitude: [37.0\n"))
+    assert "not valid YAML" in str(raised.value)
