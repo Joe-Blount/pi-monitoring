@@ -632,11 +632,12 @@ def test_a_dry_run_reads_the_switches_the_override_command_writes(tmp_path):
     an operator sets an override, is told it is set, runs a dry run to check
     it, and is shown a decision taken as though they had set nothing.
 
-    An override is the switch this can assert through the binary. The
-    shedding switch needs a trusted clock before it changes any decision,
+    An override is the switch this can assert through the binary. Showing
+    the shedding switch change a decision needs a tier latched whose
+    schedule actually forbids the load, which here needs a trusted clock,
     and a trusted clock is a property of the machine rather than something a
-    subprocess can be handed, so its behaviour is pinned in the decision's
-    own tests instead.
+    subprocess can be handed. That switch is pinned in the decision's own
+    tests instead.
     """
     node = controlled_node(tmp_path)
     env = {"MONITORING_SWITCHES": str(switches_path(tmp_path))}

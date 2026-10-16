@@ -95,6 +95,14 @@ This switch cannot save a battery from itself. A cell under its own voltage
 floor still sheds regardless of this switch, an override, the schedule, or
 any minimum run time. That one rule has nothing above it.
 
+It also does not shorten the wait after a floor shed. Once the cell has
+recovered, the load comes back on the minimum off time like any other, and
+neither this switch nor an override hurries it. The reason the controller
+reports says so, with the seconds left. A cell weak enough to sag under this
+load and recover without it would otherwise cycle the recorder as fast as it
+crosses its own bounds, and this is the switch most likely to be left off for
+weeks.
+
 ## Stop the controller entirely
 
 ```

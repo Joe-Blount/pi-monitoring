@@ -99,8 +99,26 @@ def _control_subcommands_in_guide():
     return subcommands
 
 
-def test_the_guide_shows_at_least_one_control_subcommand():
-    assert _control_subcommands_in_guide()
+#: The subcommands the guide is known to show. A floor under the parser, not
+#: a second copy of its job.
+#:
+#: Every check below that walks the parsed set shrinks silently when the
+#: parser stops matching: the parametrization just gets smaller and the file
+#: still passes, with fewer tests and no failure anywhere. Stripping a sudo
+#: prefix is exactly the kind of edit that can cause it, and the guide gained
+#: that prefix on every command.
+GUIDE_SUBCOMMANDS = {"dry-run", "override", "run", "shedding"}
+
+
+def test_the_guide_shows_the_control_subcommands_it_is_known_to_show():
+    """The floor under the parser. Without it, a parser that matches nothing
+    leaves every subcommand unchecked against bin/control and says so by
+    running fewer tests, which nothing reads."""
+    found = _control_subcommands_in_guide()
+    missing = GUIDE_SUBCOMMANDS - found
+    assert not missing, (
+        "the parser no longer finds %s in the guide, so those are not being "
+        "checked against bin/control" % sorted(missing))
 
 
 @pytest.mark.skipif(not CONTROL.exists(),

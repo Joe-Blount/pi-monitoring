@@ -1188,6 +1188,109 @@ def test_shedding_switched_off_does_not_disturb_a_load_already_running():
     assert decision.reason_code == decide.NONE
 
 
+def test_the_shedding_switch_does_not_reach_through_a_floor_shed():
+    """The one place an operator's switch stops.
+
+    A cell weak enough to sag under this load and recover without it crosses
+    its floor bounds as fast as the load is reconnected, so the floor alone
+    would cycle the recorder at the cell's own rate. The off timer is what
+    bounds that. The shedding switch is also the thing most likely to be
+    left off for weeks, so exempting it here is unbounded cycling with
+    nobody watching.
+    """
+    spec = dict(TIMED, shed_ladder=LADDER)
+    switches = {"shedding_enabled": False, "loads": {}}
+
+    decision, state = run(90.0, cell=3.10, switches=switches, spec=spec)
+    assert not decision.connected, "the floor must shed whatever the switch"
+    assert decision.reason_code == decide.FLOOR
+
+    # The cell recovers once the load is off it, which is the whole shape of
+    # the problem.
+    decision, state = run(90.0, cell=3.30, mono=120.0, state=state,
+                          switches=switches, spec=spec)
+    assert not decision.connected, (
+        "the switch reached through the timer bounding floor cycling")
+    assert decision.reason_code == decide.HELD_BY_TIMER
+    assert "minimum off" in decision.reason
+
+    # And it does come back, on the timer rather than never.
+    decision, _ = run(90.0, cell=3.30, mono=3000.0, state=state,
+                      switches=switches, spec=spec)
+    assert decision.connected, decision.reason
+
+
+def test_an_override_does_not_reach_through_a_floor_shed_either():
+    """The same bound, the other control. An override cannot defeat a
+    latched floor at all, and once the floor has released it waits out the
+    timer that keeps a weak cell from cycling the recorder."""
+    spec = dict(TIMED, shed_ladder=LADDER)
+    switches = {"shedding_enabled": True,
+                "loads": {"cameras": {"force": "on",
+                                      "expires_epoch": LATER}}}
+
+    decision, state = run(90.0, cell=3.10, switches=switches, spec=spec)
+    assert not decision.connected
+    assert decision.reason_code == decide.FLOOR
+
+    decision, _ = run(90.0, cell=3.30, mono=120.0, state=state,
+                      switches=switches, spec=spec)
+    assert not decision.connected, decision.reason
+    assert decision.reason_code == decide.HELD_BY_TIMER
+
+
+def test_the_switch_still_reaches_through_a_timer_after_a_tier_shed():
+    """The distinction is between the two kinds of shed, not a retreat from
+    the exemption. A tier shedding on state of charge has no hysteresis
+    anything like a sagging cell's, and this is the case an operator
+    actually reaches for the switch in."""
+    state = _held_by_the_off_timer_with_the_ladder_wanting_it_on()
+    decision, _ = run(45.0, now=at(5, 1), mono=760.0, spec=TIMED,
+                      state=state,
+                      switches={"shedding_enabled": False, "loads": {}})
+    assert decision.connected, decision.reason
+
+
+def test_which_rule_shed_a_load_is_forgotten_once_the_load_has_moved():
+    """The bound on the operator's switch has to describe this shed, not an
+    older one.
+
+    A floor shed earlier in the day must not make a tier shed hours later
+    behave as though the cell were weak. Nothing about the reading says
+    which happened, so it is remembered in the state, and state remembered
+    and not refreshed is state that goes stale: the switch would stop
+    working for the rest of the boot, on the machine where somebody is
+    standing there using it.
+    """
+    spec = dict(TIMED, shed_ladder=LADDER)
+
+    # A floor shed, a recovery, and the off timer run out, so the load is
+    # back up and the floor is long resolved.
+    decision, state = run(90.0, cell=3.10, spec=spec)
+    assert decision.reason_code == decide.FLOOR
+    decision, state = run(90.0, cell=3.30, mono=120.0, state=state, spec=spec)
+    assert decision.reason_code == decide.HELD_BY_TIMER
+    decision, state = run(90.0, cell=3.30, mono=3000.0, state=state,
+                          spec=spec)
+    assert decision.connected
+
+    # Now a tier sheds, for an entirely different reason, and its own run
+    # timer expires.
+    for step, mono in enumerate((3010.0, 3020.0)):
+        decision, state = run(45.0, now=at(4, 30), mono=mono, state=state,
+                              spec=spec)
+    decision, state = run(45.0, now=at(4, 40), mono=4000.0, state=state,
+                          spec=spec)
+    assert not decision.connected
+    assert decision.reason_code == decide.STATE_OF_CHARGE
+
+    # The switch must work. This is a tier shed; the cell is fine.
+    decision, _ = run(45.0, now=at(4, 40), mono=4010.0, state=state,
+                      spec=spec,
+                      switches={"shedding_enabled": False, "loads": {}})
+    assert decision.connected, decision.reason
+
+
 def test_the_ladder_itself_is_still_held_by_the_timers():
     """The exemptions are for the floor and for a person, not a loophole that
     lets the ladder cycle a recorder as a battery wavers on a threshold."""

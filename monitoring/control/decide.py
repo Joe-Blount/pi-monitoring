@@ -497,32 +497,46 @@ def _apply_switches(decision, name, switches, now, clock_trusted):
 
 # -- the timers -------------------------------------------------------------
 
-def _hold(decision, spec, mono_now, state, untimed=False):
+def _hold(decision, spec, mono_now, state, operator=False):
     """Apply the minimum run and minimum off times.
 
     A recorder should not be cycled repeatedly, so a change of mind inside
-    those windows waits.
+    those windows waits. The timers exist to stop the ladder cycling a
+    recorder as a battery wavers around a threshold. Two things get past
+    them, and they get past for different distances.
 
-    The timers exist to stop the ladder cycling a recorder as a battery
-    wavers around a threshold. They are not a veto on the two things that
-    outrank the ladder, and `untimed` says one of those is in play.
+    The floor always does. A minimum run time holding a load up while a cell
+    sits under its floor would defeat the one rule with nothing above it.
 
-    The floor is one: a minimum run time holding a load up while a cell sits
-    under its floor would defeat the one rule with nothing above it.
+    An operator instruction gets past a timer that is holding a load down
+    after the ladder shed it, because a person is standing at the machine.
+    An override and the shedding switch are the controls somebody reaches
+    for when the automation is wrong, and a control that does nothing for
+    half an hour reads as a broken control: the next move is to pull the
+    relay wire, which loses the fail-safe as well.
 
-    An operator instruction is the other, because a person is standing at the
-    machine. An override and the shedding switch are the controls somebody
-    reaches for when the automation is wrong, and a control that does nothing
-    for half an hour reads as a broken control: the next move is to pull the
-    relay wire, which loses the fail-safe as well. Cycling a recorder once,
-    by hand, on purpose, is the smaller cost.
+    It does not get past a timer holding a load down after the *floor* shed
+    it, and that is the one place the two differ. A cell weak enough to sag
+    under this load and recover without it crosses its floor bounds as fast
+    as the load is reconnected, so the floor alone would cycle the recorder
+    at the cell's own rate. The off timer is what bounds that, and the
+    shedding switch is exactly the thing most likely to be left off for
+    weeks, so an exemption there is unbounded cycling nobody is watching.
+    The decision still says so, with the seconds remaining, rather than
+    appearing to ignore the switch.
     """
+    floor = decision.reason_code == FLOOR
     commanded = state.get("commanded")
     since = state.get("since")
     new_state = dict(state)
 
+    held_down_by_the_floor = (commanded is False
+                              and state.get("commanded_by_floor", False))
+    untimed = floor or (operator and not held_down_by_the_floor)
+
     if untimed or commanded is None or not isinstance(since, (int, float)):
         new_state["commanded"] = decision.connected
+        new_state["commanded_by_floor"] = floor
         if commanded is not decision.connected:
             new_state["since"] = mono_now
         return decision, new_state
@@ -541,6 +555,7 @@ def _hold(decision, spec, mono_now, state, untimed=False):
                 new_state)
 
     new_state["commanded"] = decision.connected
+    new_state["commanded_by_floor"] = floor
     new_state["since"] = mono_now
     return decision, new_state
 
@@ -582,9 +597,9 @@ def decide(local_now, mono_now, clock_trusted, readings, switches,
             decision, load_state = ladder_decision(
                 name, spec, readings, local_now, mono_now, suns,
                 clock_trusted, prior)
-            untimed = decision.reason_code == FLOOR
-            if not untimed:
-                decision, untimed = _apply_switches(
+            operator = False
+            if decision.reason_code != FLOOR:
+                decision, operator = _apply_switches(
                     decision, name, switches, local_now, clock_trusted)
         else:
             decision = Decision(
@@ -592,10 +607,10 @@ def decide(local_now, mono_now, clock_trusted, readings, switches,
                 "load type %r is declared but this controller does not drive "
                 "it" % spec["type"], None)
             load_state = dict(prior)
-            untimed = False
+            operator = False
 
         decision, load_state = _hold(decision, spec, mono_now, load_state,
-                                     untimed)
+                                     operator)
         decisions[name] = decision
         new_state[name] = load_state
 
