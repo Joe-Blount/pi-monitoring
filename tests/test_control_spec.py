@@ -409,7 +409,7 @@ def test_a_path_for_the_loop_state_is_refused_by_name():
         spec.load_control(node)
     message = str(raised.value)
     assert "state_file" in message
-    assert "no longer read" in message
+    assert "is not read here" in message
     assert "tmpfs" in message
     assert "unknown key" not in message, (
         "the general message sends the reader looking for a typo")

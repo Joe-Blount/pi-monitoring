@@ -85,6 +85,12 @@ restore_telegraf() {
 #
 # Ignoring rather than trapping. A PIPE trap that exits fires again inside
 # the EXIT trap, on its first write, and the shell leaves before the restart.
+#
+# An ignored signal is inherited across exec, so every child started from
+# here runs with it ignored too. That is a property of the whole install
+# rather than of this line alone, and it is harmless because nothing here
+# relies on a child dying from the signal: python already ignores it, and
+# the rest write only to this script's own output.
 trap '' PIPE
 
 trap 'rc=$?; restore_telegraf; exit $rc' EXIT

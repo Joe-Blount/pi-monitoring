@@ -847,6 +847,17 @@ def test_the_floor_never_lets_a_load_run_under_any_source_bound():
                     "connected with %s under bound, after %s: %s"
                     % (", ".join(under), history, decision.reason))
 
+                # The mirror, which catches the opposite failure: a latch
+                # nothing can clear. A floor held while every source is
+                # readable and clear of its own restoring bound is a load
+                # shed for ever on a battery that recovered, and the only
+                # way out of it is a visit.
+                clear = ((cell is not None and cell > 3.25)
+                         and (pack is not None and pack > 13.0))
+                assert not (clear and decision.reason_code == decide.FLOOR), (
+                    "floor held with both sources clear, after %s: %s"
+                    % (history, decision.reason))
+
 
 def test_either_floor_source_can_latch_on_its_own():
     """The asymmetry is only on release. A second, independently wired

@@ -114,7 +114,7 @@ def _retired(where, mapping, retired):
     if not isinstance(mapping, dict):
         return
     for key in sorted(set(mapping) & set(retired)):
-        _fail(where, "%s is no longer read: %s" % (key, retired[key]))
+        _fail(where, "%s is not read here: %s" % (key, retired[key]))
 
 
 def _only(where, mapping, allowed):
