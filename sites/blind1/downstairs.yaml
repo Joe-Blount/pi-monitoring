@@ -116,7 +116,14 @@ devices:
 
 
 control:
-  enabled: false                      # stays false until the bench rig passes
+  # Stays false until the bench rig passes, and it could not start before
+  # then anyway: the ladder below reads the pack's own BMS, that device is
+  # disabled here while the upstairs node polls it, and the control spec
+  # refuses a source nothing will write a reading for. So the coupling the
+  # device comments ask for by hand is enforced by code. Enabling control
+  # without enabling the pack fails at start with the reason, rather than
+  # running a controller that latches nothing and sheds nothing.
+  enabled: false
 
   state_file: /var/lib/monitoring/blind1-control.json
   loop_interval: 10s
@@ -133,35 +140,118 @@ control:
       type: dc_branch
       enabled: true
       control_pin: 23                 # physical 16
-      readback:
-        source: load                  # derived from the shunt; no extra wiring
-        pin: null
-        expect_amps: {min: 1.5, max: 6.0}
-      polarity: energize_to_shed      # normally closed: a failed Pi leaves
-                                      # the cameras running, as today
-      on_stale_data: permit
-      # Any condition sheds; all conditions must agree to restore. A term with
-      # no fresh reading is dropped from the test rather than counted false.
-      shed:
-        shed_if_any:
-          soc_below_pct: 12
-          volts_below: 12.4
-        restore_if_all:
-          soc_above_pct: 25
-          volts_above: 12.9
-        shed_dwell: 5m
+
+      # Normally closed, so de-energized connects the load. A dead Pi, a lost
+      # 12 V feed or a killed controller all leave the site watched, and a
+      # reboot does not power cycle the recorder.
+      #
+      # The cost of this choice is the one to keep in view: shedding does
+      # power cycle the recorder, once a day in the night tier and twice a
+      # day in the window tier. The recorder and the cameras share this
+      # branch, so there is no way to shed the cameras alone. Putting the
+      # recorder on its own channel is a wire and a second load block, not a
+      # redesign, if the cycling turns out to bother it.
+      polarity: energize_to_shed
+
+      min_run: 10m                    # a recorder should not be cycled
+      min_off: 30m                    # repeatedly in either direction
+
+      shed_ladder:
+        # The battery alone. The shunt sees the whole bank and this pack's
+        # BMS sees one pack of three, but the shunt's coulomb count drifts,
+        # worst in the cold when all three packs self-heat and its figure is
+        # inflated by heater current. The BMS also carries per-cell voltages,
+        # which is what the floor below wants. The packs are in parallel, so
+        # one pack's state of charge tracks the bank closely enough to decide
+        # with, and the note on bank_capacity_ah above records that this was
+        # checked rather than assumed.
+        source: {device: bms, field: state_of_charge_pct}
+        stale_after: 10m
+
+        # Entry is counted in readings and release is timed, deliberately.
+        # Entry guards against one glitched sample latching a tier whose
+        # release is fifteen points away, which in winter is weeks, and a
+        # count does that whatever rate the sensor arrives at. Release guards
+        # against restoring on a charging spike, which lasts seconds however
+        # many readings land inside it.
+        enter_after_readings: 2
         restore_dwell: 15m
-        min_off: 30m
-      conservation:
-        enabled: false                # turn on once the shed behaviour is
-                                      # trusted
-        window: {from: "00:00", to: "04:00"}
-        enter_below_soc_pct: 40
-        exit_above_soc_pct: 60
+        release_margin_pct: 15
+
+        # The one rule with nothing above it. It overrides every tier, every
+        # schedule, the clock, an operator override and the minimum times,
+        # and it needs no clock, so it keeps working on a machine that has no
+        # idea what day it is.
+        #
+        # Two sources, in different units, each with its own bounds. The cell
+        # minimum is the real floor: a pack voltage cannot see one weak cell,
+        # since 3.10 V beside three at 3.43 reads as a healthy 13.39 V bank.
+        # The charge controller's figure is the second opinion, because it is
+        # wired, resident, and reports every thirty seconds while the BMS
+        # radio goes quiet for minutes at a time.
+        #
+        # Either source may shed. Only the source that shed may release,
+        # which is what stops the pack voltage clearing a floor the cell
+        # tripped: shedding this branch removes most of the draw, so the pack
+        # voltage rises as a direct result of the shed.
+        floor:
+          sources:
+            - device: bms
+              field: cell_min_volts
+              shed_below: 3.15        # about 5 percent on this chemistry
+              restore_above: 3.25     # about 10 percent
+            - device: mppt
+              field: battery_volts
+              shed_below: 12.6
+              restore_above: 13.0
+
+        # Each tier is a complete schedule, and the load runs only while
+        # every latched tier permits it. A deeper tier can then only remove
+        # running time, so the ladder cannot ask for more power at a lower
+        # state of charge however these windows are later edited.
+        #
+        # The ladder is keyed to what the cameras are for rather than to
+        # clock convenience. Midday goes first because it is worthless for
+        # deer, then the night, then everything. Cameras and recorder are
+        # most of the steady draw here, so the remaining tiers are roughly
+        # 1.3x, 2.8x and 6.7x the runway of running them continuously.
+        tiers:
+          - below_pct: 50
+            schedule: {type: clock, on_from: "05:00", on_to: "22:00"}
+
+          - below_pct: 25
+            # The deer movement windows. Each is weighted toward the lit side
+            # of its event, which is where a camera is useful and where legal
+            # shooting light sits. They stay inside the tier above all year:
+            # measured against an almanac for this latitude the margin is
+            # nine minutes at dawn and seven at dusk, at the June extreme.
+            schedule:
+              type: solar
+              on_windows:
+                - {from: [sunrise, -1h], to: [sunrise, 2h]}
+                - {from: [sunset, -2h], to: [sunset, 1h]}
+
+          - below_pct: 10
+            # Buys runway rather than safety. With this branch off, the Pi,
+            # the charge controller and the battery radios still draw, and
+            # none of that can be shed because one of them is doing the
+            # shedding. The floor above and the pack's own cutoff are what
+            # actually stop the discharge.
+            schedule: {type: never}
 
     irrigation:
       type: sequenced_ac
-      enabled: true                   # set false when the creek is dry
+
+      # Declared, specified, and not driven. The controller refuses an
+      # enabled load of a type it does not drive, rather than skipping it at
+      # run time: a file saying a load is on with nothing driving it reads
+      # exactly like a load that works.
+      #
+      # Three reasons it waits. Every threshold below is a placeholder until
+      # the pump is characterized. It is the only load here that can cause
+      # physical damage, through a pump drawing 90 to 180 A behind an
+      # inverter sequence. And it is seasonal, so nothing is lost by waiting.
+      enabled: false
       on_stale_data: deny
 
       inverter:

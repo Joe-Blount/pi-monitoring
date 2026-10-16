@@ -14,6 +14,7 @@ import re
 import pytest
 
 from monitoring import config, drivers, lineproto, runner
+from monitoring.control import spec as control_spec
 from monitoring.drivers.base import Driver
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
@@ -226,10 +227,11 @@ def known_driver_fields():
     from monitoring.drivers.dht import DhtDriver
     from monitoring.drivers.host import HostDriver
     from monitoring.drivers.rain_gauge import RainCounter
-    from monitoring.drivers import abc_bms, eg4_modbus, pi30, vedirect
+    from monitoring.drivers import abc_bms, eg4_modbus, jbd, pi30, vedirect
     from tests import vedirect_fixtures as fx
     from tests import abc_bms_fixtures as bms
     from tests import eg4_modbus_fixtures as eg4
+    from tests import jbd_fixtures as jbd_fx
 
     fixtures = pathlib.Path(__file__).resolve().parent / "fixtures"
     sunny = ("230.1 50.0 230.1 50.0 0800 0750 015 420 53.20 010 085 0045 "
@@ -244,6 +246,11 @@ def known_driver_fields():
         "pi30": pi30.parse_qpigs(sunny),
         "rain_gauge": RainCounter(None, 0.011).fields(),
         "abc_bms": _abc_bms_fields(abc_bms, bms),
+        # From the notifications a real pack sent, so a control block naming
+        # a field it does not emit fails here. This is the pack the blind's
+        # camera ladder reads its state of charge and its cell minimum from,
+        # and before the fixture existed both references were unchecked.
+        "jbd": jbd.parse(jbd_fx.real_messages()),
         # From a register block captured off the inverter, so a
         # control block naming a field it does not emit fails here.
         "eg4_modbus": eg4_modbus.parse(eg4.PV_ON_RECHARGING),
@@ -573,3 +580,122 @@ def test_the_reference_walker_finds_nested_and_listed_references():
     assert len(found) == 3
     assert found["l.inside"]["device"] == "box"
     assert any(k.endswith("[1]") for k in found)
+
+
+# -- the shipped control block ----------------------------------------------
+
+def enabled_everywhere(path):
+    """A node's control block read as though every device it declares were
+    enabled.
+
+    The blind's downstairs machine does not exist yet, and its battery
+    devices are declared disabled there while the upstairs node polls them.
+    The spec refuses a ladder whose source nothing will write, so the block
+    cannot be validated as the file stands. That refusal is correct and is
+    asserted below; this is how the ladder's shape and thresholds are checked
+    without pretending the file is deployable today.
+    """
+    node = load(path)
+    for device in node.devices:
+        device.enabled = True
+    return control_spec.load_control(node)
+
+
+def test_the_shipped_camera_ladder_is_the_one_that_was_agreed():
+    """The numbers, not the shape. A typo in a threshold here is a load
+    behaving differently from what anybody decided, on a machine an hour
+    away, and nothing else in the suite reads this file's control block."""
+    loads = enabled_everywhere(REPO / "sites" / "blind1" / "downstairs.yaml")
+    assert sorted(loads) == ["cameras"], (
+        "irrigation must stay declared and undriven")
+
+    cameras = loads["cameras"]
+    assert cameras["control_pin"] == 23
+    assert cameras["polarity"] == "energize_to_shed", (
+        "de-energized must connect the cameras, so a dead Pi leaves the site "
+        "watched and a reboot does not power cycle the recorder")
+    assert cameras["min_run"] == 600.0
+    assert cameras["min_off"] == 1800.0
+
+    ladder = cameras["shed_ladder"]
+    assert ladder["source"] == {"device": "bms",
+                                "field": "state_of_charge_pct"}
+    assert ladder["stale_after"] == 600.0
+    assert ladder["release_margin_pct"] == 15.0
+    assert ladder["enter_after_readings"] == 2
+    assert ladder["restore_dwell"] == 900.0
+
+    assert [tier["below_pct"] for tier in ladder["tiers"]] == [50.0, 25.0, 10.0]
+    assert ladder["tiers"][0]["schedule"] == {
+        "type": "clock", "on_from": 5 * 60, "on_to": 22 * 60}
+    assert ladder["tiers"][2]["schedule"] == {"type": "never"}
+
+    windows = ladder["tiers"][1]["schedule"]["on_windows"]
+    assert windows == [
+        {"from": ("sunrise", -3600.0), "to": ("sunrise", 7200.0)},
+        {"from": ("sunset", -7200.0), "to": ("sunset", 3600.0)},
+    ], "the deer movement windows"
+
+    floor = ladder["floor"]["sources"]
+    assert [(f["device"], f["field"]) for f in floor] == [
+        ("bms", "cell_min_volts"), ("mppt", "battery_volts")], (
+        "the cell minimum is the real floor and the charge controller is the "
+        "second opinion, because the battery radio goes quiet for minutes")
+    assert (floor[0]["shed_below"], floor[0]["restore_above"]) == (3.15, 3.25)
+    assert (floor[1]["shed_below"], floor[1]["restore_above"]) == (12.6, 13.0)
+
+
+def test_the_camera_windows_stay_inside_the_tier_above_them_all_year():
+    """A deeper tier must only ever remove running time.
+
+    Intersection semantics make that true however these are edited, so this
+    is not load bearing for correctness. It is here because the margin is
+    minutes: measured against an almanac the dawn window opens nine minutes
+    after the tier above permits it and the dusk window closes seven minutes
+    before it stops. An edit widening either one by a quarter of an hour
+    would start clipping, and this says so before somebody wonders why.
+    """
+    import datetime
+    import zoneinfo
+
+    from monitoring.control import sun
+
+    loads = enabled_everywhere(REPO / "sites" / "blind1" / "downstairs.yaml")
+    tiers = loads["cameras"]["shed_ladder"]["tiers"]
+    clock_tier = tiers[0]["schedule"]
+    windows = tiers[1]["schedule"]["on_windows"]
+
+    zone = zoneinfo.ZoneInfo("America/Chicago")
+    worst = None
+    for day in range(1, 366):
+        date = datetime.date(2026, 1, 1) + datetime.timedelta(days=day - 1)
+        rise, _, set_ = sun.events(date, 37.0, -97.4, zone)
+        events = {"sunrise": rise, "sunset": set_}
+        for window in windows:
+            for edge in ("from", "to"):
+                event, offset = window[edge]
+                when = events[event] + datetime.timedelta(seconds=offset)
+                minute = when.hour * 60 + when.minute
+                room = min(minute - clock_tier["on_from"],
+                           clock_tier["on_to"] - minute)
+                if worst is None or room < worst[0]:
+                    worst = (room, date, edge, when.time())
+
+    assert worst[0] >= 0, (
+        "on %s the %s edge falls at %s, outside the period the tier above "
+        "permits, so the deeper tier would ask for power the shallower one "
+        "refuses" % (worst[1], worst[2], worst[3]))
+
+
+def test_the_downstairs_control_block_is_refused_until_the_pack_moves():
+    """The device comments ask for the pack to be enabled here and removed
+    upstairs on the same visit, never separately. This makes that coupling a
+    refusal rather than an instruction: the ladder reads the pack's BMS, the
+    spec refuses a source nothing will write, so enabling control without
+    enabling the pack fails at start with the reason instead of running a
+    controller that latches nothing and sheds nothing.
+    """
+    node = load(REPO / "sites" / "blind1" / "downstairs.yaml")
+    with pytest.raises(control_spec.SpecError) as raised:
+        control_spec.load_control(node)
+    assert "declared and disabled" in str(raised.value)
