@@ -8,10 +8,28 @@ tags:
 
 devices:
 
-  # The DHT22 deliberately stays on its existing compiled telegraf plugin for
-  # now. It works, and replacing it would mean adopting a GPIO library this
-  # project does not trust yet. Swapping the one thing that works for the one
-  # library we distrust is a poor first move; this comes later, or never.
+  # The DHT22 stays on its existing compiled telegraf plugin, and the reason
+  # has changed from caution to evidence.
+  #
+  # The plugin reports a checksum failure roughly every seven minutes. That
+  # looks like a reason to move to the kernel driver, which reads the sensor
+  # from an interrupt handler rather than by timing loops in userspace. The
+  # kernel driver was tried here, loaded at run time on this same pin, and it
+  # fails about as often: four attempts in ten, reporting no signal edges at
+  # all rather than a bad checksum.
+  #
+  # No signal edges means the sensor never pulled the line down, which no
+  # driver can fix. The sensor sits on a breakout with its own pull-up, on
+  # short jumper leads, inside a case: the connectors are the suspect. Both
+  # the plugin and this project's driver retry three times, and three retries
+  # over a four-in-ten failure rate land in the same place, around
+  # ninety-seven percent of polls succeeding. So migrating would change which
+  # code reports the fault without changing how often the sensor answers.
+  #
+  # Worth doing when the case is open for other work, with the connectors
+  # reseated first so the change is measured against a sensor that answers.
+  # The block below is what to uncomment; the overlay line it needs is
+  # dtoverlay=dht11,gpiopin=4 in /boot/config.txt, and that needs a reboot.
   #
   # - name: box
   #   driver: dht
