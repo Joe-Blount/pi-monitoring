@@ -324,6 +324,23 @@ if [[ "$REPO" != "/opt/monitoring" ]]; then
     echo "    /opt/monitoring -> $REPO"
 fi
 
+# On the command search path, because that is how the field guide tells
+# somebody to type them: `sudo control shedding off`, not a path they have to
+# remember while standing at a machine with a dead battery. /opt/monitoring
+# is not on anybody's PATH, and it is not on the one sudo substitutes either.
+#
+# /usr/local/bin rather than /usr/bin: it is for locally installed software,
+# it is in the secure_path this distribution gives sudo, and nothing a
+# package upgrade does will touch it.
+#
+# Links rather than copies, pointing through /opt/monitoring rather than at
+# $REPO, so that a later install from a different directory needs only the
+# one link above repointed and these keep working.
+for tool in collect control; do
+    ln -sfn "/opt/monitoring/bin/$tool" "/usr/local/bin/$tool"
+done
+echo "    collect and control on the path in /usr/local/bin"
+
 echo "==> credentials"
 if [[ -f /etc/monitoring/influx.env ]]; then
     echo "    /etc/monitoring/influx.env already exists, left untouched"

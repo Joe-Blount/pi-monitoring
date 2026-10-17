@@ -104,9 +104,10 @@ def _control_subcommands_in_guide():
 #:
 #: Every check below that walks the parsed set shrinks silently when the
 #: parser stops matching: the parametrization just gets smaller and the file
-#: still passes, with fewer tests and no failure anywhere. Stripping a sudo
-#: prefix is exactly the kind of edit that can cause it, and the guide gained
-#: that prefix on every command.
+#: still passes, with fewer tests and no failure anywhere. Anything that
+#: changes the shape of a command line in the guide can cause it, a prefix on
+#: every command most of all, and the parser cannot report what it failed to
+#: recognise.
 GUIDE_SUBCOMMANDS = {"dry-run", "override", "run", "shedding"}
 
 
@@ -122,8 +123,7 @@ def test_the_guide_shows_the_control_subcommands_it_is_known_to_show():
 
 
 @pytest.mark.skipif(not CONTROL.exists(),
-                    reason="bin/control does not exist yet; it is being "
-                          "written in parallel")
+                    reason="bin/control is not present in this tree")
 @pytest.mark.parametrize("subcommand", sorted(_control_subcommands_in_guide()))
 def test_every_control_subcommand_the_guide_shows_exists_in_bin_control(
         subcommand):
@@ -151,6 +151,63 @@ def test_every_control_command_the_guide_shows_carries_sudo():
     assert shown, "the guide shows no control command, so this proves nothing"
     bare = [line for line in shown if not line.startswith("sudo ")]
     assert bare == [], "shown without sudo: %s" % "; ".join(bare)
+
+
+def _linked_onto_the_path(install):
+    """Every tool the installer links into a command search path.
+
+    Comments are stripped first. The installer explains itself at length, so
+    a search of the raw text finds the path it talks about as readily as the
+    path it creates, and a test that cannot tell those apart passes against
+    an installer that only describes the intention.
+    """
+    code = [line.split("#", 1)[0] for line in install.splitlines()]
+    linked = set()
+    loop_names = []
+    for line in code:
+        match = re.match(r"\s*for\s+(\w+)\s+in\s+([\w\s]+?);\s*do", line)
+        if match:
+            loop_names = match.group(2).split()
+        if "ln " in line and "/usr/local/bin" in line:
+            for name in re.findall(r"/usr/local/bin/(\$?\{?\w+\}?)", line):
+                if name.startswith("$"):
+                    linked |= set(loop_names)
+                else:
+                    linked.add(name)
+    return linked
+
+
+def test_every_bare_command_the_guide_shows_is_put_on_the_path():
+    """The guide tells somebody to type `collect` and `sudo control`, so the
+    installer has to make those resolve.
+
+    Nothing links them by default: the installer points /opt/monitoring at
+    the checkout, and that directory is on nobody's command search path, nor
+    on the one sudo substitutes for root. Every command in this document
+    would stop with "command not found" for the person it is written for,
+    which is the worst way for a field guide to be wrong, because it reads as
+    though the machine is broken rather than the instructions.
+
+    Checked against the installer rather than by running anything, since what
+    is asserted is a property of a machine this suite is not running on.
+    """
+    bare = set()
+    for line in CODE_LINES:
+        words = line.replace('"', "").split()
+        if words and words[0] == "sudo":
+            words = words[1:]
+        if words and "/" not in words[0]:
+            bare.add(words[0])
+    bare &= {path.name for path in (REPO / "bin").iterdir()}
+    assert bare, "the guide shows no bare command, so this proves nothing"
+
+    linked = _linked_onto_the_path(
+        (REPO / "deploy" / "install.sh").read_text())
+    missing = bare - linked
+    assert not missing, (
+        "the guide says to type %s, and the installer puts %s on the command "
+        "search path, so those will not resolve"
+        % (sorted(missing), sorted(linked) or "nothing"))
 
 
 # -- file paths -----------------------------------------------------------

@@ -9,9 +9,9 @@ weeks later from a gap in the data.
 The rule throughout: a key nobody recognises is an error, not a comment. A
 typo in a threshold name silently leaves the default in place, the load
 behaves as though the line was never written, and the file reads as though it
-was. That is the same failure as a load type that is not in the registry,
-which this project has already been bitten by: the type yields no loads, and
-every test about that load passes by finding nothing to check.
+was. A load type nobody recognises fails the same way and is worse: the type
+yields no loads at all, so every test about that load passes by finding
+nothing to check.
 """
 
 import datetime

@@ -445,11 +445,37 @@ def _start_run(tmp_path, node, extra_env=None):
         env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
 
+def _wait_for_a_pass(tmp_path, proc, timeout=20.0):
+    """Block until the loop has published a pass, and return how many.
+
+    A published document is the loop's own statement that it is running: it
+    is written at the end of a pass, which is after the signal handlers are
+    installed. Waiting for it rather than for a fixed stretch of wall clock
+    is what keeps these tests from depending on how loaded the machine is.
+    A fixed wait is a guess about somebody else's scheduler, and the way it
+    fails is a signal delivered before the handler exists, which kills the
+    process with the default action and reads as the behaviour under test
+    being broken.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            _, err = proc.communicate()
+            pytest.fail("run exited before publishing a pass: %s" % err)
+        try:
+            return read_published(tmp_path)["fields"]["passes"]
+        except (OSError, ValueError, KeyError):
+            time.sleep(0.02)
+    proc.kill()
+    proc.communicate()
+    pytest.fail("run published no pass within %gs" % timeout)
+
+
 @pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGINT])
 def test_run_exits_cleanly_on_a_shutdown_signal(tmp_path, sig):
     node = controlled_node(tmp_path, loop_interval="50ms")
     proc = _start_run(tmp_path, node)
-    time.sleep(0.4)
+    _wait_for_a_pass(tmp_path, proc)
     proc.send_signal(sig)
     try:
         out, err = proc.communicate(timeout=5)
@@ -466,7 +492,7 @@ def test_run_exits_promptly_rather_than_at_the_end_of_an_interval(tmp_path):
     interval elapsing on its own, explains an exit this fast."""
     node = controlled_node(tmp_path, loop_interval="10s")
     proc = _start_run(tmp_path, node)
-    time.sleep(0.3)
+    _wait_for_a_pass(tmp_path, proc)
     started = time.monotonic()
     proc.send_signal(signal.SIGTERM)
     try:
@@ -481,22 +507,28 @@ def test_run_exits_promptly_rather_than_at_the_end_of_an_interval(tmp_path):
 # -- the loop interval: from the file, and its default -----------------------
 
 def test_a_short_loop_interval_from_the_node_file_is_honoured(tmp_path):
+    """A rate, so this one does need a stretch of wall clock. The stretch is
+    measured from the loop's first published pass rather than from the
+    process starting, so a slow start borrows no time from it."""
     node = controlled_node(tmp_path, loop_interval="50ms")
     proc = _start_run(tmp_path, node)
+    first = _wait_for_a_pass(tmp_path, proc)
     time.sleep(0.45)
     proc.send_signal(signal.SIGTERM)
     proc.communicate(timeout=5)
     passes = read_published(tmp_path)["fields"]["passes"]
-    assert passes >= 3, (
-        "only %d pass(es) in 0.45s at a 50ms interval" % passes)
+    assert passes - first >= 3, (
+        "only %d further pass(es) in 0.45s at a 50ms interval"
+        % (passes - first))
 
 
 def test_with_no_loop_interval_in_the_file_only_one_pass_runs_quickly(
         tmp_path):
-    """The default is 30s. A short wait must therefore see exactly the one
-    pass every start makes before ever sleeping, and no second one."""
+    """The default is 30s. So the one pass every start makes before it ever
+    sleeps must be the only one, however long this waits after it."""
     node = controlled_node(tmp_path, loop_interval=None)
     proc = _start_run(tmp_path, node)
+    assert _wait_for_a_pass(tmp_path, proc) == 1
     time.sleep(0.4)
     proc.send_signal(signal.SIGTERM)
     proc.communicate(timeout=5)

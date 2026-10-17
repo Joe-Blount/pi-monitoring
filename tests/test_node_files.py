@@ -589,7 +589,7 @@ def enabled_everywhere(path):
     """A node's control block read as though every device it declares were
     enabled.
 
-    The blind's downstairs machine does not exist yet, and its battery
+    The blind's downstairs machine is not installed, and its battery
     devices are declared disabled there while the upstairs node polls them.
     The spec refuses a ladder whose source nothing will write, so the block
     cannot be validated as the file stands. That refusal is correct and is
