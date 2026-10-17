@@ -13,6 +13,7 @@ import os
 import pathlib
 import re
 import subprocess
+import sys
 
 import pytest
 
@@ -609,6 +610,80 @@ def test_no_package_helper_is_called_bare_under_set_e():
         assert "||" in stripped or "&&" in stripped, (
             "unguarded under set -e: %s" % stripped)
     assert checked, "found no calls to check, so this proves nothing"
+
+
+# -- the entry points, reached the way the installer leaves them ------------
+
+def _unmasked_environment(cwd):
+    """An interpreter environment where this repository is not importable.
+
+    The suite normally runs from a virtual environment that has the project
+    installed as editable, which puts `monitoring` on the path for every
+    process regardless of where it was started from. That is exactly the
+    thing being tested here, so it has to be taken away, or the test passes
+    against an entry point that could never find its own package on a real
+    machine.
+
+    `-S` skips site processing, which is what installs the editable finder,
+    while PYTHONPATH keeps the third party packages reachable because they
+    are ordinary directories. The result is an interpreter that can import
+    yaml and cannot import monitoring, which is a plain machine with the one
+    dependency the installer requires.
+
+    The probe runs somewhere else entirely, because an interpreter started
+    inside the repository has it on the path as the working directory and
+    the masking comes straight back.
+    """
+    import sysconfig
+    site_packages = sysconfig.get_paths()["purelib"]
+    env = dict(os.environ)
+    env["PYTHONPATH"] = site_packages
+    env.pop("PYTHONHOME", None)
+    probe = subprocess.run(
+        [sys.executable, "-S", "-c",
+         "import yaml\n"
+         "try:\n"
+         "    import monitoring\n"
+         "except ModuleNotFoundError:\n"
+         "    pass\n"
+         "else:\n"
+         "    raise SystemExit(3)\n"],
+        cwd=str(cwd), env=env, capture_output=True, text=True)
+    if probe.returncode != 0:
+        pytest.skip("cannot build an interpreter without this repository on "
+                    "its path: %s" % (probe.stderr.strip() or probe.returncode))
+    return env
+
+
+@pytest.mark.parametrize("tool", ["collect", "control"])
+def test_an_entry_point_works_through_the_symlink_the_installer_makes(
+        tmp_path, tool):
+    """The installer links /opt/monitoring at the checkout and then links
+    these into /usr/local/bin, so each one is reached through two symlinks.
+
+    An entry point that takes its package root from the path it was invoked
+    by rather than from the file it really is computes /usr as that root. The
+    command then resolves and immediately fails to import, which is worse for
+    somebody standing at the machine than not resolving at all: it reads as a
+    broken installation rather than a missing one, and the guide tells them
+    to type it.
+    """
+    opt = tmp_path / "opt" / "monitoring"
+    opt.parent.mkdir(parents=True)
+    opt.symlink_to(REPO)
+    path_dir = tmp_path / "usr" / "local" / "bin"
+    path_dir.mkdir(parents=True)
+    linked = path_dir / tool
+    linked.symlink_to(opt / "bin" / tool)
+
+    result = subprocess.run(
+        [sys.executable, "-S", str(linked), "--help"],
+        cwd=str(tmp_path), env=_unmasked_environment(tmp_path),
+        capture_output=True, text=True, timeout=60)
+    assert "No module named" not in result.stderr, (
+        "reached through a symlink, %s cannot find its own package:\n%s"
+        % (tool, result.stderr))
+    assert result.returncode == 0, result.stderr
 
 
 # -- the README must describe what actually exists --------------------------

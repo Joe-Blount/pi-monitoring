@@ -33,7 +33,13 @@ import signal
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# realpath, not abspath: this file is reached through a symlink in
+# /usr/local/bin, and abspath would leave that link in place and make
+# the package root /usr. The command would resolve and then fail to
+# import, which reads as a broken installation rather than a missing
+# one.
+sys.path.insert(
+    0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
 from monitoring import config, duration                    # noqa: E402
 from monitoring import drivers as driver_registry           # noqa: E402
