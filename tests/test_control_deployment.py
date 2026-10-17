@@ -181,6 +181,25 @@ def test_the_unit_does_not_decline_to_start_on_a_condition():
             "failure" % directive.strip())
 
 
+def test_the_slow_fragment_does_not_read_the_battery_devices_at_once():
+    """Measured on the hardware, not reasoned about: concurrent reads of the
+    blind's two Bluetooth devices lost two thirds of the reads and took
+    longer, because one radio cannot serve two discoveries.
+
+    The flag exists and stays off. This holds the deployed command to that,
+    since the fragment is the one place the decision takes effect and a
+    comment recording the measurement cannot enforce it.
+    """
+    slow = (REPO / "deploy" / "telegraf.d" / "monitoring-slow.conf").read_text()
+    commands = [line for line in slow.splitlines()
+                if line.strip().startswith("commands")]
+    assert commands, "the fragment runs no command, so this proves nothing"
+    for line in commands:
+        assert "--concurrent" not in line, (
+            "the deployed collector reads the packs concurrently, which was "
+            "measured as both slower and unreliable: %s" % line.strip())
+
+
 def test_the_service_can_still_reach_an_install_under_a_home_directory():
     """The installer symlinks /opt/monitoring at wherever it was run from,
     and a copy in a home directory is a documented way to install this.

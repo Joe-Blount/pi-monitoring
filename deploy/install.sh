@@ -463,11 +463,39 @@ fi
 echo "    1 poll fragment and $resident resident fragment(s) installed"
 echo "    (inputs only; the output on this machine is left exactly as it was)"
 
+# Every check below runs as telegraf, in the environment the service itself
+# gets, through this one helper.
+#
+# As telegraf, because root can read a repository under a 0700 home directory
+# that telegraf cannot, so checking as root would pass and every collection
+# afterwards would fail.
+#
+# In a working directory telegraf can write, because that is the one lgpio
+# needs: it takes its notification directory from LG_WD or the working
+# directory, never from HOME. `runuser` sets HOME to the target user's own
+# passwd entry but keeps the caller's working directory, and the caller is
+# whoever typed sudo. From a home directory telegraf cannot enter, lgpio
+# cannot create its notification file, and gpiozero works down its own list of
+# backends to whichever is installed. The check then reports on a backend the
+# service does not use, and none of the alternatives gives the property the
+# pins here depend on: the character device backend holds a kernel claim that
+# is dropped when the process dies, so a line is free for whatever runs next
+# and a dead process leaves its relay at the state its wiring decides. A check
+# on any of the others can leave the line driven or claimed behind it.
+#
+# HOME is set as well, for parity with the drop-in the service gets rather
+# than for lgpio, so a driver that does read HOME sees the same value under
+# the check as it will in service.
+as_telegraf() {
+    ( cd /var/lib/monitoring \
+      && runuser -u telegraf -- env HOME=/var/lib/monitoring "$@" )
+}
+
 # The node file is the authority on what should be running. Saying so here
 # turns a mismatch into something visible at install rather than into data
 # that silently never arrives.
 echo "==> what this node expects to collect"
-runuser -u telegraf -- /opt/monitoring/bin/collect \
+as_telegraf /opt/monitoring/bin/collect \
     --node /etc/monitoring/node.yaml --list | sed "s/^/    /"
 
 echo "==> checking devices"
@@ -476,9 +504,6 @@ echo "==> checking devices"
 stop_telegraf_once
 # A warning, never a refusal. A dead five dollar sensor must not block a
 # software update at a site nobody can reach; it fails loudly at runtime.
-# As telegraf, not as root. Root can read a repository under a 0700 home
-# directory that telegraf cannot, so checking as root would pass and every
-# collection afterwards would fail.
 # Bounded, because this runs with telegraf stopped. Most drivers here have no
 # deadline of their own, and a device that accepts a connection and then stops
 # answering would otherwise hold the whole node silent until somebody noticed.
@@ -489,8 +514,19 @@ CHECK_TIMEOUT=240
 # dead sensor. --foreground so the timeout stays in this process group and
 # an operator's Ctrl-C reaches what is actually stuck.
 check_status=0
-timeout --foreground "$CHECK_TIMEOUT" runuser -u telegraf -- \
-    /opt/monitoring/bin/collect --node /etc/monitoring/node.yaml --check \
+# `exec`, so the timeout's direct child is runuser rather than this shell.
+# timeout signals only its direct child, and runuser forwards the signal to
+# the collector. Without exec the chain happens to work, because bash replaces
+# itself when the last command of an and-list ends the -c string, but any
+# later edit that adds a command after it silently breaks the guarantee: the
+# installer would report the timeout and restart telegraf while the check
+# still holds the device, which is the whole reason the device check runs with
+# telegraf stopped.
+timeout --foreground "$CHECK_TIMEOUT" \
+    bash -c 'cd /var/lib/monitoring \
+             && exec runuser -u telegraf -- env HOME=/var/lib/monitoring \
+                /opt/monitoring/bin/collect \
+                --node /etc/monitoring/node.yaml --check' \
     || check_status=$?
 if [[ "$check_status" != "0" ]]; then
     status="$check_status"

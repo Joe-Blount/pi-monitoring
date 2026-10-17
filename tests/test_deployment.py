@@ -18,6 +18,7 @@ import sys
 import pytest
 
 from monitoring import config, drivers
+from monitoring.control import files as control_files
 from monitoring.control import location
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
@@ -521,6 +522,41 @@ def test_every_package_install_goes_through_a_helper_that_stops_telegraf():
                    for l in body), helper
 
 
+def test_every_device_check_runs_in_the_environment_the_service_gets():
+    """A check that passes on a different pin backend from the one production
+    uses is a check that proves nothing.
+
+    lgpio takes its notification directory from the working directory, never
+    from HOME. `runuser` keeps the caller's working directory, and the caller
+    is whoever typed sudo, so from a home directory telegraf cannot enter, the
+    lgpio backend fails and gpiozero works down its list to whichever other
+    backend is installed. The installer explains that hazard where it writes
+    the service drop-in, and its own checks have to run the same way or they
+    report on a backend the service does not use. Only the character device
+    backend drops its claim when the process dies, which is what leaves a line
+    free for whatever runs next, so a check on any other can leave the line
+    driven or claimed behind it.
+
+    Checked structurally, because the environment of a process on a Raspberry
+    Pi has no proxy this suite can run.
+    """
+    lines = INSTALL_CODE.splitlines()
+    invocations = [i for i, line in enumerate(lines)
+                   if "runuser -u telegraf" in line]
+    assert invocations, "found no checks to verify, so this proves nothing"
+
+    home = "HOME=" + str(control_files.PERSIST_DIR)
+    for index in invocations:
+        # The surrounding statement, since the pieces are spread over
+        # continuations and a subshell.
+        window = "\n".join(lines[max(0, index - 3):index + 2])
+        assert home in window, (
+            "a check runs without the service's home:\n%s" % window)
+        assert "cd %s" % control_files.PERSIST_DIR in window, (
+            "a check runs without a working directory telegraf can "
+            "write:\n%s" % window)
+
+
 def test_the_heaviest_package_path_is_refused_when_memory_is_short():
     script = INSTALL_CODE
     assert "MemAvailable" in script, "free memory is the wrong number to read"
@@ -535,9 +571,23 @@ def test_the_heaviest_package_path_is_refused_when_memory_is_short():
 def test_the_device_check_cannot_run_for_ever_with_telegraf_stopped():
     """Most drivers here have no deadline of their own."""
     script = INSTALL_CODE
-    assert "timeout --foreground \"$CHECK_TIMEOUT\" runuser" in script, (
-        "without --foreground the timeout runs in its own process group and "
-        "an operator's interrupt never reaches what is stuck")
+    # --foreground asserted on the timeout itself, not on the word after it,
+    # because what the timeout wraps is allowed to change shape. What must not
+    # change is the timeout staying in this process group, so an operator's
+    # interrupt reaches whatever is stuck.
+    bounded = script[script.index('timeout --foreground "$CHECK_TIMEOUT"'):]
+    bounded = bounded[:bounded.index("|| check_status=$?")]
+    assert "--check" in bounded, (
+        "the device check is outside the bounded statement, so it can run "
+        "unbounded with telegraf stopped:\n%s" % bounded)
+    # The timeout signals only its direct child, so the shell it wraps has to
+    # hand over rather than linger. Without this the chain still works by a
+    # bash optimisation, and the next command added after it would silently
+    # leave the check running while the installer reports a timeout and
+    # restarts telegraf onto a device the check still holds.
+    assert "exec runuser" in bounded, (
+        "the bounded statement keeps a shell between the timeout and the "
+        "check, so a signal reaches the shell instead:\n%s" % bounded)
     # Captured, not read after a negation. After `if ! cmd` the status is
     # the negation's, always zero, so the branch explaining a timeout could
     # never run and a killed check reported itself as a dead sensor.

@@ -245,16 +245,20 @@ def poll(node, now_ns=None, out=None, err=None, speed="all", clock=None,
     sensor is always the one that loses.
 
     With `concurrent`, the devices are read at the same time rather than one
-    after another. That is for a group whose cost is waiting rather than
-    working: two Bluetooth packs are two separate connections to two separate
-    peripherals, so reading them together takes as long as the slower one
-    instead of the sum, and both readings land within a second or two of each
-    other instead of tens of seconds apart. Neither driver scans, so there is
-    no discovery to contend over, and each already runs its own event loop on
-    its own thread.
+    after another. The appeal is that a group whose cost is waiting should
+    cost as long as its slowest member rather than the sum.
 
-    It is off by default and asked for explicitly, because it changes when a
-    reading is taken. The cheap sensors have nothing to gain from it: they
+    It does not work out that way on the hardware here, which is why it is off
+    by default and has to be asked for. Measured on two Bluetooth packs, it
+    loses most of the reads and takes longer than reading them in turn: the
+    drivers hand bleak a bare address, bleak resolves an uncached address by
+    running a discovery, and one radio cannot serve two discoveries at once.
+    The numbers are in deploy/telegraf.d/monitoring-slow.conf, beside the
+    command that does not use it.
+
+    The flag stays because the obstacle is the radio rather than this code,
+    and a site with a second adapter, or a driver that caches its address,
+    would not have it. The cheap sensors have nothing to gain either way: they
     are read in milliseconds, and starting several at once is the kind of
     contention the one-process rule above exists to avoid.
 
