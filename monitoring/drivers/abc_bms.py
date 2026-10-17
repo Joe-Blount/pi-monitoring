@@ -66,9 +66,45 @@ FRAME_LENGTH = 0x14          # every reply is exactly twenty bytes
 READ_COMMANDS = ((0xC1, (0xF0, 0xF2)), (0xC2, (0xF0, 0xF3, 0xF4)), (0xC4, (0xF9,)))
 IDENTITY_COMMAND = (0xC0, (0xF1,))
 
-#: The message carrying protection and alarm status. Requested by command
-#: 0xC4 and, until this was noticed, fetched on every read and discarded.
+#: The message carrying protection and alarm status, requested by 0xC4.
 ALARM_MESSAGE = 0xF9
+
+#: The sixteen protection states the pack reports, in the order the message
+#: carries them: one byte each, starting at offset 2, where 0x01 means the
+#: state is active and 0x00 means it is not. A bit field would be the obvious
+#: guess and is wrong; the pack spends a whole byte on each.
+#:
+#: The short names are the ones the vendor application prints on its
+#: protection screen, kept here so somebody holding a phone next to the rack
+#: can match what it shows against what this publishes. The descriptions are
+#: what they stand for.
+PROTECTION_STATES = (
+    ("COV", "a cell above its charge voltage limit"),
+    ("FC", "fully charged"),
+    ("SOCC", "state of charge high, charging"),
+    ("OTC", "pack too warm to charge"),
+    ("UTC", "pack too cold to charge"),
+    ("BOTC", "board too warm, charging"),
+    ("CUV", "a cell below its discharge voltage limit"),
+    ("FD", "fully discharged"),
+    ("SOCD", "state of charge low, discharging"),
+    ("OTD", "pack too warm to discharge"),
+    ("UTD", "pack too cold to discharge"),
+    ("BOTD", "board too warm, discharging"),
+    ("SCD", "short circuit on discharge"),
+    ("OCD", "over current on discharge"),
+    ("UVP", "pack under voltage"),
+    ("OVP", "pack over voltage"),
+)
+
+#: Where the first protection byte sits, after the frame head and the message
+#: identifier.
+PROTECTION_OFFSET = 2
+
+#: What an active state reads as. Anything else counts as inactive rather
+#: than as a fault, so a pack that puts something unexpected in one of these
+#: bytes does not invent an alarm nobody can act on.
+PROTECTION_ACTIVE = 0x01
 
 #: The message carrying cell voltages, which arrives in several parts.
 CELL_MESSAGE = 0xF4
@@ -262,6 +298,26 @@ TEMP_BYTES = 2
 TEMP_MIN_C, TEMP_MAX_C = -40.0, 90.0
 
 
+def protection(message):
+    """The pack's protection states, as a bit field and as a list of names.
+
+    Returns nothing at all when the message is absent or too short, rather
+    than zeroes: no reply is not the same as a healthy reply, and publishing
+    a calm zero for a pack that said nothing is the one answer that could
+    hide a fault.
+    """
+    needed = PROTECTION_OFFSET + len(PROTECTION_STATES)
+    if not message or len(message) < needed:
+        return {}
+
+    flags, active = 0, []
+    for index, (name, _description) in enumerate(PROTECTION_STATES):
+        if message[PROTECTION_OFFSET + index] == PROTECTION_ACTIVE:
+            flags |= 1 << index
+            active.append(name)
+    return {"alarm_flags": float(flags), "alarm_active": ",".join(active)}
+
+
 def temperatures(message):
     """Celsius readings from the status message, as many as it declares.
 
@@ -314,16 +370,15 @@ def parse(messages):
     for number, celsius in enumerate(temperatures(messages.get(0xF2)), start=1):
         out["temp_%d" % number] = round(celsius * 9.0 / 5.0 + 32.0, 1)
 
-    # The pack's own protection and alarm word. Published as a number rather
-    # than decoded into named flags, because the bit meanings are not
-    # documented in either reference and a fault has never been seen here to
-    # confirm them. Zero is healthy; anything else deserves a look. That is
-    # enough to alert on, and far better than discarding it, which is what
-    # happened before: the command was sent on every read and the reply
-    # thrown away.
-    alarm = messages.get(ALARM_MESSAGE)
-    if alarm and len(alarm) > 3:
-        out["alarm_flags"] = float(int.from_bytes(bytes(alarm[2:-1]), "big"))
+    # The pack's own protection states, as a number to alert on and a list
+    # to read.
+    #
+    # `alarm_flags` is zero when the pack is content, which is the whole
+    # alerting rule, and each state owns one bit so a value can be taken
+    # apart against PROTECTION_STATES. `alarm_active` names what is set,
+    # because a number alone sends somebody to the source at the moment they
+    # are least able to read it.
+    out.update(protection(messages.get(ALARM_MESSAGE)))
 
     cells = cell_voltages(messages.get(CELL_MESSAGE))
     if cells:

@@ -505,13 +505,119 @@ def test_the_alarm_message_is_published_rather_than_discarded():
     assert out["alarm_flags"] == 0.0
 
 
-def test_a_pack_reporting_an_alarm_publishes_a_non_zero_value():
-    """Published as a number because the bit meanings are not documented and
-    no fault has been seen here to confirm them. Zero healthy, anything else
-    worth looking at, which is enough to alert on."""
+def protection_frame(*active):
+    """A protection reply with the named states set and the rest clear."""
+    names = [name for name, _ in abc_bms.PROTECTION_STATES]
+    payload = bytearray(len(names))
+    for name in active:
+        payload[names.index(name)] = abc_bms.PROTECTION_ACTIVE
+    return fx.frame(abc_bms.ALARM_MESSAGE, bytes(payload))
+
+
+#: The order the pack sends its protection states in, written out rather
+#: than read from the driver.
+#:
+#: Every other test here builds its frame from the driver's own table, so it
+#: would follow the table anywhere, including into a swapped pair that reads
+#: as correct because the input moved with the expectation. This is the
+#: independent copy: it comes from the vendor application, which assigns one
+#: state per byte over a fixed span of its reply, and from its protection
+#: screen, which lists them in this order under Charge, Discharge and
+#: Hardware.
+VENDOR_PROTECTION_ORDER = (
+    "COV", "FC", "SOCC", "OTC", "UTC", "BOTC",
+    "CUV", "FD", "SOCD", "OTD", "UTD", "BOTD",
+    "SCD", "OCD", "UVP", "OVP",
+)
+
+
+def test_the_protection_order_is_the_one_the_pack_sends():
+    """A swapped pair here mislabels a fault, which is worse than not
+    decoding one: somebody reads "pack too cold to charge" and goes out with
+    a heater when a cell is actually under its voltage limit."""
+    assert tuple(name for name, _ in abc_bms.PROTECTION_STATES) == (
+        VENDOR_PROTECTION_ORDER)
+
+
+def test_every_protection_state_says_what_it_means():
+    """The short names are the vendor's and are opaque on their own. The
+    descriptions are what makes the table readable to somebody who does not
+    have the application in front of them."""
+    for name, description in abc_bms.PROTECTION_STATES:
+        assert name.isupper() and name.isalpha(), name
+        assert len(description) > 10 and description[0].islower(), name
+
+
+def test_a_contented_pack_publishes_a_zero_alarm_and_no_names():
+    """Zero is the whole alerting rule, so it has to mean exactly one thing:
+    every state was reported and none of them is set."""
     messages = fx.real_messages()
-    messages[abc_bms.ALARM_MESSAGE] = fx.frame(0xF9, b"\x00\x20")
-    assert abc_bms.parse(messages)["alarm_flags"] > 0
+    messages[abc_bms.ALARM_MESSAGE] = protection_frame()
+    out = abc_bms.parse(messages)
+    assert out["alarm_flags"] == 0.0
+    assert out["alarm_active"] == ""
+
+
+def test_each_protection_state_owns_one_bit_in_the_order_reported():
+    """The pack spends a whole byte on each state and this packs them into a
+    number, so the number can only be taken apart if the order is fixed.
+
+    Checked one at a time rather than in a lump, since a pair of swapped
+    entries gives the same total and would read as correct.
+    """
+    messages = fx.real_messages()
+    for index, (name, _description) in enumerate(abc_bms.PROTECTION_STATES):
+        messages[abc_bms.ALARM_MESSAGE] = protection_frame(name)
+        out = abc_bms.parse(messages)
+        assert out["alarm_flags"] == float(1 << index), name
+        assert out["alarm_active"] == name
+
+
+def test_several_states_at_once_are_all_named():
+    """A pack in trouble usually trips more than one, and the first to be
+    read is not the one that matters most."""
+    messages = fx.real_messages()
+    messages[abc_bms.ALARM_MESSAGE] = protection_frame("CUV", "OTD", "OVP")
+    out = abc_bms.parse(messages)
+    assert out["alarm_active"] == "CUV,OTD,OVP"
+    assert out["alarm_flags"] > 0
+
+
+def test_a_byte_that_is_not_the_active_value_is_not_an_alarm():
+    """The vendor application tests for exactly one value, and so does this.
+    Treating anything non-zero as a fault would invent alarms out of a byte
+    the pack uses for something else, and an alarm nobody can act on is
+    worse than none."""
+    messages = fx.real_messages()
+    frame = bytearray(protection_frame())
+    frame[abc_bms.PROTECTION_OFFSET] = 0x20
+    messages[abc_bms.ALARM_MESSAGE] = bytes(frame)
+    out = abc_bms.parse(messages)
+    assert out["alarm_flags"] == 0.0
+    assert out["alarm_active"] == ""
+
+
+def test_a_pack_that_said_nothing_publishes_no_alarm_at_all():
+    """Absent is not the same as healthy. A calm zero for a pack that never
+    answered is the one reading that could hide a fault, so the fields are
+    left out and the staleness of the rest speaks for itself."""
+    messages = fx.real_messages()
+    messages.pop(abc_bms.ALARM_MESSAGE, None)
+    out = abc_bms.parse(messages)
+    assert "alarm_flags" not in out
+    assert "alarm_active" not in out
+
+
+def test_a_truncated_protection_reply_is_not_read_as_healthy():
+    """Short by one state is short by one state. Reading what arrived and
+    assuming the rest are clear would report a pack as content on the
+    strength of bytes that never came."""
+    messages = fx.real_messages()
+    short = protection_frame()[:abc_bms.PROTECTION_OFFSET
+                               + len(abc_bms.PROTECTION_STATES) - 1]
+    messages[abc_bms.ALARM_MESSAGE] = short
+    out = abc_bms.parse(messages)
+    assert "alarm_flags" not in out
 
 
 def test_each_cell_is_published_separately():
