@@ -153,6 +153,10 @@ def test_every_control_command_the_guide_shows_carries_sudo():
     assert bare == [], "shown without sudo: %s" % "; ".join(bare)
 
 
+#: A directory the command search path really includes on this distribution.
+PATH_DIRECTORY = "/usr/local/bin"
+
+
 def _linked_onto_the_path(install):
     """Every tool the installer links into a command search path.
 
@@ -160,20 +164,35 @@ def _linked_onto_the_path(install):
     a search of the raw text finds the path it talks about as readily as the
     path it creates, and a test that cannot tell those apart passes against
     an installer that only describes the intention.
+
+    Variables are followed, because the destination is naturally held in one:
+    the installer has to look at a name before it takes it, so the path is
+    assigned and then used. Reading only the literal on the `ln` line finds
+    nothing as soon as that happens, and finding nothing is the answer that
+    would let this test stop checking.
     """
     code = [line.split("#", 1)[0] for line in install.splitlines()]
-    linked = set()
-    loop_names = []
+    path_vars, loop_names, linked = set(), [], set()
     for line in code:
-        match = re.match(r"\s*for\s+(\w+)\s+in\s+([\w\s]+?);\s*do", line)
-        if match:
-            loop_names = match.group(2).split()
-        if "ln " in line and "/usr/local/bin" in line:
-            for name in re.findall(r"/usr/local/bin/(\$?\{?\w+\}?)", line):
-                if name.startswith("$"):
-                    linked |= set(loop_names)
-                else:
-                    linked.add(name)
+        for name, value in re.findall(r"(\w+)=\"?([^\"\s]+)", line):
+            if value.startswith(PATH_DIRECTORY):
+                path_vars.add(name)
+        loop = re.match(r"\s*for\s+\w+\s+in\s+([\w\s]+?);\s*do", line)
+        if loop:
+            loop_names = loop.group(1).split()
+        if "ln " not in line:
+            continue
+        destination_is_on_the_path = (
+            PATH_DIRECTORY in line
+            or any("$%s" % name in line or "${%s}" % name in line
+                   for name in path_vars))
+        if not destination_is_on_the_path:
+            continue
+        literal = re.findall(re.escape(PATH_DIRECTORY) + r"/(\w+)", line)
+        if literal:
+            linked |= set(literal)
+        else:
+            linked |= set(loop_names)
     return linked
 
 

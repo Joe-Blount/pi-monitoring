@@ -16,11 +16,12 @@ import argparse
 import os
 import sys
 
-# realpath, not abspath: this file is reached through a symlink in
-# /usr/local/bin, and abspath would leave that link in place and make
-# the package root /usr. The command would resolve and then fail to
-# import, which reads as a broken installation rather than a missing
-# one.
+# realpath, not abspath. The package root has to come from where this
+# file really is, not from the path it was reached by: abspath leaves a
+# symlink in place, so a copy of this name in a directory on the command
+# search path would make the root that directory's parent. The command
+# then resolves and fails to import, which reads as a broken
+# installation rather than a missing one.
 sys.path.insert(
     0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 

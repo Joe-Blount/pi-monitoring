@@ -612,6 +612,67 @@ def test_no_package_helper_is_called_bare_under_set_e():
     assert checked, "found no calls to check, so this proves nothing"
 
 
+def _run_the_linking_block(tmp_path):
+    """The installer's real linking block, with its two absolute prefixes
+    redirected into a sandbox.
+
+    Run rather than read, because what matters is which of three states the
+    directory ends in and no reading of the text settles that.
+    """
+    block = INSTALL[INSTALL.index("for tool in collect control; do"):]
+    block = block[:block.index('echo "    collect and control on the path')]
+    sandbox = str(tmp_path)
+    block = block.replace("/usr/local/bin", sandbox + "/bin")
+    block = block.replace("/opt/monitoring", sandbox + "/opt/monitoring")
+
+    script = tmp_path / "link.sh"
+    script.write_text("#!/usr/bin/env bash\nset -euo pipefail\n" + block)
+    (tmp_path / "bin").mkdir(exist_ok=True)
+    real = tmp_path / "opt" / "monitoring" / "bin"
+    real.mkdir(parents=True, exist_ok=True)
+    for tool in ("collect", "control"):
+        (real / tool).touch()
+    return subprocess.run(["bash", str(script)], capture_output=True,
+                          text=True)
+
+
+def test_the_installer_puts_both_commands_on_the_path(tmp_path):
+    result = _run_the_linking_block(tmp_path)
+    assert result.returncode == 0, result.stderr
+    for tool in ("collect", "control"):
+        link = tmp_path / "bin" / tool
+        assert link.is_symlink(), "%s was not linked" % tool
+        assert os.readlink(str(link)).endswith("/opt/monitoring/bin/" + tool)
+
+
+def test_relinking_over_this_projects_own_link_is_silent(tmp_path):
+    """The installer runs again on every update, and from a different
+    directory after a move, so replacing its own link has to be ordinary."""
+    _run_the_linking_block(tmp_path)
+    again = _run_the_linking_block(tmp_path)
+    assert again.returncode == 0, again.stderr
+    assert "WARNING" not in again.stderr
+    assert (tmp_path / "bin" / "collect").is_symlink()
+
+
+def test_a_name_somebody_else_owns_is_left_alone_and_reported(tmp_path):
+    """Taking a command name that another package put there would change
+    what an unrelated command does, silently, on a machine nobody is
+    standing next to. The field guide tells somebody to type the bare name,
+    so the installer has to say when that name is not ours."""
+    (tmp_path / "bin").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "bin" / "collect").write_text("#!/bin/sh\necho not ours\n")
+
+    result = _run_the_linking_block(tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "WARNING" in result.stderr
+    assert "collect" in result.stderr
+    assert (tmp_path / "bin" / "collect").read_text() == (
+        "#!/bin/sh\necho not ours\n"), "somebody else's command was replaced"
+    # The other one is still linked: one taken name must not block the rest.
+    assert (tmp_path / "bin" / "control").is_symlink()
+
+
 # -- the entry points, reached the way the installer leaves them ------------
 
 def _unmasked_environment(cwd):

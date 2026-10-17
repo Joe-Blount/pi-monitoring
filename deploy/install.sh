@@ -336,8 +336,22 @@ fi
 # Links rather than copies, pointing through /opt/monitoring rather than at
 # $REPO, so that a later install from a different directory needs only the
 # one link above repointed and these keep working.
+# A name already taken by something else is left alone and reported, the
+# same way /opt/monitoring itself is above. Nothing in this distribution
+# ships either name, so this is unlikely rather than impossible, and the
+# cost of being wrong is taking somebody else's command without saying so.
+# A link this installer already made is replaced without comment, which is
+# what makes a reinstall from a different directory work.
 for tool in collect control; do
-    ln -sfn "/opt/monitoring/bin/$tool" "/usr/local/bin/$tool"
+    target="/usr/local/bin/$tool"
+    if [[ -e "$target" || -L "$target" ]] \
+       && [[ "$(readlink "$target" 2>/dev/null)" != "/opt/monitoring/bin/$tool" ]]; then
+        echo "    WARNING: $target already exists and is not this project's" >&2
+        echo "    link, so it is left alone. The field guide's bare" >&2
+        echo "    '$tool' commands will run whatever that is." >&2
+        continue
+    fi
+    ln -sfn "/opt/monitoring/bin/$tool" "$target"
 done
 echo "    collect and control on the path in /usr/local/bin"
 
