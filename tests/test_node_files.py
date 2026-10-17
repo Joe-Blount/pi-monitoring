@@ -250,7 +250,7 @@ def known_driver_fields():
         # From the notifications a real pack sent, so a control block naming
         # a field it does not emit fails here. This is the pack the blind's
         # camera ladder reads its state of charge and its cell minimum from,
-        # and before the fixture existed both references were unchecked.
+        # which makes it the one fixture those two references depend on.
         "jbd": jbd.parse(jbd_fx.real_messages()),
         # From a register block captured off the inverter, so a
         # control block naming a field it does not emit fails here.
