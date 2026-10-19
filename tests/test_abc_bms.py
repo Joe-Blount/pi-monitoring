@@ -531,11 +531,26 @@ def protection_frame(*active):
 #: healthy.
 VENDOR_PROTECTION_ACTIVE = 0x01
 
+#: Where the first state sits in the pack's reply, counted from the start of
+#: the frame. The vendor application reads it from hex characters 4 to 6 of
+#: the message, which is byte 2, straight after the frame head and the
+#: message identifier. Written out for the same reason as the two above: a
+#: test that indexes with the decoder's own constant moves wherever the
+#: decoder moves, and agrees with it all the way to a misread pack.
+VENDOR_PROTECTION_OFFSET = 2
+
 VENDOR_PROTECTION_ORDER = (
     "COV", "FC", "SOCC", "OTC", "UTC", "BOTC",
     "CUV", "FD", "SOCD", "OTD", "UTD", "BOTD",
     "SCD", "OCD", "UVP", "OVP",
 )
+
+
+def test_the_first_state_sits_where_the_pack_puts_it():
+    """Same reason as the byte and the order: pinned against the pack rather
+    than against the decoder, so no test here follows the decoder if it
+    moves."""
+    assert abc_bms.PROTECTION_OFFSET == VENDOR_PROTECTION_OFFSET
 
 
 def test_the_active_byte_is_the_one_the_pack_sends():
@@ -556,7 +571,7 @@ def test_a_real_fault_byte_is_read_as_a_fault():
     messages = fx.real_messages()
     frame = bytearray(fx.frame(abc_bms.ALARM_MESSAGE,
                                bytes(len(VENDOR_PROTECTION_ORDER))))
-    frame[abc_bms.PROTECTION_OFFSET] = VENDOR_PROTECTION_ACTIVE
+    frame[VENDOR_PROTECTION_OFFSET] = VENDOR_PROTECTION_ACTIVE
     messages[abc_bms.ALARM_MESSAGE] = bytes(frame)
     out = abc_bms.parse(messages)
     assert out["alarm_flags"] == 1.0
@@ -622,7 +637,7 @@ def test_a_byte_that_is_not_the_active_value_is_not_an_alarm():
     worse than none."""
     messages = fx.real_messages()
     frame = bytearray(protection_frame())
-    frame[abc_bms.PROTECTION_OFFSET] = 0x20
+    frame[VENDOR_PROTECTION_OFFSET] = 0x20
     messages[abc_bms.ALARM_MESSAGE] = bytes(frame)
     out = abc_bms.parse(messages)
     assert out["alarm_flags"] == 0.0
@@ -645,8 +660,8 @@ def test_a_truncated_protection_reply_is_not_read_as_healthy():
     assuming the rest are clear would report a pack as content on the
     strength of bytes that never came."""
     messages = fx.real_messages()
-    short = protection_frame()[:abc_bms.PROTECTION_OFFSET
-                               + len(abc_bms.PROTECTION_STATES) - 1]
+    short = protection_frame()[:VENDOR_PROTECTION_OFFSET
+                               + len(VENDOR_PROTECTION_ORDER) - 1]
     messages[abc_bms.ALARM_MESSAGE] = short
     out = abc_bms.parse(messages)
     assert "alarm_flags" not in out
