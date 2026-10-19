@@ -611,9 +611,13 @@ def test_each_protection_state_owns_one_bit_in_the_order_reported():
 
     Checked one at a time rather than in a lump, since a pair of swapped
     entries gives the same total and would read as correct.
+
+    The position walked here is the pack's, not the decoder's. Taking it
+    from the decoder's own table would mean a reordered table moved the
+    expectation along with the thing it is meant to pin.
     """
     messages = fx.real_messages()
-    for index, (name, _description) in enumerate(abc_bms.PROTECTION_STATES):
+    for index, name in enumerate(VENDOR_PROTECTION_ORDER):
         messages[abc_bms.ALARM_MESSAGE] = protection_frame(name)
         out = abc_bms.parse(messages)
         assert out["alarm_flags"] == float(1 << index), name
