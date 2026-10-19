@@ -370,15 +370,19 @@ echo "==> service environment"
 # Two settings telegraf needs before it can drive a GPIO, both found the hard
 # way on a real machine.
 #
-# A writable home. The telegraf user's home is /etc/telegraf and is not
-# writable, so the gpiozero lgpio backend cannot create its notification
-# files, silently falls back to the sysfs backend, and carries on.
+# A writable working directory, and a home to match it. lgpio takes the
+# directory for its notification file from LG_WD or the working directory,
+# never from HOME, and a service started in a directory it cannot write
+# cannot create that file. gpiozero then works down its list of backends to
+# whichever is installed and carries on.
 #
-# That fallback matters more than it sounds. The sysfs backend does not
-# release a pin when the process dies, so every restart finds the pin busy and
-# the collector never recovers. The character device backend does release it,
-# which is also the property the whole load-shedding fail-safe rests on, so it
-# is pinned here rather than left to a fallback nobody would notice.
+# That fallback matters more than it sounds. Only the character device
+# backend drops its claim on a pin when the process dies, which is what frees
+# the line for whatever runs next and what the whole load-shedding fail-safe
+# rests on: a dead controller has to leave its relay wherever the wiring
+# decides. So the backend is pinned here rather than left to a fallback
+# nobody would notice, and HOME is set so a driver that does read it sees the
+# same value the checks use.
 install -d -m 0755 /etc/systemd/system/telegraf.service.d
 cat > /etc/systemd/system/telegraf.service.d/pi-monitoring.conf <<'UNIT'
 # Written by pi-monitoring's install script.
@@ -483,12 +487,16 @@ echo "    (inputs only; the output on this machine is left exactly as it was)"
 # and a dead process leaves its relay at the state its wiring decides. A check
 # on any of the others can leave the line driven or claimed behind it.
 #
-# HOME is set as well, for parity with the drop-in the service gets rather
-# than for lgpio, so a driver that does read HOME sees the same value under
-# the check as it will in service.
+# HOME and the pin backend are set for the same reason: the drop-in the
+# service runs under sets all three, so a check that sets fewer is not
+# checking the same thing. The backend matters most of the three after the
+# working directory, because only the relay module pins it in code; the rain
+# gauge takes whatever the environment offers, so without it here a GPIO
+# check can succeed on a backend the service would never use.
 as_telegraf() {
     ( cd /var/lib/monitoring \
-      && runuser -u telegraf -- env HOME=/var/lib/monitoring "$@" )
+      && runuser -u telegraf -- env HOME=/var/lib/monitoring \
+         GPIOZERO_PIN_FACTORY=lgpio "$@" )
 }
 
 # The node file is the authority on what should be running. Saying so here
@@ -525,6 +533,7 @@ check_status=0
 timeout --foreground "$CHECK_TIMEOUT" \
     bash -c 'cd /var/lib/monitoring \
              && exec runuser -u telegraf -- env HOME=/var/lib/monitoring \
+                GPIOZERO_PIN_FACTORY=lgpio \
                 /opt/monitoring/bin/collect \
                 --node /etc/monitoring/node.yaml --check' \
     || check_status=$?

@@ -52,8 +52,8 @@ def main(argv=None):
                         help="with --poll: read the devices at the same time "
                              "rather than one after another. Measured as both "
                              "slower and less reliable on the Bluetooth packs "
-                             "here, because one radio cannot serve two "
-                             "discoveries, so it is off unless asked for. See "
+                             "here, which share one adapter, so it is off "
+                             "unless asked for. See "
                              "deploy/telegraf.d/monitoring-slow.conf")
     parser.add_argument("--list", action="store_true",
                         help="print what this node declares")

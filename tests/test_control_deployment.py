@@ -184,7 +184,8 @@ def test_the_unit_does_not_decline_to_start_on_a_condition():
 def test_the_slow_fragment_does_not_read_the_battery_devices_at_once():
     """Measured on the hardware, not reasoned about: concurrent reads of the
     blind's two Bluetooth devices lost two thirds of the reads and took
-    longer, because one radio cannot serve two discoveries.
+    longer. They share one adapter, which is the likeliest reason, though
+    the measurement is firmer than the explanation.
 
     The flag exists and stays off. This holds the deployed command to that,
     since the fragment is the one place the decision takes effect and a

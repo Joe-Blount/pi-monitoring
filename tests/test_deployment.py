@@ -545,13 +545,23 @@ def test_every_device_check_runs_in_the_environment_the_service_gets():
                    if "runuser -u telegraf" in line]
     assert invocations, "found no checks to verify, so this proves nothing"
 
-    home = "HOME=" + str(control_files.PERSIST_DIR)
+    # Everything the service drop-in sets, because a check that sets fewer
+    # is not checking the same thing. Read from the drop-in the installer
+    # writes rather than listed again here, so the two cannot drift.
+    drop_in = INSTALL_CODE[INSTALL_CODE.index("telegraf.service.d"):]
+    opener = drop_in.index("<<'UNIT'")
+    drop_in = drop_in[opener:drop_in.index("\nUNIT", opener)]
+    wanted = re.findall(r"^Environment=(\S+)=(\S+)", drop_in, re.MULTILINE)
+    assert wanted, "the drop-in sets nothing, so this proves nothing"
+
     for index in invocations:
         # The surrounding statement, since the pieces are spread over
         # continuations and a subshell.
-        window = "\n".join(lines[max(0, index - 3):index + 2])
-        assert home in window, (
-            "a check runs without the service's home:\n%s" % window)
+        window = "\n".join(lines[max(0, index - 4):index + 4])
+        for name, value in wanted:
+            assert "%s=%s" % (name, value) in window, (
+                "a check runs without %s, which the service is given:\n%s"
+                % (name, window))
         assert "cd %s" % control_files.PERSIST_DIR in window, (
             "a check runs without a working directory telegraf can "
             "write:\n%s" % window)

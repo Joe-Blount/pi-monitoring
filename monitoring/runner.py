@@ -250,9 +250,11 @@ def poll(node, now_ns=None, out=None, err=None, speed="all", clock=None,
 
     It does not work out that way on the hardware here, which is why it is off
     by default and has to be asked for. Measured on two Bluetooth packs, it
-    loses most of the reads and takes longer than reading them in turn: the
-    drivers hand bleak a bare address, bleak resolves an uncached address by
-    running a discovery, and one radio cannot serve two discoveries at once.
+    loses most of the reads and takes longer than reading them in turn. The
+    measurement is ours; the mechanism is not proven. The likeliest account
+    is that one adapter is shared: the drivers hand bleak a bare address,
+    bleak resolves an uncached address by discovery, and a connection
+    attempted while the adapter is busy with the other peer fares badly.
     The numbers are in deploy/telegraf.d/monitoring-slow.conf, beside the
     command that does not use it.
 

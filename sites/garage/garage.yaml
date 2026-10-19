@@ -8,23 +8,26 @@ tags:
 
 devices:
 
-  # The DHT22 stays on its existing compiled telegraf plugin, and the reason
-  # has changed from caution to evidence.
+  # The DHT22 stays on its existing compiled telegraf plugin, because the
+  # sensor itself is the problem and changing driver does not touch it.
   #
-  # The plugin reports a checksum failure roughly every seven minutes. That
-  # looks like a reason to move to the kernel driver, which reads the sensor
-  # from an interrupt handler rather than by timing loops in userspace. The
-  # kernel driver was tried here, loaded at run time on this same pin, and it
-  # fails about as often: four attempts in ten, reporting no signal edges at
-  # all rather than a bad checksum.
+  # The plugin reports a checksum failure every few minutes, which looks like
+  # a reason to move to the kernel driver: that one reads the sensor from an
+  # interrupt handler rather than by timing loops in userspace. So the kernel
+  # driver was tried on this pin, loaded at run time. Over ten attempts, four
+  # failed, and they failed differently: no signal edges at all, rather than a
+  # frame that arrived with a bad checksum.
   #
-  # No signal edges means the sensor never pulled the line down, which no
-  # driver can fix. The sensor sits on a breakout with its own pull-up, on
-  # short jumper leads, inside a case: the connectors are the suspect. Both
-  # the plugin and this project's driver retry three times, and three retries
-  # over a four-in-ten failure rate land in the same place, around
-  # ninety-seven percent of polls succeeding. So migrating would change which
-  # code reports the fault without changing how often the sensor answers.
+  # No signal edges means the sensor never pulled the line down, and no driver
+  # can fix a sensor that does not answer. The sensor sits on a breakout with
+  # its own pull-up, on short jumper leads, inside a case. The connectors are
+  # the suspect.
+  #
+  # That is the whole finding. It is deliberately not a comparison: ten
+  # attempts is a small sample, and the plugin's failures were counted per
+  # hour rather than per attempt, so there is no honest way to say which of
+  # the two answers more often. What can be said is that the kernel driver
+  # did not fix it, and that the failure it reports points at the wiring.
   #
   # Worth doing when the case is open for other work, with the connectors
   # reseated first so the change is measured against a sensor that answers.
