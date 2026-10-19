@@ -497,10 +497,11 @@ def test_the_captured_identity_frame_names_the_pack():
 
 
 def test_the_alarm_message_is_published_rather_than_discarded():
-    """The read sends command 0xC4 on every cycle and the reply used to be
-    thrown away. That reply is where cell over-voltage, under-voltage,
-    over-temperature and over-current faults live, which makes it the single
-    most important thing the pack says."""
+    """The read sends command 0xC4 on every cycle, so the reply it brings
+    back costs nothing extra and has to reach the database. That reply is
+    where cell over-voltage, under-voltage, over-temperature and over-current
+    faults live, which makes it the single most important thing the pack
+    says."""
     out = abc_bms.parse(fx.real_messages())
     assert out["alarm_flags"] == 0.0
 
@@ -514,36 +515,47 @@ def protection_frame(*active):
     return fx.frame(abc_bms.ALARM_MESSAGE, bytes(payload))
 
 
-#: The order the pack sends its protection states in, written out rather
-#: than read from the driver.
-#:
-#: Every other test here builds its frame from the driver's own table, so it
-#: would follow the table anywhere, including into a swapped pair that reads
-#: as correct because the input moved with the expectation. This is the
-#: independent copy: it comes from the vendor application, which assigns one
-#: state per byte over a fixed span of its reply, and from its protection
-#: screen, which lists them in this order under Charge, Discharge and
-#: Hardware.
-#: The byte the pack sends for a state that is set, written out for the same
-#: reason as the order below: a fixture that takes it from the driver moves
-#: with the driver, so changing the driver's value changes what the test
-#: feeds it and the pair agree all the way to a pack whose faults read as
-#: healthy.
-VENDOR_PROTECTION_ACTIVE = 0x01
+# -- what the pack sends, written out ---------------------------------------
+#
+# These four describe the protection reply the way the pack produces it, and
+# they are literals on purpose. A fixture or an assertion that takes any of
+# them from the decoder moves whenever the decoder moves, so the two agree
+# all the way to a pack whose faults read as healthy. Each of the four is a
+# value a test would naturally reach into the decoder for, and doing so fails
+# silently: the suite stays green and the pack is misread.
+#
+# They come from the vendor application: its decompiled source assigns one
+# state per byte over a fixed span of the reply and tests each for an exact
+# value, and its protection screen lists the states in this order under
+# Charge, Discharge and Hardware.
+#
+# The decoder is compared against each of them, and nothing else in this file
+# reaches into the decoder for a position, a value or an order.
 
-#: Where the first state sits in the pack's reply, counted from the start of
-#: the frame. The vendor application reads it from hex characters 4 to 6 of
-#: the message, which is byte 2, straight after the frame head and the
-#: message identifier. Written out for the same reason as the two above: a
-#: test that indexes with the decoder's own constant moves wherever the
-#: decoder moves, and agrees with it all the way to a misread pack.
+#: The reply that carries the protection states.
+VENDOR_ALARM_MESSAGE = 0xF9
+
+#: Where the first state sits, counted from the start of the frame: byte 2,
+#: straight after the frame head and the message identifier.
 VENDOR_PROTECTION_OFFSET = 2
 
+#: What the pack puts in a state's byte when that state is set.
+VENDOR_PROTECTION_ACTIVE = 0x01
+
+#: The order the states arrive in, one byte each from the offset above.
 VENDOR_PROTECTION_ORDER = (
     "COV", "FC", "SOCC", "OTC", "UTC", "BOTC",
     "CUV", "FD", "SOCD", "OTD", "UTD", "BOTD",
     "SCD", "OCD", "UVP", "OVP",
 )
+
+
+def test_the_protection_reply_is_the_one_the_pack_answers_with():
+    """Every protection test here builds and keys its frame by the decoder's
+    message id, so all of them would follow it if it changed. One captured
+    frame pins it, but only incidentally, in a test about publishing. This
+    makes the pin deliberate."""
+    assert abc_bms.ALARM_MESSAGE == VENDOR_ALARM_MESSAGE
 
 
 def test_the_first_state_sits_where_the_pack_puts_it():
