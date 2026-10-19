@@ -640,14 +640,23 @@ def test_a_streamed_point_goes_out_before_the_cache_is_written(
 # -- when a reading was taken, and reading several at once ------------------
 
 class SlowDriver(Driver):
-    """Takes measurable time, like a Bluetooth pack."""
+    """Takes measurable time, like a Bluetooth pack.
+
+    Each read records the span it occupied, because whether reads overlap is
+    the property worth asserting and it can be read straight off these. A
+    wall-clock comparison of one arrangement against the other is a proxy for
+    the same thing that a loaded machine can defeat.
+    """
 
     description = "test double that is slow to answer"
     slow_read = True
     delay = 0.05
+    spans = []
 
     def read(self):
+        began = time.monotonic()
         time.sleep(self.delay)
+        SlowDriver.spans.append((began, time.monotonic()))
         return {"value": 1.0}
 
 
@@ -655,6 +664,7 @@ class SlowDriver(Driver):
 def slow_doubles():
     original = dict(REGISTRY)
     REGISTRY["slow"] = ("tests.test_runner", "SlowDriver")
+    SlowDriver.spans = []
     yield
     REGISTRY.clear()
     REGISTRY.update(original)
@@ -728,26 +738,34 @@ def test_a_failed_read_is_stamped_when_the_failure_was_established(
     assert stamps_in(out.getvalue()) == [NOW + 10 ** 9]
 
 
-def test_concurrent_reads_take_as_long_as_the_slowest_not_the_sum(
+def test_concurrent_reads_overlap_rather_than_queueing(
         tmp_path, slow_doubles):
-    """Two Bluetooth packs are two connections to two peripherals. Read
-    together the collection costs the slower one; read in turn it costs
-    both."""
+    """Two Bluetooth packs are two connections to two peripherals, so read
+    together the collection costs the slower one rather than both.
+
+    Asserted as overlap rather than as elapsed time. The timing is the reason
+    anyone wants this, but a threshold on it fails on a busy machine for
+    reasons that have nothing to do with the code, and a test that fails for
+    the wrong reason teaches people to ignore it.
+    """
     node = node_with(tmp_path, "  - {name: a, driver: slow, mode: poll}\n"
                                "  - {name: b, driver: slow, mode: poll}\n"
                                "  - {name: c, driver: slow, mode: poll}\n")
 
-    start = time.monotonic()
     runner.poll(node, out=io.StringIO(), err=io.StringIO(), concurrent=True)
-    together = time.monotonic() - start
+    together = sorted(SlowDriver.spans)
+    assert len(together) == 3, "expected three reads"
+    earliest_finish = min(end for _, end in together)
+    assert all(begin < earliest_finish for begin, _ in together), (
+        "a read waited for another to finish, so they were not concurrent: %s"
+        % together)
 
-    start = time.monotonic()
+    SlowDriver.spans = []
     runner.poll(node, out=io.StringIO(), err=io.StringIO())
-    in_turn = time.monotonic() - start
-
-    assert together < in_turn / 2, (
-        "three reads of %.2fs each took %.2fs together and %.2fs in turn"
-        % (SlowDriver.delay, together, in_turn))
+    in_turn = sorted(SlowDriver.spans)
+    assert len(in_turn) == 3
+    assert all(in_turn[i][1] <= in_turn[i + 1][0] for i in range(2)), (
+        "reads overlapped without being asked to: %s" % in_turn)
 
 
 def test_concurrent_readings_land_close_together(tmp_path, slow_doubles):

@@ -266,7 +266,7 @@ def drain(driver):
 def streaming_driver(frames_of_data, emit_every="30s"):
     driver = vedirect.VedirectDriver(
         "mppt", {"port": "/dev/fake", "emit_every": emit_every,
-                 "frame_timeout": 0.01}, {})
+                 "frame_timeout": STREAM_BUDGET}, {})
     driver._serial = ReplayPort(frames_of_data)
     return driver
 
@@ -295,9 +295,23 @@ def test_streaming_emits_again_once_the_window_has_passed(monkeypatch):
 
 # -- the driver's own production paths ---------------------------------------
 
+#: Generous on purpose, for tests that parse a frame and return. The parser
+#: checks this budget on every byte against the wall clock, so a small value
+#: makes a test that borrows the helper fail on a loaded machine for a reason
+#: that has nothing to do with what it asserts. Nothing waits this out: a
+#: frame is already in the port when these start.
+UNBOUNDED = 30.0
+
+#: What the streaming helper gets instead, because there the budget is the
+#: termination condition rather than a safety net: the port never runs dry,
+#: so the stream ends when this expires. Short enough to keep the suite quick,
+#: and far enough above the work involved that load does not end it early.
+STREAM_BUDGET = 0.5
+
+
 def frame_source(data):
     driver = vedirect.VedirectDriver("mppt", {"port": "/dev/fake",
-                                              "frame_timeout": 0.01}, {})
+                                              "frame_timeout": UNBOUNDED}, {})
     driver._serial = ReplayPort(data)
     return driver
 
