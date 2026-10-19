@@ -507,10 +507,10 @@ def test_the_alarm_message_is_published_rather_than_discarded():
 
 def protection_frame(*active):
     """A protection reply with the named states set and the rest clear."""
-    names = [name for name, _ in abc_bms.PROTECTION_STATES]
+    names = list(VENDOR_PROTECTION_ORDER)
     payload = bytearray(len(names))
     for name in active:
-        payload[names.index(name)] = abc_bms.PROTECTION_ACTIVE
+        payload[names.index(name)] = VENDOR_PROTECTION_ACTIVE
     return fx.frame(abc_bms.ALARM_MESSAGE, bytes(payload))
 
 
@@ -524,11 +524,43 @@ def protection_frame(*active):
 #: state per byte over a fixed span of its reply, and from its protection
 #: screen, which lists them in this order under Charge, Discharge and
 #: Hardware.
+#: The byte the pack sends for a state that is set, written out for the same
+#: reason as the order below: a fixture that takes it from the driver moves
+#: with the driver, so changing the driver's value changes what the test
+#: feeds it and the pair agree all the way to a pack whose faults read as
+#: healthy.
+VENDOR_PROTECTION_ACTIVE = 0x01
+
 VENDOR_PROTECTION_ORDER = (
     "COV", "FC", "SOCC", "OTC", "UTC", "BOTC",
     "CUV", "FD", "SOCD", "OTD", "UTD", "BOTD",
     "SCD", "OCD", "UVP", "OVP",
 )
+
+
+def test_the_active_byte_is_the_one_the_pack_sends():
+    """A state the pack sets reads as exactly this, and the driver has to
+    agree with the pack rather than with itself.
+
+    Worth its own check because every other test here builds its frames from
+    the same constant it would be verifying. Change the driver's value and
+    those tests change with it, agreeing happily while a pack reporting a
+    real fault decodes as healthy.
+    """
+    assert abc_bms.PROTECTION_ACTIVE == VENDOR_PROTECTION_ACTIVE
+
+
+def test_a_real_fault_byte_is_read_as_a_fault():
+    """The end to end version of the check above, through parse rather than
+    against a constant, so the two cannot both be wrong in the same way."""
+    messages = fx.real_messages()
+    frame = bytearray(fx.frame(abc_bms.ALARM_MESSAGE,
+                               bytes(len(VENDOR_PROTECTION_ORDER))))
+    frame[abc_bms.PROTECTION_OFFSET] = VENDOR_PROTECTION_ACTIVE
+    messages[abc_bms.ALARM_MESSAGE] = bytes(frame)
+    out = abc_bms.parse(messages)
+    assert out["alarm_flags"] == 1.0
+    assert out["alarm_active"] == VENDOR_PROTECTION_ORDER[0]
 
 
 def test_the_protection_order_is_the_one_the_pack_sends():
