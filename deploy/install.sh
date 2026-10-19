@@ -367,10 +367,11 @@ else
 fi
 
 echo "==> service environment"
-# Two settings telegraf needs before it can drive a GPIO, both found the hard
-# way on a real machine.
+# Three settings telegraf needs before it can drive a GPIO, all found the
+# hard way on a real machine.
 #
-# A writable working directory, and a home to match it. lgpio takes the
+# A writable working directory, a home to match it, and the pin backend
+# named rather than discovered. lgpio takes the
 # directory for its notification file from LG_WD or the working directory,
 # never from HOME, and a service started in a directory it cannot write
 # cannot create that file. gpiozero then works down its list of backends to
@@ -392,7 +393,8 @@ WorkingDirectory=/var/lib/monitoring
 Environment=GPIOZERO_PIN_FACTORY=lgpio
 UNIT
 systemctl daemon-reload
-echo "    telegraf given a writable home and the lgpio pin backend"
+echo "    telegraf given a writable working directory and home, and the"
+echo "    lgpio pin backend"
 
 echo "==> group membership"
 # Reading a GPIO, an I2C bus or a serial port needs the group, and the failure
