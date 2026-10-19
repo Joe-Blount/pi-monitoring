@@ -529,8 +529,11 @@ def protection_frame(*active):
 # value, and its protection screen lists the states in this order under
 # Charge, Discharge and Hardware.
 #
-# The decoder is compared against each of them, and nothing else in this file
-# reaches into the decoder for a position, a value or an order.
+# The decoder is compared against each of them, and nothing else that builds
+# or checks a protection reply reaches into the decoder for a position, a
+# value or an order. That holds for the protection reply only: elsewhere in
+# this file the frame head, the identity command and the checksum are still
+# taken from the decoder and used as their own expectations.
 
 #: The reply that carries the protection states.
 VENDOR_ALARM_MESSAGE = 0xF9
