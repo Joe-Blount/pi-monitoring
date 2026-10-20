@@ -172,6 +172,30 @@ control:
     assert "GPIO23" in str(exc.value)
 
 
+def test_two_loads_of_one_type_cannot_share_a_pin(tmp_path):
+    """A load is keyed by the name it is given, not by its type, so a node may
+    drive several of one type. The name is the only thing that differs between
+    two such blocks, which makes a copied block keeping the pin of the one it
+    was copied from the likeliest way to write this file wrong. Both loads
+    would then build a relay on one line and command it against each other."""
+    with pytest.raises(config.ConfigError) as exc:
+        config.load(write(tmp_path, """
+site: s
+node: n
+measurement: m
+control:
+  enabled: true
+  loads:
+    cameras: {type: dc_branch, control_pin: 23}
+    recorder: {type: dc_branch, control_pin: 23}
+"""), KNOWN)
+    message = str(exc.value)
+    assert "GPIO23" in message
+    # Both names, because the point of the message is to say which two blocks
+    # to look at.
+    assert "cameras" in message and "recorder" in message
+
+
 def test_an_unparsable_interval_is_refused(tmp_path):
     with pytest.raises(config.ConfigError) as exc:
         config.load(write(tmp_path, """
