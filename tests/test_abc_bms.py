@@ -47,11 +47,31 @@ def full_pack(cells=fx.SIXTEEN_CELLS):
 
 # --- framing and checksums -------------------------------------------------
 
-def test_a_command_is_six_bytes_and_carries_its_own_checksum():
-    built = abc_bms.command(0xC1)
-    assert len(built) == 6
-    assert built[0] == abc_bms.COMMAND_HEAD and built[1] == 0xC1
-    assert abc_bms.crc8(built[:-1]) == built[-1]
+#: CRC-8/MAXIM over the ASCII digits 1 to 9, from the published CRC
+#: catalogue rather than from any code here.
+CRC8_MAXIM_CHECK = 0xA1
+
+
+def test_the_checksum_is_crc8_maxim():
+    assert abc_bms.crc8(b"123456789") == CRC8_MAXIM_CHECK
+
+
+def test_the_fixture_checksum_is_crc8_maxim_as_well():
+    """The fixtures build every reply with their own checksum, so a driver
+    checksum that drifted would reject them. That only holds while the
+    fixture's own is right."""
+    assert fx.crc8(b"123456789") == CRC8_MAXIM_CHECK
+
+
+@pytest.mark.parametrize("code, expected", [
+    (0xC0, "ee c0 00 00 00 41"),
+    (0xC1, "ee c1 00 00 00 ce"),
+    (0xC2, "ee c2 00 00 00 46"),
+    (0xC4, "ee c4 00 00 00 4f"),
+])
+def test_a_command_is_the_head_the_code_three_zeros_and_a_checksum(
+        code, expected):
+    assert abc_bms.command(code) == bytes.fromhex(expected)
 
 
 def test_each_command_differs_so_a_swap_cannot_go_unnoticed():
@@ -288,7 +308,7 @@ def test_a_check_reports_the_pack_answering():
     device, transport = driver([identity])
     message = device.check()
     assert "AA:BB:CC:DD:EE:FF" in message and "SOK-48100" in message
-    assert transport.asked == [abc_bms.IDENTITY_COMMAND[0]]
+    assert transport.asked == [0xC0]
 
 
 def test_a_check_against_a_silent_pack_names_the_likely_cause():

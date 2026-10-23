@@ -10,12 +10,31 @@ import struct
 from monitoring.drivers import abc_bms
 
 
+def crc8(data):
+    """CRC-8/MAXIM, written apart from the driver's so a fault in either shows.
+
+    The same polynomial in its unreflected form, 0x31, applied to reflected
+    input with the result reflected back. The catalogue check value for this
+    CRC over the ASCII digits 1 to 9 is 0xA1, and a test holds both this and
+    the driver's to it.
+    """
+    def reflect(value):
+        return int("{:08b}".format(value)[::-1], 2)
+
+    crc = 0
+    for byte in data:
+        crc ^= reflect(byte)
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x31) & 0xFF if crc & 0x80 else (crc << 1) & 0xFF
+    return reflect(crc)
+
+
 def frame(message_id, payload):
     """One twenty-byte reply carrying `payload`, padded and checksummed."""
     body = bytearray([abc_bms.RESPONSE_HEAD, message_id])
     body += bytes(payload)[:abc_bms.FRAME_LENGTH - 3]
     body += b"\x00" * (abc_bms.FRAME_LENGTH - 1 - len(body))
-    body.append(abc_bms.crc8(bytes(body)))
+    body.append(crc8(bytes(body)))
     assert len(body) == abc_bms.FRAME_LENGTH
     return bytes(body)
 
