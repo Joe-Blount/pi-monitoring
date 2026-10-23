@@ -33,13 +33,22 @@ The age of the document is computed here, against this process's own clock,
 rather than copied out of the file. A loop that has wedged with its last
 decision in place would otherwise look healthy: every field would hold its
 final value and nothing would say when it stopped.
+
+One point per load
+------------------
+The loop decides each load on its own, and this reports each one as its own
+point tagged with the load, with the field names bare. A chart then repeats
+over loads and a table over all of them is generic, so a load added to the
+node file needs no panel edited. The loop's own fields, and the age, go on
+the point with no load tag. Every load the loop drives is in the document it
+writes, so none can be driven and go unreported.
 """
 
 import json
 import os
 import time
 
-from .base import Driver, DriverError
+from .base import Driver, DriverError, Point
 
 #: Where the kernel names this boot. The loop stamps its document with it, and
 #: a stamp from a previous boot cannot be aged, because the monotonic clock
@@ -66,6 +75,15 @@ def _read_json(path):
     except (OSError, ValueError):
         return None
     return value if isinstance(value, dict) else None
+
+
+def _values(fields):
+    """The fields a point can carry: numbers and text, and not a boolean,
+    which the line protocol would otherwise write as one."""
+    return {name: value for name, value in fields.items()
+            if isinstance(value, str)
+            or (isinstance(value, (int, float))
+                and not isinstance(value, bool))}
 
 
 class ControlDriver(Driver):
@@ -97,10 +115,24 @@ class ControlDriver(Driver):
             raise DriverError(
                 "%s carries no fields, so the controller wrote a document it "
                 "could not fill" % self.path)
-        return record, fields
+        loads = record.get("loads")
+        if not isinstance(loads, dict):
+            # Empty is allowed: a node file with every load disabled is a
+            # controller with nothing to drive, and its own fields still say
+            # it is alive. Absent is not, because a load driven and not
+            # reported is the failure this device exists to prevent.
+            raise DriverError(
+                "%s carries no loads, so the controller wrote a document "
+                "it could not fill" % self.path)
+        for name, load in loads.items():
+            if not isinstance(load, dict) or not load:
+                raise DriverError(
+                    "%s carries no fields for load %s, so the controller "
+                    "wrote a document it could not fill" % (self.path, name))
+        return record, fields, loads
 
     def read(self):
-        record, fields = self._document()
+        record, fields, loads = self._document()
 
         stamp = record.get("monotonic")
         boot = self._boot_id()
@@ -113,20 +145,17 @@ class ControlDriver(Driver):
                 "%s was not written during this boot, so the controller has "
                 "not published since the machine started" % self.path)
 
-        out = {name: value for name, value in fields.items()
-               if isinstance(value, str)
-               or (isinstance(value, (int, float))
-                   and not isinstance(value, bool))}
-        out["published_age_seconds"] = max(
+        own = _values(fields)
+        own["published_age_seconds"] = max(
             0.0, self._monotonic() - float(stamp))
-        return out
+        return [Point(own)] + [Point(_values(loads[name]), tags={"load": name})
+                               for name in sorted(loads)]
 
     def check(self):
-        _, fields = self._document()
-        loads = sorted(name[:-len("_powered")] for name in fields
-                       if name.endswith("_powered"))
-        return "controller published %d field(s) for %s" % (
-            len(fields), ", ".join(loads) or "no load")
+        _, _, loads = self._document()
+        return "controller published %s" % (
+            ", ".join("load %s" % name for name in sorted(loads))
+            or "no load")
 
     def raw(self):
         return _read_json(self.path)

@@ -133,7 +133,7 @@ def test_the_floor_reaches_the_pin(tmp_path):
                                        readings=reading(soc=100.0, cell=3.10))
     machine.once()
     assert pin.levels == [True]
-    assert published["fields"]["cameras_reason_code"] == 2.0
+    assert published["loads"]["cameras"]["reason_code"] == 2.0
 
 
 # -- the clock --------------------------------------------------------------
@@ -144,7 +144,7 @@ def test_an_untrusted_clock_suspends_the_schedule_and_says_so(tmp_path):
         at=datetime.datetime(2026, 6, 21, 23, tzinfo=ZONE))
     machine.once()
     assert published["fields"]["clock_synced"] == 0.0
-    assert published["fields"]["cameras_schedule_suspended"] == 1.0
+    assert published["loads"]["cameras"]["schedule_suspended"] == 1.0
     assert pin.levels == [False], "the cameras run, which is also fail-safe"
 
 
@@ -177,14 +177,46 @@ def test_a_place_with_no_sunrise_suspends_the_schedule_rather_than_crashing(
 
 # -- what it publishes ------------------------------------------------------
 
+#: The fields every load's sub-document carries, and the ones only a value
+#: in hand can add. Pinned here so that a field quietly renamed, or one
+#: quietly dropped, fails against this list rather than against the loop.
+LOAD_FIELDS = {"powered", "level", "shed_level", "reason_code", "reason",
+               "schedule_suspended"}
+LOAD_FIELDS_WITH_A_VALUE = {"decided_on"}
+LOOP_FIELDS = {"clock_synced", "clock_reason", "passes", "loop_monotonic"}
+
+#: The text fields. Everything else is a float.
+TEXT_FIELDS = {"clock_reason", "reason"}
+
+
+def test_each_load_is_published_under_its_own_name(tmp_path):
+    """One sub-document per load, with the field names bare, so a reader
+    tags each one with the load instead of parsing a prefix off every field
+    and a chart repeats over loads without naming any."""
+    machine, _, published, _ = build(tmp_path)
+    machine.once()
+    assert set(published["fields"]) == LOOP_FIELDS
+    assert set(published["loads"]) == {"cameras"}
+    assert set(published["loads"]["cameras"]) == (
+        LOAD_FIELDS | LOAD_FIELDS_WITH_A_VALUE)
+
+
+def test_decided_on_is_absent_rather_than_zero_without_a_value(tmp_path):
+    """A zero would read as a battery at zero percent."""
+    machine, _, published, _ = build(tmp_path, readings={})
+    machine.once()
+    assert set(published["loads"]["cameras"]) == LOAD_FIELDS
+
+
 def test_every_published_number_is_a_float(tmp_path):
     """InfluxDB refuses a field whose type changes between writes."""
     machine, _, published, _ = build(tmp_path)
     machine.once()
-    for name, value in published["fields"].items():
-        assert isinstance(value, (float, str)), name
-        if isinstance(value, str):
-            assert name.endswith("_reason"), name
+    everything = [published["fields"]] + list(published["loads"].values())
+    for fields in everything:
+        for name, value in fields.items():
+            assert isinstance(value, (float, str)), name
+            assert isinstance(value, str) == (name in TEXT_FIELDS), name
 
 
 def test_the_published_level_is_what_went_out_not_what_was_wanted(tmp_path):
@@ -192,8 +224,8 @@ def test_the_published_level_is_what_went_out_not_what_was_wanted(tmp_path):
     would read backwards every time."""
     machine, _, published, _ = build(tmp_path)
     machine.once()
-    assert published["fields"]["cameras_powered"] == 1.0
-    assert published["fields"]["cameras_level"] == 0.0
+    assert published["loads"]["cameras"]["powered"] == 1.0
+    assert published["loads"]["cameras"]["level"] == 0.0
 
 
 def test_the_pass_count_advances_so_a_wedged_loop_is_visible(tmp_path):
@@ -267,5 +299,5 @@ def test_a_dry_run_touches_no_pin(tmp_path):
     machine, pin, published, _ = build(tmp_path, readings=reading(soc=5.0))
     machine.once(apply=False)
     assert pin.levels == []
-    assert published["fields"]["cameras_powered"] == 0.0, (
+    assert published["loads"]["cameras"]["powered"] == 0.0, (
         "a dry run must still say what it would have done")

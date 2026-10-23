@@ -19,7 +19,9 @@ import zoneinfo
 
 import pytest
 
-from monitoring import config, drivers
+import json
+
+from monitoring import config, drivers, runner
 from monitoring.control import clock, decide, files, loop, relay, spec, sun
 from monitoring.drivers import control as control_driver
 
@@ -273,6 +275,11 @@ def reader(path, boot=BOOT, mono=0.0):
     return device
 
 
+def by_load(points):
+    """The reader's points keyed by load, with the loop's own under None."""
+    return {one.tags.get("load"): one.fields for one in points}
+
+
 def test_the_collector_reads_the_document_the_loop_writes(tmp_path):
     """The whole reporting path, with nothing hand-built in the middle.
 
@@ -282,20 +289,21 @@ def test_the_collector_reads_the_document_the_loop_writes(tmp_path):
     controller has stopped, because every load is then at its fail-safe and
     nothing is managing the battery.
     """
-    fields = reader(run_the_real_loop(tmp_path, 24.0),
-                    mono=3 * PAST_THE_TIMERS).read()
+    points = by_load(reader(run_the_real_loop(tmp_path, 24.0),
+                            mono=3 * PAST_THE_TIMERS).read())
+    cameras, loop_point = points["cameras"], points[None]
 
     # Powered and shed at the same time, which is the state a reader most
     # needs the two fields to be able to express: the battery has put the
     # cameras on the movement-window schedule, and 19:30 is inside the
     # evening window, so they are running on a schedule rather than freely.
-    assert fields["cameras_powered"] == 1.0
-    assert fields["cameras_shed_level"] == 2.0
-    assert fields["cameras_reason_code"] == float(decide.STATE_OF_CHARGE)
-    assert isinstance(fields["cameras_reason"], str) and fields["cameras_reason"]
-    assert fields["clock_synced"] == 1.0
-    assert fields["cameras_schedule_suspended"] == 0.0
-    assert fields["published_age_seconds"] >= 0.0
+    assert cameras["powered"] == 1.0
+    assert cameras["shed_level"] == 2.0
+    assert cameras["reason_code"] == float(decide.STATE_OF_CHARGE)
+    assert isinstance(cameras["reason"], str) and cameras["reason"]
+    assert cameras["schedule_suspended"] == 0.0
+    assert loop_point["clock_synced"] == 1.0
+    assert loop_point["published_age_seconds"] >= 0.0
 
 
 def test_the_reported_shed_level_and_reason_follow_the_battery(tmp_path):
@@ -303,17 +311,108 @@ def test_the_reported_shed_level_and_reason_follow_the_battery(tmp_path):
     constants that happen to read correctly."""
     (tmp_path / "low").mkdir()
     (tmp_path / "high").mkdir()
-    low = reader(run_the_real_loop(tmp_path / "low", 9.0),
-                 mono=3 * PAST_THE_TIMERS).read()
-    high = reader(run_the_real_loop(tmp_path / "high", 60.0),
-                  mono=3 * PAST_THE_TIMERS).read()
+    low = by_load(reader(run_the_real_loop(tmp_path / "low", 9.0),
+                         mono=3 * PAST_THE_TIMERS).read())["cameras"]
+    high = by_load(reader(run_the_real_loop(tmp_path / "high", 60.0),
+                          mono=3 * PAST_THE_TIMERS).read())["cameras"]
 
-    assert low["cameras_powered"] == 0.0
-    assert low["cameras_shed_level"] == 3.0
-    assert low["cameras_reason_code"] == float(decide.STATE_OF_CHARGE)
+    assert low["powered"] == 0.0
+    assert low["shed_level"] == 3.0
+    assert low["reason_code"] == float(decide.STATE_OF_CHARGE)
 
-    assert high["cameras_powered"] == 1.0
-    assert high["cameras_shed_level"] == 0.0
+    assert high["powered"] == 1.0
+    assert high["shed_level"] == 0.0
+
+
+def test_each_load_is_its_own_point_tagged_with_the_load(tmp_path):
+    """So that one chart repeats over loads and a table over all of them is
+    generic: a load added to the node file needs no panel edited."""
+    points = reader(run_the_real_loop(tmp_path, 24.0),
+                    mono=3 * PAST_THE_TIMERS).read()
+    assert [one.tags for one in points] == [{}, {"load": "cameras"}]
+
+
+def test_the_age_is_on_the_loop_point_and_measured_by_the_reader(tmp_path):
+    """One age for the document, not one per load, and computed against the
+    reader's own clock rather than copied out of the file, so a wedged loop
+    cannot look current."""
+    points = by_load(reader(run_the_real_loop(tmp_path, 24.0),
+                            mono=3 * PAST_THE_TIMERS + 42.0).read())
+    assert points[None]["published_age_seconds"] == 42.0
+    assert "published_age_seconds" not in points["cameras"]
+
+
+#: A document written by hand, so that the rendered lines below can be
+#: pinned as literals rather than derived from the loop.
+DOCUMENT = {
+    "boot_id": BOOT, "monotonic": 4.0,
+    "fields": {"clock_synced": 1.0, "clock_reason": "synchronised",
+               "passes": 7.0, "loop_monotonic": 4.0},
+    "loads": {"cameras": {
+        "powered": 1.0, "level": 0.0, "shed_level": 2.0, "reason_code": 1.0,
+        "reason": "state_of_charge_pct=24.0 below 50%",
+        "schedule_suspended": 0.0, "decided_on": 24.0}}}
+
+
+def written(tmp_path, document):
+    path = tmp_path / "control.json"
+    path.write_text(json.dumps(document))
+    return str(path)
+
+
+def test_the_lines_the_collector_writes_for_the_controller(tmp_path,
+                                                            monkeypatch):
+    """The wire format, end to end through the runner: the load tag beside
+    the device's own tags, the field names bare, and the age only on the
+    point that has no load."""
+    path = written(tmp_path, DOCUMENT)
+    node_file = tmp_path / "node.yaml"
+    node_file.write_text(
+        "site: s\nnode: n\nmeasurement: m\ndevices:\n"
+        "  - name: control\n    driver: control\n    mode: poll\n"
+        "    params: {path: %s}\n    tags: {location: control}\n" % path)
+    boot_file = tmp_path / "boot_id"
+    boot_file.write_text(BOOT + "\n")
+    monkeypatch.setattr(control_driver, "BOOT_ID_PATH", str(boot_file))
+    monkeypatch.setattr(control_driver, "_monotonic", lambda: 10.0)
+
+    node = config.load(node_file, drivers.names())
+    result = runner.read_device(node, node.find("control"), 1700000000)
+    assert result.ok, result.error
+    assert result.lines == [
+        'm,device=control,location=control clock_reason="synchronised",'
+        'clock_synced=1.0,loop_monotonic=4.0,ok=1.0,passes=7.0,'
+        'published_age_seconds=6.0 1700000000',
+        'm,device=control,load=cameras,location=control decided_on=24.0,'
+        'level=0.0,ok=1.0,powered=1.0,'
+        'reason="state_of_charge_pct=24.0 below 50%",reason_code=1.0,'
+        'schedule_suspended=0.0,shed_level=2.0 1700000000']
+
+
+def test_a_document_that_names_no_loads_is_a_fault(tmp_path):
+    """A load the controller drives and nobody can see is the failure this
+    device exists to prevent, so a document with no place for loads is
+    refused rather than read as a controller with none."""
+    document = dict(DOCUMENT)
+    del document["loads"]
+    with pytest.raises(Exception) as raised:
+        reader(written(tmp_path, document)).read()
+    assert "loads" in str(raised.value)
+
+
+def test_a_load_published_with_no_fields_is_a_fault(tmp_path):
+    document = dict(DOCUMENT, loads={"cameras": {}})
+    with pytest.raises(Exception) as raised:
+        reader(written(tmp_path, document)).read()
+    assert "cameras" in str(raised.value)
+
+
+def test_a_controller_with_every_load_disabled_publishes_only_itself(
+        tmp_path):
+    """Not a fault: the node file said so, and the loop's own fields still
+    say it is alive."""
+    points = reader(written(tmp_path, dict(DOCUMENT, loads={}))).read()
+    assert [one.tags for one in points] == [{}]
 
 
 def test_a_document_from_a_previous_boot_is_reported_as_a_fault(tmp_path):

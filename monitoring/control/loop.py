@@ -185,29 +185,44 @@ class Loop:
     # -- what it tells the world -------------------------------------------
 
     def _publish_state(self, decisions, local_now, mono_now, verdict):
+        """Write what this pass decided, for the reporting driver to read.
+
+        The loop's own fields sit under `fields` and each load's under
+        `loads`, by name, with the field names bare. The reader turns each
+        load into its own point tagged with the load, so a chart repeats
+        over loads without naming any and a load added to the node file
+        needs no panel edited.
+
+        `decided_on` is left out, not written as zero, when no value
+        informed the decision: a zero would read as a battery at zero
+        percent.
+        """
         fields = {
             "clock_synced": 1.0 if verdict.trusted else 0.0,
             "clock_reason": verdict.reason,
             "passes": float(self.passes),
             "loop_monotonic": float(mono_now),
         }
+        loads = {}
         for name, decision in decisions.items():
-            fields.update({
-                "%s_powered" % name: 1.0 if decision.connected else 0.0,
-                "%s_level" % name: 1.0 if (
-                    self.state.get(name, {}).get("level")) else 0.0,
-                "%s_shed_level" % name: float(decision.tier),
-                "%s_reason_code" % name: float(decision.reason_code),
-                "%s_reason" % name: decision.reason,
-                "%s_schedule_suspended" % name: 1.0 if (
+            held = self.state.get(name, {})
+            load = {
+                "powered": 1.0 if decision.connected else 0.0,
+                "level": 1.0 if held.get("level") else 0.0,
+                "shed_level": float(decision.tier),
+                "reason_code": float(decision.reason_code),
+                "reason": decision.reason,
+                "schedule_suspended": 1.0 if (
                     decision.reason_code == decide.SCHEDULE_SUSPENDED) else 0.0,
-            })
+            }
             if decision.decided_on is not None:
-                fields["%s_decided_on" % name] = float(decision.decided_on)
+                load["decided_on"] = float(decision.decided_on)
+            loads[name] = load
 
         try:
             self._publish(self._published_path or files.PUBLISHED,
-                          {"fields": fields, "monotonic": float(mono_now),
+                          {"fields": fields, "loads": loads,
+                           "monotonic": float(mono_now),
                            "boot_id": self._boot})
         except Exception:
             # Publishing is how somebody finds out. Controlling is the job.

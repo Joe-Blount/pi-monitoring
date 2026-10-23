@@ -175,25 +175,27 @@ which needs nothing else running:
 sudo cat /run/monitoring/control.json
 ```
 
-Inside, look for three fields named for the load:
+Inside, under `loads` and then the load's name, look for three fields:
 
 ```
-cameras_reason          text: which rule fired, and the number it compared
-cameras_reason_code     the same rule, as a number (table below)
-cameras_decided_on      the bare number the rule compared, by itself
+reason          text: which rule fired, and the number it compared
+reason_code     the same rule, as a number (table below)
+decided_on      the bare number the rule compared, by itself
 ```
 
-`cameras_reason` reads something like `state_of_charge_pct=9.4 below 12%`.
-That number is the one that turned the load off. `cameras_shed_level` says
-how many tiers are currently latched; `0` means none and the load should be
-running unless something else is holding it off.
+`reason` reads something like `state_of_charge_pct=9.4 below 12%`. That
+number is the one that turned the load off. `shed_level` says how many tiers
+are currently latched; `0` means none and the load should be running unless
+something else is holding it off.
 
-Do not read `cameras_level` as whether the cameras have power. It is the
-raw voltage on the pin, not the load's state, and for a normally-closed
-branch the two are opposite: `cameras_level=0.0` next to
-`cameras_powered=1.0` means the relay is de-energized and the cameras are
-running, which is correct. Use `cameras_powered` for whether the load has
-power.
+Do not read `level` as whether the cameras have power. It is the raw voltage
+on the pin, not the load's state, and for a normally-closed branch the two
+are opposite: `level=0.0` next to `powered=1.0` means the relay is
+de-energized and the cameras are running, which is correct. Use `powered`
+for whether the load has power.
+
+In the database the same fields carry the same names, on a point tagged
+`load=cameras`. See the table of published fields below.
 
 ## Read one sensor by hand
 
@@ -298,20 +300,24 @@ when it is.
 
 ## Published fields, per load
 
-Every load the controller drives publishes these, named with the load
-first, such as `cameras_powered`:
+Every load the controller drives is its own point, carrying the device's
+tags and a `load` tag naming the load, such as `load=cameras`. The field
+names are the same for every load, so one chart over `powered` repeats over
+loads and a table over all loads needs no column per load. A load added to
+the node file needs no panel edited.
 
 | Field | Meaning |
 |---|---|
-| `<load>_powered` | `1.0` if the load has power right now, `0.0` if not. Read this, not `_level`, to know the load's actual state. |
-| `<load>_level` | The raw pin voltage: `1.0` energized, `0.0` not. Opposite of `_powered` on a normally-closed load such as the cameras. |
-| `<load>_shed_level` | How many tiers are currently latched. `0` is nothing latched. |
-| `<load>_reason_code` | Which kind of rule decided this pass, as a number. Table below. |
-| `<load>_reason` | The same decision in words, with the number it compared. |
-| `<load>_decided_on` | That number by itself, for a quick look or a graph. |
-| `<load>_schedule_suspended` | `1.0` if a latched tier's schedule could not be judged because the clock is not trusted. |
+| `powered` | `1.0` if the load has power right now, `0.0` if not. Read this, not `level`, to know the load's actual state. |
+| `level` | The raw pin voltage: `1.0` energized, `0.0` not. Opposite of `powered` on a normally-closed load such as the cameras. |
+| `shed_level` | How many tiers are currently latched. `0` is nothing latched. |
+| `reason_code` | Which kind of rule decided this pass, as a number. Table below. |
+| `reason` | The same decision in words, with the number it compared. |
+| `decided_on` | That number by itself, for a quick look or a graph. Absent, not zero, when no value informed the decision, so a query must allow for it being missing. |
+| `schedule_suspended` | `1.0` if a latched tier's schedule could not be judged because the clock is not trusted. |
 
-A few fields describe the controller itself, not any one load:
+A few fields describe the controller itself, not any one load. They are on
+the point with no `load` tag:
 
 | Field | Meaning |
 |---|---|
@@ -319,6 +325,13 @@ A few fields describe the controller itself, not any one load:
 | `clock_reason` | Why it is, or is not. |
 | `passes` | How many decision passes the controller has made since it started. |
 | `loop_monotonic` | Its own uptime clock, in seconds. Not a wall time. |
+| `published_age_seconds` | How long ago the controller wrote what the collector just read, measured by the collector. A loop that has wedged shows here as an age that keeps growing while every other field holds still. |
+
+When the controller has published nothing, or what it published is from a
+previous boot, the collector writes one point with `ok=0.0` and the reason
+in `error_message`, on the series with no `load` tag, and every load's
+series stops. A gap in a load's series is therefore always that failure or
+a collector fault, never a load with nothing to say.
 
 ## Reason codes
 
