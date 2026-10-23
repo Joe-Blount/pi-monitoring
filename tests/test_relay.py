@@ -190,9 +190,30 @@ def test_closing_releases_the_line_and_can_be_repeated():
     pin = relay.Relay(23, relay.ENERGIZE_TO_SHED, factory=relay.Recording)
     pin.apply(True)
     device = pin._device
+    assert not device.closed, "the line was released while still driven"
     pin.close()
     assert device.closed
     pin.close()
+
+
+def test_a_closed_relay_claims_the_line_afresh_when_driven_again():
+    """Once closed, the device is gone. Driving the relay again has to claim
+    the line again rather than call a device that no longer holds it, which
+    on the real backend is a call on a released handle."""
+    opened = []
+
+    def counting(pin, initial_value=False):
+        device = relay.Recording(pin, initial_value=initial_value)
+        opened.append(device)
+        return device
+
+    pin = relay.Relay(23, relay.ENERGIZE_TO_SHED, factory=counting)
+    pin.apply(True)
+    pin.close()
+    assert pin.apply(True) is False
+    assert len(opened) == 2
+    assert opened[0].closed and not opened[1].closed
+    assert opened[1].levels == [False]
 
 
 def test_a_failed_claim_leaves_no_device_and_is_retried():
