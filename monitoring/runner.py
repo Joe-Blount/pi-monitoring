@@ -102,7 +102,12 @@ def points(device, reading):
             raise DriverError(
                 "the driver sets tag(s) %s, which the node file already sets "
                 "for this device" % ", ".join(taken))
-        key = tuple(sorted(one.tags.items()))
+        # Compared as written: a tag goes out as escaped text, and one with
+        # no value is not written at all.
+        key = tuple(sorted(
+            (lineproto.escape_key(str(name)), lineproto.escape_key(str(value)))
+            for name, value in one.tags.items()
+            if value is not None and value != ""))
         if key in seen:
             raise DriverError(
                 "the driver returned two points on one series, %s"

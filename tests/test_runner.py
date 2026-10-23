@@ -870,6 +870,30 @@ class NotAPointDriver(Driver):
         return [Point({"value": 1.0}), {"value": 2.0}]
 
 
+class SameSeriesOnceWrittenDriver(Driver):
+    description = "test double whose two points render to one series"
+
+    def read(self):
+        return [Point({"value": 1.0}, tags={"load": 1}),
+                Point({"value": 2.0}, tags={"load": "1"})]
+
+
+class EmptyTagDriver(Driver):
+    description = "test double whose tagged point renders untagged"
+
+    def read(self):
+        return [Point({"value": 1.0}),
+                Point({"value": 2.0}, tags={"load": ""})]
+
+
+class LineBreakTagDriver(Driver):
+    description = "test double whose tags differ only by a line break"
+
+    def read(self):
+        return [Point({"value": 1.0}, tags={"load": "a b"}),
+                Point({"value": 2.0}, tags={"load": "a\nb"})]
+
+
 class NothingUsableInSeveralDriver(Driver):
     description = "test double whose several series carry nothing"
 
@@ -886,6 +910,10 @@ def series_doubles():
     REGISTRY["twice"] = ("tests.test_runner", "SameSeriesTwiceDriver")
     REGISTRY["nothing"] = ("tests.test_runner", "NothingUsableInSeveralDriver")
     REGISTRY["not_a_point"] = ("tests.test_runner", "NotAPointDriver")
+    REGISTRY["one_series_written"] = ("tests.test_runner",
+                                      "SameSeriesOnceWrittenDriver")
+    REGISTRY["empty_tag"] = ("tests.test_runner", "EmptyTagDriver")
+    REGISTRY["line_break_tag"] = ("tests.test_runner", "LineBreakTagDriver")
     yield
     REGISTRY.clear()
     REGISTRY.update(original)
@@ -935,6 +963,20 @@ def test_two_points_on_one_series_are_refused(tmp_path, series_doubles):
     result = runner.read_device(node, node.find("a"), NOW)
     assert not result.ok
     assert "load=x" in result.error
+
+
+@pytest.mark.parametrize("driver", ["one_series_written", "empty_tag",
+                                    "line_break_tag"])
+def test_points_that_are_written_as_one_series_are_refused(
+        tmp_path, series_doubles, driver):
+    """A tag is written as text, and a tag with no value is not written at
+    all, so two points can differ as the driver built them and still land on
+    one series."""
+    node = node_with(tmp_path,
+                     "  - {name: a, driver: %s, mode: poll}\n" % driver)
+    result = runner.read_device(node, node.find("a"), NOW)
+    assert not result.ok
+    assert "two points on one series" in result.error
 
 
 def test_a_list_reading_holding_anything_but_points_is_refused(
