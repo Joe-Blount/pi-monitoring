@@ -149,8 +149,16 @@ class ControlDriver(Driver):
         own = _values(fields)
         own["published_age_seconds"] = max(
             0.0, self._monotonic() - float(stamp))
-        return [Point(own)] + [Point(_values(loads[name]), tags={"load": name})
-                               for name in sorted(loads)]
+        points = [Point(own)]
+        for name in sorted(loads):
+            values = _values(loads[name])
+            if not values:
+                raise DriverError(
+                    "%s carries no usable value for load %s, so the "
+                    "controller wrote a document it could not fill"
+                    % (self.path, name))
+            points.append(Point(values, tags={"load": name}))
+        return points
 
     def check(self):
         _, _, loads = self._document()

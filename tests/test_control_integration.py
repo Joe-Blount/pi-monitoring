@@ -424,6 +424,16 @@ def test_a_document_with_no_loads_points_at_a_controller_not_restarted(
     assert "restart monitoring-control" in str(raised.value)
 
 
+def test_a_load_published_with_no_usable_value_is_a_fault(tmp_path):
+    """A point carrying nothing but ok=1 would say the load reported
+    healthily while saying nothing about it."""
+    document = dict(DOCUMENT, loads={"cameras": {"powered": None,
+                                                 "floor_latched": True}})
+    with pytest.raises(Exception) as raised:
+        reader(written(tmp_path, document)).read()
+    assert "cameras" in str(raised.value)
+
+
 def test_a_load_published_with_no_fields_is_a_fault(tmp_path):
     document = dict(DOCUMENT, loads={"cameras": {}})
     with pytest.raises(Exception) as raised:
