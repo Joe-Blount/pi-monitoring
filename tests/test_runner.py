@@ -863,6 +863,13 @@ class SameSeriesTwiceDriver(Driver):
                 Point({"value": 2.0}, tags={"load": "x"})]
 
 
+class NotAPointDriver(Driver):
+    description = "test double that returns a list holding a plain dict"
+
+    def read(self):
+        return [Point({"value": 1.0}), {"value": 2.0}]
+
+
 class NothingUsableInSeveralDriver(Driver):
     description = "test double whose several series carry nothing"
 
@@ -878,6 +885,7 @@ def series_doubles():
                                   "SeveralSeriesStreamingDriver")
     REGISTRY["twice"] = ("tests.test_runner", "SameSeriesTwiceDriver")
     REGISTRY["nothing"] = ("tests.test_runner", "NothingUsableInSeveralDriver")
+    REGISTRY["not_a_point"] = ("tests.test_runner", "NotAPointDriver")
     yield
     REGISTRY.clear()
     REGISTRY.update(original)
@@ -927,6 +935,17 @@ def test_two_points_on_one_series_are_refused(tmp_path, series_doubles):
     result = runner.read_device(node, node.find("a"), NOW)
     assert not result.ok
     assert "load=x" in result.error
+
+
+def test_a_list_reading_holding_anything_but_points_is_refused(
+        tmp_path, series_doubles):
+    """A dict in a list carries no tags of its own, so it cannot say which
+    series it belongs to."""
+    node = node_with(tmp_path,
+                     "  - {name: a, driver: not_a_point, mode: poll}\n")
+    result = runner.read_device(node, node.find("a"), NOW)
+    assert not result.ok
+    assert "returned a dict where a reading was expected" in result.error
 
 
 def test_a_point_tag_the_node_file_already_sets_is_refused(
