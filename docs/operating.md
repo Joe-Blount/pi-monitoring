@@ -317,6 +317,7 @@ the node file needs no panel edited.
 | `schedule_suspended` | `1.0` if a latched tier's schedule could not be judged because the clock is not trusted. |
 | `floor_latched` | `1.0` while a voltage floor holds this load off. It stays `1.0` after the reading has climbed back above the shedding bound, until it clears the restoring bound. `0.0` otherwise, including on a load with no floor. |
 | `floor_latched_by` | Which source holds the floor, as `device.field`, such as `bms.cell_min_volts`. Only that source can release it, so this is the number to watch. Absent while `floor_latched` is `0.0`. |
+| `cycles` | How many times the controller has changed the level it drives on this load's pin since the machine booted. A counter, not a state: "how many times did the recorder cycle today" is the difference between its values at the two ends of the day. It is kept in tmpfs with the rest of the controller's state, so it survives a restart of the service and starts again at zero on every boot; a reboot inside the day shows as the count dropping back to zero. The first drive after boot counts when it energizes the relay, because until then the relay was de-energized, and does not count when it leaves it de-energized. A decision that never reached the pin does not count. |
 
 A few fields describe the controller itself, not any one load. They are on
 the point with no `load` tag:

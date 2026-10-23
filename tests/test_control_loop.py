@@ -61,7 +61,7 @@ def reading(soc=60.0, cell=3.30, age=1.0):
 
 
 def build(tmp_path, readings=None, at=None, mono=0.0, trusted=True,
-          switches=None, loads=None):
+          switches=None, loads=None, boot=BOOT):
     """A loop whose world is entirely under the test's control."""
     pin = relay.Pretend(23, relay.ENERGIZE_TO_SHED)
     published = {}
@@ -82,7 +82,7 @@ def build(tmp_path, readings=None, at=None, mono=0.0, trusted=True,
         published_path=str(tmp_path / "published.json"),
         high_water_path=str(tmp_path / "hw.json"),
         publish=lambda _path, data: published.update(data),
-        boot=BOOT)
+        boot=boot)
     return machine, pin, published, state
 
 
@@ -181,7 +181,7 @@ def test_a_place_with_no_sunrise_suspends_the_schedule_rather_than_crashing(
 #: in hand can add. Pinned here so that a field quietly renamed, or one
 #: quietly dropped, fails against this list rather than against the loop.
 LOAD_FIELDS = {"powered", "level", "shed_level", "reason_code", "reason",
-               "schedule_suspended", "floor_latched"}
+               "schedule_suspended", "floor_latched", "cycles"}
 LOAD_FIELDS_WITH_A_VALUE = {"decided_on"}
 LOAD_FIELDS_WHILE_THE_FLOOR_HOLDS = {"floor_latched_by"}
 LOOP_FIELDS = {"clock_synced", "clock_reason", "passes", "loop_monotonic"}
@@ -304,6 +304,104 @@ def test_a_failure_to_publish_does_not_stop_it_controlling(tmp_path):
         publish=explode, boot=BOOT)
     machine.once()
     assert pin.levels == [True], "a publishing failure cost a shed"
+
+
+# -- counting cycles --------------------------------------------------------
+
+def cycles(published):
+    return published["loads"]["cameras"]["cycles"]
+
+
+def test_a_first_drive_that_leaves_the_pin_de_energized_is_not_a_cycle(
+        tmp_path):
+    """Until the first drive the pin sits at its de-energized level, which
+    is where the machine left it, so driving it there again changes nothing
+    about the load."""
+    machine, pin, published, _ = build(tmp_path)
+    machine.once()
+    assert pin.levels == [False]
+    assert cycles(published) == 0.0
+
+
+def test_a_first_drive_that_energizes_the_relay_is_a_cycle(tmp_path):
+    """The relay was de-energized until that drive, so the load changed
+    state, and on the camera branch that is a recorder power cycle. Not
+    counting it would under-report by one every boot, in exactly the case
+    the counter exists for."""
+    machine, pin, published, _ = build(tmp_path, readings=reading(soc=5.0))
+    machine.once()
+    assert pin.levels == [True]
+    assert cycles(published) == 1.0
+
+
+def test_each_change_of_the_driven_level_counts_and_a_hold_does_not(tmp_path):
+    machine, pin, published, state = build(tmp_path)
+    seen = []
+    for step, soc in enumerate((60.0, 5.0, 5.0, 60.0, 5.0)):
+        state["readings"] = reading(soc=soc)
+        state["mono"] = step * 100.0
+        machine.once()
+        seen.append(cycles(published))
+    assert pin.levels == [False, True, True, False, True]
+    assert seen == [0.0, 1.0, 1.0, 2.0, 3.0]
+
+
+def test_a_commanded_change_that_never_reached_the_pin_is_not_a_cycle(
+        tmp_path):
+    """A load is not driven until a reading informs a decision about it. An
+    operator forcing it off and then clearing that, before any reading has
+    arrived, changes what was commanded twice and the pin not at all."""
+    switches = {"shedding_enabled": True,
+                "loads": {"cameras": {"force": "off",
+                                      "expires_epoch": 4_000_000_000.0}}}
+    machine, pin, published, state = build(tmp_path, readings={},
+                                           switches=switches)
+    machine.once()
+    assert published["loads"]["cameras"]["powered"] == 0.0
+
+    switches["loads"].clear()
+    state["mono"] = 100.0
+    machine.once()
+    assert published["loads"]["cameras"]["powered"] == 1.0
+    assert pin.levels == [], "nothing was driven without a reading"
+
+    state["readings"] = reading()
+    state["mono"] = 200.0
+    machine.once()
+    assert pin.levels == [False]
+    assert cycles(published) == 0.0
+
+
+def test_a_dry_run_counts_no_cycle(tmp_path):
+    machine, pin, published, _ = build(tmp_path, readings=reading(soc=5.0))
+    machine.once(apply=False)
+    assert pin.levels == []
+    assert cycles(published) == 0.0
+
+
+def test_the_count_survives_a_restart_within_a_boot_and_not_a_new_boot(
+        tmp_path):
+    """Kept with the rest of the loop's state, in tmpfs. A restarted loop
+    puts the load back where it had it, which changes nothing it drove, and
+    a new boot starts from nothing."""
+    machine, _, published, state = build(tmp_path, readings=reading(soc=5.0))
+    machine.once()
+    state["readings"] = reading(soc=60.0)
+    state["mono"] = 100.0
+    machine.once()
+    assert cycles(published) == 2.0
+
+    resumed, pin, published, _ = build(tmp_path, readings=reading(soc=60.0),
+                                       mono=200.0)
+    resumed.once()
+    assert pin.levels == [False], "put back where it was"
+    assert cycles(published) == 2.0
+
+    rebooted, pin, published, _ = build(tmp_path, readings=reading(soc=5.0),
+                                        boot="the-next-boot")
+    rebooted.once()
+    assert pin.levels == [True]
+    assert cycles(published) == 1.0, "counted afresh from zero"
 
 
 # -- state across passes ----------------------------------------------------

@@ -362,7 +362,7 @@ DOCUMENT = {
         "powered": 1.0, "level": 0.0, "shed_level": 2.0, "reason_code": 1.0,
         "reason": "state_of_charge_pct=24.0 below 50%",
         "schedule_suspended": 0.0, "decided_on": 24.0,
-        "floor_latched": 0.0}}}
+        "floor_latched": 0.0, "cycles": 3.0}}}
 
 
 def written(tmp_path, document):
@@ -394,8 +394,8 @@ def test_the_lines_the_collector_writes_for_the_controller(tmp_path,
         'm,device=control,location=control clock_reason="synchronised",'
         'clock_synced=1.0,loop_monotonic=4.0,ok=1.0,passes=7.0,'
         'published_age_seconds=6.0 1700000000',
-        'm,device=control,load=cameras,location=control decided_on=24.0,'
-        'floor_latched=0.0,level=0.0,ok=1.0,powered=1.0,'
+        'm,device=control,load=cameras,location=control cycles=3.0,'
+        'decided_on=24.0,floor_latched=0.0,level=0.0,ok=1.0,powered=1.0,'
         'reason="state_of_charge_pct=24.0 below 50%",reason_code=1.0,'
         'schedule_suspended=0.0,shed_level=2.0 1700000000']
 
