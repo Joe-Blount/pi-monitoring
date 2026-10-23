@@ -222,7 +222,7 @@ def test_an_untrusted_clock_leaves_the_cameras_running(loads, suns):
 BOOT = "a-boot-identity-the-test-controls"
 
 
-def run_the_real_loop(tmp_path, soc):
+def run_the_real_loop(tmp_path, soc, cell=3.30):
     """The shipping loop, run until the ladder has settled, writing the
     document it really writes.
 
@@ -253,7 +253,7 @@ def run_the_real_loop(tmp_path, soc):
         trust=lambda high_water=None: clock.Trust(True, "under test"),
         readings=lambda: {
             "bms": {"fields": {"state_of_charge_pct": soc,
-                               "cell_min_volts": 3.30},
+                               "cell_min_volts": cell},
                     "age_seconds": 1.0, "taken_at": clock_state["mono"]},
             "mppt": {"fields": {"battery_volts": 13.4}, "age_seconds": 1.0}},
         switches=lambda: {"shedding_enabled": True, "loads": {}},
@@ -332,6 +332,16 @@ def test_each_load_is_its_own_point_tagged_with_the_load(tmp_path):
     assert [one.tags for one in points] == [{}, {"load": "cameras"}]
 
 
+def test_the_floor_owner_names_the_shipped_source_that_tripped_it(tmp_path):
+    """Through the real node file: the cell minimum is the first floor source
+    declared there, and the owner is published as device.field."""
+    cameras = by_load(reader(run_the_real_loop(tmp_path, 60.0, cell=3.10),
+                             mono=3 * PAST_THE_TIMERS).read())["cameras"]
+    assert cameras["reason_code"] == float(decide.FLOOR)
+    assert cameras["floor_latched"] == 1.0
+    assert cameras["floor_latched_by"] == "bms.cell_min_volts"
+
+
 def test_the_age_is_on_the_loop_point_and_measured_by_the_reader(tmp_path):
     """One age for the document, not one per load, and computed against the
     reader's own clock rather than copied out of the file, so a wedged loop
@@ -351,7 +361,8 @@ DOCUMENT = {
     "loads": {"cameras": {
         "powered": 1.0, "level": 0.0, "shed_level": 2.0, "reason_code": 1.0,
         "reason": "state_of_charge_pct=24.0 below 50%",
-        "schedule_suspended": 0.0, "decided_on": 24.0}}}
+        "schedule_suspended": 0.0, "decided_on": 24.0,
+        "floor_latched": 0.0}}}
 
 
 def written(tmp_path, document):
@@ -384,7 +395,7 @@ def test_the_lines_the_collector_writes_for_the_controller(tmp_path,
         'clock_synced=1.0,loop_monotonic=4.0,ok=1.0,passes=7.0,'
         'published_age_seconds=6.0 1700000000',
         'm,device=control,load=cameras,location=control decided_on=24.0,'
-        'level=0.0,ok=1.0,powered=1.0,'
+        'floor_latched=0.0,level=0.0,ok=1.0,powered=1.0,'
         'reason="state_of_charge_pct=24.0 below 50%",reason_code=1.0,'
         'schedule_suspended=0.0,shed_level=2.0 1700000000']
 

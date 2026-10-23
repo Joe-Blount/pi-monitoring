@@ -195,7 +195,8 @@ class Loop:
 
         `decided_on` is left out, not written as zero, when no value
         informed the decision: a zero would read as a battery at zero
-        percent.
+        percent. `floor_latched_by` is left out the same way while nothing
+        holds the floor: a blank would be a value naming no source.
         """
         fields = {
             "clock_synced": 1.0 if verdict.trusted else 0.0,
@@ -214,9 +215,12 @@ class Loop:
                 "reason": decision.reason,
                 "schedule_suspended": 1.0 if (
                     decision.reason_code == decide.SCHEDULE_SUSPENDED) else 0.0,
+                "floor_latched": 1.0 if held.get("floor_latched") else 0.0,
             }
             if decision.decided_on is not None:
                 load["decided_on"] = float(decision.decided_on)
+            if held.get("floor_latched") and held.get("floor_latched_by"):
+                load["floor_latched_by"] = str(held["floor_latched_by"])
             loads[name] = load
 
         try:

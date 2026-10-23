@@ -181,12 +181,17 @@ def test_a_place_with_no_sunrise_suspends_the_schedule_rather_than_crashing(
 #: in hand can add. Pinned here so that a field quietly renamed, or one
 #: quietly dropped, fails against this list rather than against the loop.
 LOAD_FIELDS = {"powered", "level", "shed_level", "reason_code", "reason",
-               "schedule_suspended"}
+               "schedule_suspended", "floor_latched"}
 LOAD_FIELDS_WITH_A_VALUE = {"decided_on"}
+LOAD_FIELDS_WHILE_THE_FLOOR_HOLDS = {"floor_latched_by"}
 LOOP_FIELDS = {"clock_synced", "clock_reason", "passes", "loop_monotonic"}
 
 #: The text fields. Everything else is a float.
-TEXT_FIELDS = {"clock_reason", "reason"}
+TEXT_FIELDS = {"clock_reason", "reason", "floor_latched_by"}
+
+#: How the loop names the source holding a floor: the device, a dot, the
+#: field. Pinned as the literal an operator would read off a dashboard.
+CELL_SOURCE = "bms.cell_min_volts"
 
 
 def test_each_load_is_published_under_its_own_name(tmp_path):
@@ -208,15 +213,56 @@ def test_decided_on_is_absent_rather_than_zero_without_a_value(tmp_path):
     assert set(published["loads"]["cameras"]) == LOAD_FIELDS
 
 
-def test_every_published_number_is_a_float(tmp_path):
+@pytest.mark.parametrize("readings", [reading(), reading(cell=3.10)],
+                         ids=["healthy", "floored"])
+def test_every_published_number_is_a_float(tmp_path, readings):
     """InfluxDB refuses a field whose type changes between writes."""
-    machine, _, published, _ = build(tmp_path)
+    machine, _, published, _ = build(tmp_path, readings=readings)
     machine.once()
     everything = [published["fields"]] + list(published["loads"].values())
     for fields in everything:
         for name, value in fields.items():
             assert isinstance(value, (float, str)), name
             assert isinstance(value, str) == (name in TEXT_FIELDS), name
+
+
+def test_the_floor_latch_and_its_owner_are_published_while_it_holds(tmp_path):
+    """The latch outlives the reading that tripped it: it holds between the
+    shedding bound and the restoring bound, and only the source that tripped
+    it may release it. Both are published so a dashboard can say which
+    number has to recover, not just that the cameras are off."""
+    machine, _, published, state = build(tmp_path, readings=reading(cell=3.10))
+    machine.once()
+    cameras = published["loads"]["cameras"]
+    assert cameras["floor_latched"] == 1.0
+    assert cameras["floor_latched_by"] == CELL_SOURCE
+    assert set(cameras) == (LOAD_FIELDS | LOAD_FIELDS_WITH_A_VALUE
+                            | LOAD_FIELDS_WHILE_THE_FLOOR_HOLDS)
+
+    state["readings"] = reading(cell=3.20)
+    state["mono"] = 30.0
+    machine.once()
+    cameras = published["loads"]["cameras"]
+    assert cameras["floor_latched"] == 1.0, "between the bounds it holds"
+    assert cameras["floor_latched_by"] == CELL_SOURCE
+
+    state["readings"] = reading(cell=3.30)
+    state["mono"] = 60.0
+    machine.once()
+    cameras = published["loads"]["cameras"]
+    assert cameras["floor_latched"] == 0.0
+    assert "floor_latched_by" not in cameras
+
+
+def test_the_floor_owner_is_absent_rather_than_blank_when_nothing_holds_it(
+        tmp_path):
+    """No source holds a latch that is not latched. A blank would be a value
+    that names no device, and a query would have to know to ignore it."""
+    machine, _, published, _ = build(tmp_path)
+    machine.once()
+    cameras = published["loads"]["cameras"]
+    assert cameras["floor_latched"] == 0.0
+    assert "floor_latched_by" not in cameras
 
 
 def test_the_published_level_is_what_went_out_not_what_was_wanted(tmp_path):

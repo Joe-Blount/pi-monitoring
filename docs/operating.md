@@ -315,6 +315,8 @@ the node file needs no panel edited.
 | `reason` | The same decision in words, with the number it compared. |
 | `decided_on` | That number by itself, for a quick look or a graph. Absent, not zero, when no value informed the decision, so a query must allow for it being missing. |
 | `schedule_suspended` | `1.0` if a latched tier's schedule could not be judged because the clock is not trusted. |
+| `floor_latched` | `1.0` while a voltage floor holds this load off. It stays `1.0` after the reading has climbed back above the shedding bound, until it clears the restoring bound. `0.0` otherwise, including on a load with no floor. |
+| `floor_latched_by` | Which source holds the floor, as `device.field`, such as `bms.cell_min_volts`. Only that source can release it, so this is the number to watch. Absent while `floor_latched` is `0.0`. |
 
 A few fields describe the controller itself, not any one load. They are on
 the point with no `load` tag:
