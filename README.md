@@ -260,9 +260,14 @@ block including the charge setpoints is unmapped. Each driver's docstring
 separates what was confirmed against an independent reading from what is
 inferred, which is worth reading before trusting a field.
 
-Control: designed, not written. It is commissioned in place rather than on a
-bench, with the run-time cap and the guard in force from the first live run so
-that a relay which sticks on is bounded rather than unbounded.
+Control: written and tested for one load type, a DC branch shed on the
+battery's state of charge with a floor beneath it. The controller is installed
+at both sites, disabled, because neither live node declares a load of that
+type. The other load types are specified in the node files and refused by the
+controller until a decision for them is written. The pump sequence is
+commissioned in place rather than on a bench, with its run-time cap and its
+guard in force from the first live run, so that a relay which sticks on is
+bounded rather than unbounded.
 
 Two preconditions are settled before then, and both are software rather than
 hardware. Whether killing a process releases the GPIO line, which depends on
