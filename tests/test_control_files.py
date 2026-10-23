@@ -14,6 +14,48 @@ from monitoring.control import clock, files, location
 BOOT = "test-boot-identity"
 
 
+def test_the_boot_identity_is_what_the_kernel_says(tmp_path, monkeypatch):
+    """Stripped of its newline, and None when the kernel says nothing or
+    cannot be asked. None rather than a made-up value, so a reader that
+    cannot tell which boot a stamp came from treats it as foreign."""
+    path = tmp_path / "boot_id"
+    monkeypatch.setattr(files, "BOOT_ID_PATH", str(path))
+    assert files.boot_id() is None, "a missing file is not a boot"
+    path.write_text("\n")
+    assert files.boot_id() is None, "an empty file is not a boot"
+    path.write_text("6a1f-this-boot\n")
+    assert files.boot_id() == "6a1f-this-boot"
+
+
+def test_the_shipped_paths_are_used_when_none_is_given(tmp_path, monkeypatch):
+    """Every path is resolved when the function is called, never bound as a
+    default argument, so redirecting the module's constants redirects the
+    functions. A caller passing nothing gets the runtime directory, the
+    live clock and this boot."""
+    boot = tmp_path / "boot_id"
+    boot.write_text("this-boot\n")
+    monkeypatch.setattr(files, "BOOT_ID_PATH", str(boot))
+    monkeypatch.setattr(files, "READINGS_DIR", str(tmp_path / "readings"))
+    monkeypatch.setattr(files, "CONTROL_STATE", str(tmp_path / "state.json"))
+    monkeypatch.setattr(files, "HIGH_WATER", str(tmp_path / "hw.json"))
+    monkeypatch.setattr(files, "SWITCHES", str(tmp_path / "switches.json"))
+
+    files.publish_reading({"x": 1.0}, "bms")
+    out = files.read_readings()
+    assert out["bms"]["fields"] == {"x": 1.0}
+    assert 0.0 <= out["bms"]["age_seconds"] < 60.0, (
+        "a reading published this boot was not aged against the live clock")
+
+    files.write_state({"cameras": {"since": 1.0}})
+    assert files.read_state() == {"cameras": {"since": 1.0}}
+
+    assert files.note_high_water(5000.0) == 5000.0
+    assert files.read_high_water() == 5000.0
+
+    files.write_switches({"shedding_enabled": False, "loads": {}})
+    assert files.read_switches()["shedding_enabled"] is False
+
+
 def test_a_reading_round_trips_with_an_age(tmp_path):
     directory = str(tmp_path / "readings")
     files.publish_reading({"state_of_charge_pct": 45.0}, "bms",
@@ -63,6 +105,37 @@ def test_a_reading_from_another_boot_is_infinitely_old(tmp_path):
                           now=400000.0, boot=BOOT)
     out = files.read_readings(directory, now=60.0, this_boot="a-different-boot")
     assert out["bms"]["age_seconds"] == float("inf")
+
+
+def test_an_age_is_never_negative_and_a_small_one_is_exact(tmp_path):
+    """A resident collector can stamp a reading in the instant between the
+    loop reading its clock and reading the file. That reading is fresh, not
+    from the future, and a reading half a second old is half a second old
+    rather than rounded up to something a stale check could trip on."""
+    directory = str(tmp_path / "readings")
+    files.publish_reading({"x": 1.0}, "bms", directory=directory, now=100.0,
+                          boot=BOOT)
+    assert files.read_readings(directory, now=97.0,
+                               this_boot=BOOT)["bms"]["age_seconds"] == 0.0
+    assert files.read_readings(directory, now=100.5,
+                               this_boot=BOOT)["bms"]["age_seconds"] == 0.5
+
+
+def test_only_json_files_are_readings(tmp_path):
+    """A collector's temporary file sits beside the readings while it is
+    being written, and it is not a reading until the rename. Named to sort
+    first, so a scan that stopped at it rather than stepping over it would
+    find nothing at all."""
+    directory = tmp_path / "readings"
+    directory.mkdir()
+    (directory / "aaa.json.123.tmp").write_text(json.dumps(
+        {"device": "stray", "fields": {"x": 1.0},
+         "boot_id": BOOT, "monotonic": 5.0}))
+    files.publish_reading({"y": 2.0}, "bms", directory=str(directory),
+                          now=5.0, boot=BOOT)
+    out = files.read_readings(str(directory), now=6.0, this_boot=BOOT)
+    assert "stray" not in out
+    assert out["bms"]["fields"] == {"y": 2.0}
 
 
 def test_a_reading_with_no_boot_identity_is_infinitely_old(tmp_path):
@@ -136,6 +209,17 @@ def test_a_write_lands_by_rename_rather_than_by_copying(tmp_path, monkeypatch):
     assert files.read_json(path) == {"a": 1}
 
 
+def test_a_write_that_fails_leaves_nothing_behind(tmp_path):
+    """The temporary file is opened before anything is written into it, so
+    a write that cannot finish has one to clean up. Left there, the
+    readings directory fills with debris nothing reads and nothing
+    removes."""
+    path = str(tmp_path / "x.json")
+    with pytest.raises(TypeError):
+        files.write_json(path, {"a": {1, 2}})
+    assert os.listdir(tmp_path) == []
+
+
 def test_a_damaged_json_file_reads_as_none(tmp_path):
     path = tmp_path / "x.json"
     path.write_text("{not json")
@@ -183,6 +267,15 @@ def test_a_damaged_switch_file_does_not_shed_anything(tmp_path):
     assert out["shedding_enabled"] is True
     assert out["loads"] == {}
     assert out["readable"] is False
+
+
+def test_switches_written_without_a_word_about_shedding_leave_it_enabled(
+        tmp_path):
+    """Enabled is the state nobody has touched, on the way out as well as on
+    the way in."""
+    path = str(tmp_path / "switches.json")
+    files.write_switches({"loads": {}}, path)
+    assert files.read_switches(path)["shedding_enabled"] is True
 
 
 def test_switches_round_trip(tmp_path):
@@ -253,6 +346,17 @@ def test_the_high_water_mark_is_not_rewritten_for_every_passing_second(
     assert files.read_high_water(str(path)) == moved
 
 
+def test_the_mark_moves_once_the_clock_is_more_than_an_hour_on(tmp_path):
+    """Exactly an hour on is not yet worth a write to the card. A second
+    past it is."""
+    path = str(tmp_path / "hw.json")
+    files.note_high_water(1000.0, path)
+    assert files.note_high_water(4600.0, path) == 1000.0
+    assert files.read_high_water(path) == 1000.0
+    assert files.note_high_water(4601.0, path) == 4601.0
+    assert files.read_high_water(path) == 4601.0
+
+
 def test_the_first_mark_is_written_at_once(tmp_path):
     """Until the file exists the hardware clock has nothing to be compared
     against and is trusted on sight, so the first trusted reading has to land
@@ -311,6 +415,16 @@ def test_clock_hardware_reading_after_a_time_already_seen_is_trusted(tmp_path):
                         marker=str(tmp_path / "none"), rtc=str(rtc))
 
 
+def test_clock_hardware_reading_the_time_already_seen_is_trusted(tmp_path):
+    """The bound is "not earlier than". A clock reading the mark itself has
+    not gone backwards, and a reset clock reads years below it, not on
+    it."""
+    rtc = tmp_path / "since_epoch"
+    rtc.write_text("2000000")
+    assert clock.assess(high_water=2000000.0,
+                        marker=str(tmp_path / "none"), rtc=str(rtc))
+
+
 def test_synchronisation_outranks_a_backwards_clock(tmp_path):
     """Once the daemon has synchronised, the system clock is right whatever
     the hardware says, and the hardware is about to be written from it."""
@@ -358,6 +472,66 @@ def test_a_swapped_pair_is_refused(tmp_path):
         location.read(written(tmp_path, "latitude: -97.4\nlongitude: 37.0\n"
                                         "timezone: America/Chicago\n"))
     assert "outside" in str(raised.value)
+
+
+@pytest.mark.parametrize("name,value", [
+    ("latitude", 90.0),
+    ("latitude", -90.0),
+    ("longitude", 180.0),
+    ("longitude", -180.0),
+])
+def test_the_poles_and_the_antimeridian_are_places(tmp_path, name, value):
+    """The bounds are inclusive. They exist to catch a swapped pair, not to
+    refuse the edge of the map."""
+    body = {"latitude": 37.0, "longitude": -97.4}
+    body[name] = value
+    out = location.read(written(
+        tmp_path, "latitude: %r\nlongitude: %r\ntimezone: America/Chicago\n"
+        % (body["latitude"], body["longitude"])))
+    assert out[name] == value
+
+
+@pytest.mark.parametrize("name,value", [
+    ("latitude", 90.5),
+    ("latitude", -90.5),
+    ("longitude", 180.5),
+    ("longitude", -180.5),
+])
+def test_just_past_the_edge_of_the_map_is_refused(tmp_path, name, value):
+    body = {"latitude": 37.0, "longitude": -97.4}
+    body[name] = value
+    with pytest.raises(location.LocationError) as raised:
+        location.read(written(
+            tmp_path, "latitude: %r\nlongitude: %r\ntimezone: America/Chicago\n"
+            % (body["latitude"], body["longitude"])))
+    assert "outside" in str(raised.value)
+
+
+def test_an_empty_file_is_refused_as_not_a_mapping(tmp_path):
+    """YAML reads an empty file as nothing at all, and nothing at all is not
+    a place. Named as the fault rather than crashing on the first key."""
+    with pytest.raises(location.LocationError) as raised:
+        location.read(written(tmp_path, ""))
+    assert "should be a mapping" in str(raised.value)
+
+
+def test_a_path_that_cannot_be_read_says_so(tmp_path):
+    """A directory where the file should be, or a file the service user
+    cannot open, is named with the reason rather than left as a
+    traceback."""
+    with pytest.raises(location.LocationError) as raised:
+        location.read(str(tmp_path))
+    assert "cannot read" in str(raised.value)
+
+
+@pytest.mark.parametrize("value", ["''", "5", "true"])
+def test_a_timezone_must_be_a_name(tmp_path, value):
+    """Not nothing, not a number, not a yes. The message says what kind of
+    name, because the person reading it is about to type one."""
+    with pytest.raises(location.LocationError) as raised:
+        location.read(written(tmp_path, "latitude: 37.0\nlongitude: -97.4\n"
+                                        "timezone: %s\n" % value))
+    assert "IANA zone" in str(raised.value)
 
 
 @pytest.mark.parametrize("body,wanted", [
