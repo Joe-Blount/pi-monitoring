@@ -146,9 +146,6 @@ control:
   enabled: false
 
   loop_interval: 10s
-  clock:
-    require_sync_for_schedule: true
-    mode_when_unsynced: full
 
   loads:
 

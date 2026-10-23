@@ -58,7 +58,7 @@ LOAD_KEYS = {"type", "enabled", "control_pin", "polarity",
 #: since restarted at zero, so keeping them would hold a dwell for as long as
 #: the machine had previously been up. A path here could only move the writes
 #: onto the card in exchange for state that is thrown away on arrival.
-CONTROL_KEYS = {"enabled", "loads", "loop_interval", "clock"}
+CONTROL_KEYS = {"enabled", "loads", "loop_interval"}
 
 #: Keys this module answers for itself, with the reason an operator needs.
 #:
@@ -75,6 +75,10 @@ RETIRED_CONTROL_KEYS = {
                   "card, and it is discarded on reboot in any case because "
                   "its timers are measured on a clock that restarts at zero. "
                   "Remove the line",
+    "clock": "what an untrusted clock does is fixed rather than chosen. "
+             "Tiers whose schedule needs the time are suspended, tiers that "
+             "never run still apply, the floor still applies, and a force-on "
+             "is ignored until the clock can be trusted. Remove the block",
 }
 LADDER_KEYS = {"source", "stale_after", "release_margin_pct",
                "enter_after_readings", "restore_dwell", "floor", "tiers"}

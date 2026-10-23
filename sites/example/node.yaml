@@ -280,12 +280,12 @@ control:
                               # honours it.
   loop_interval: 10s
 
-  clock:
-    # The Pi has no real-time clock. After a power cut it boots with whatever
-    # fake-hwclock saved, which can be days wrong, so a schedule would fire at
-    # the wrong time.
-    require_sync_for_schedule: true
-    mode_when_unsynced: full  # err toward running, not toward shedding
+  # There is no clock key. The Pi has no real-time clock, and after a power
+  # cut it boots with whatever fake-hwclock saved, which can be days wrong. So
+  # until the clock is synced, tiers whose schedule needs the time are
+  # suspended, tiers that never run still apply, the floor still applies, and
+  # a force-on is ignored. That is fixed rather than chosen, and a clock block
+  # is refused by name.
 
   loads:
 

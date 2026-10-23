@@ -415,6 +415,27 @@ def test_a_path_for_the_loop_state_is_refused_by_name():
         "the general message sends the reader looking for a typo")
 
 
+def test_a_clock_policy_is_refused_by_name():
+    """What happens on an untrusted clock is fixed, not configured.
+
+    Tiers whose schedule needs the time are suspended, tiers that never run
+    still apply, the floor still applies, and a force-on is ignored. A clock
+    block in the file would read as a choice somebody made, and nothing would
+    honour it.
+    """
+    node = FakeNode({"cameras": CAMERAS})
+    node.control["clock"] = {"require_sync_for_schedule": False,
+                             "mode_when_unsynced": "shed"}
+    with pytest.raises(spec.SpecError) as raised:
+        spec.load_control(node)
+    message = str(raised.value)
+    assert "clock" in message
+    assert "is not read here" in message
+    assert "suspended" in message
+    assert "unknown key" not in message, (
+        "the general message sends the reader looking for a typo")
+
+
 def test_a_restore_dwell_is_required_rather_than_defaulted():
     """Entry needs consecutive readings so one glitched sample cannot latch
     a tier. Release with no dwell lets one glitched sample clear every tier
