@@ -122,8 +122,9 @@ class ControlDriver(Driver):
             # it is alive. Absent is not, because a load driven and not
             # reported is the failure this device exists to prevent.
             raise DriverError(
-                "%s carries no loads, so the controller wrote a document "
-                "it could not fill" % self.path)
+                "%s carries no loads. A controller still running code from "
+                "before the last install writes that shape: restart "
+                "monitoring-control" % self.path)
         for name, load in loads.items():
             if not isinstance(load, dict) or not load:
                 raise DriverError(

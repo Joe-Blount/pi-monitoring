@@ -80,6 +80,10 @@ class Loop:
                                       this_boot=self._boot)
         self.started = self._monotonic()
         self.passes = 0
+        #: The level this process has driven on each pin. Not the stored
+        #: level: the line is released when a process ends, so a pin this
+        #: process has not yet driven is de-energized whatever the state says.
+        self._driven = {}
 
     # -- the sun ------------------------------------------------------------
 
@@ -171,16 +175,17 @@ class Loop:
         process is a better answer than carrying on and publishing numbers
         that describe an intention.
 
-        Each change of the driven level is counted, because the minimum run
-        and off times exist to limit cycling, which makes cycling the thing
-        to watch. Only a level that went out counts: a decision that never
-        reached the pin changed nothing about the load. Before the first
-        drive the pin sits at its de-energized level, which is where the
-        machine left it, so the first drive counts exactly when it energizes
-        the relay. The count lives with the rest of the state, so it
-        survives a restart within a boot, where the loop puts the load back
-        where it had it and so changes nothing it drove, and it starts again
-        from zero with each boot.
+        Each change of the level on the pin is counted, because the minimum
+        run and off times exist to limit cycling, which makes cycling the
+        thing to watch. Only a level that went out counts: a decision that
+        never reached the pin changed nothing about the load. Before this
+        process first drives a pin, the pin sits de-energized, so that first
+        drive counts exactly when it energizes the relay. If the state says
+        an earlier process in this boot left the relay energized, the relay
+        dropped when that process let go of the line, and the drop is
+        counted too, once. The count lives with the rest of the state, so it
+        survives a restart within a boot and starts again from zero with
+        each boot.
         """
         for name, decision in decisions.items():
             pin = self._relays.get(name)
@@ -190,11 +195,16 @@ class Loop:
             informed = decision.decided_on is not None
             if not held.get("applied") and not informed:
                 continue
-            before = bool(held.get("level", False))
+            if name not in self._driven and held.get("level"):
+                held["level_changes"] = int(
+                    held.get("level_changes", 0)) + 1
+            before = self._driven.get(name, False)
             held["level"] = pin.apply(decision.connected)
             held["applied"] = True
+            self._driven[name] = held["level"]
             if held["level"] != before:
-                held["cycles"] = int(held.get("cycles", 0)) + 1
+                held["level_changes"] = int(
+                    held.get("level_changes", 0)) + 1
 
     # -- what it tells the world -------------------------------------------
 
@@ -230,7 +240,7 @@ class Loop:
                 "schedule_suspended": 1.0 if (
                     decision.reason_code == decide.SCHEDULE_SUSPENDED) else 0.0,
                 "floor_latched": 1.0 if held.get("floor_latched") else 0.0,
-                "cycles": float(held.get("cycles", 0)),
+                "level_changes": float(held.get("level_changes", 0)),
             }
             if decision.decided_on is not None:
                 load["decided_on"] = float(decision.decided_on)

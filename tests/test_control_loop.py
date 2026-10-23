@@ -181,7 +181,7 @@ def test_a_place_with_no_sunrise_suspends_the_schedule_rather_than_crashing(
 #: in hand can add. Pinned here so that a field quietly renamed, or one
 #: quietly dropped, fails against this list rather than against the loop.
 LOAD_FIELDS = {"powered", "level", "shed_level", "reason_code", "reason",
-               "schedule_suspended", "floor_latched", "cycles"}
+               "schedule_suspended", "floor_latched", "level_changes"}
 LOAD_FIELDS_WITH_A_VALUE = {"decided_on"}
 LOAD_FIELDS_WHILE_THE_FLOOR_HOLDS = {"floor_latched_by"}
 LOOP_FIELDS = {"clock_synced", "clock_reason", "passes", "loop_monotonic"}
@@ -306,13 +306,13 @@ def test_a_failure_to_publish_does_not_stop_it_controlling(tmp_path):
     assert pin.levels == [True], "a publishing failure cost a shed"
 
 
-# -- counting cycles --------------------------------------------------------
+# -- counting level changes -----------------------------------------------
 
-def cycles(published):
-    return published["loads"]["cameras"]["cycles"]
+def level_changes(published):
+    return published["loads"]["cameras"]["level_changes"]
 
 
-def test_a_first_drive_that_leaves_the_pin_de_energized_is_not_a_cycle(
+def test_a_first_drive_that_leaves_the_pin_de_energized_is_not_a_level_change(
         tmp_path):
     """Until the first drive the pin sits at its de-energized level, which
     is where the machine left it, so driving it there again changes nothing
@@ -320,10 +320,10 @@ def test_a_first_drive_that_leaves_the_pin_de_energized_is_not_a_cycle(
     machine, pin, published, _ = build(tmp_path)
     machine.once()
     assert pin.levels == [False]
-    assert cycles(published) == 0.0
+    assert level_changes(published) == 0.0
 
 
-def test_a_first_drive_that_energizes_the_relay_is_a_cycle(tmp_path):
+def test_a_first_drive_that_energizes_the_relay_is_a_level_change(tmp_path):
     """The relay was de-energized until that drive, so the load changed
     state, and on the camera branch that is a recorder power cycle. Not
     counting it would under-report by one every boot, in exactly the case
@@ -331,7 +331,7 @@ def test_a_first_drive_that_energizes_the_relay_is_a_cycle(tmp_path):
     machine, pin, published, _ = build(tmp_path, readings=reading(soc=5.0))
     machine.once()
     assert pin.levels == [True]
-    assert cycles(published) == 1.0
+    assert level_changes(published) == 1.0
 
 
 def test_each_change_of_the_driven_level_counts_and_a_hold_does_not(tmp_path):
@@ -341,12 +341,12 @@ def test_each_change_of_the_driven_level_counts_and_a_hold_does_not(tmp_path):
         state["readings"] = reading(soc=soc)
         state["mono"] = step * 100.0
         machine.once()
-        seen.append(cycles(published))
+        seen.append(level_changes(published))
     assert pin.levels == [False, True, True, False, True]
     assert seen == [0.0, 1.0, 1.0, 2.0, 3.0]
 
 
-def test_a_commanded_change_that_never_reached_the_pin_is_not_a_cycle(
+def test_a_commanded_change_that_never_reached_the_pin_is_not_a_level_change(
         tmp_path):
     """A load is not driven until a reading informs a decision about it. An
     operator forcing it off and then clearing that, before any reading has
@@ -369,39 +369,59 @@ def test_a_commanded_change_that_never_reached_the_pin_is_not_a_cycle(
     state["mono"] = 200.0
     machine.once()
     assert pin.levels == [False]
-    assert cycles(published) == 0.0
+    assert level_changes(published) == 0.0
 
 
-def test_a_dry_run_counts_no_cycle(tmp_path):
+def test_a_dry_run_counts_no_level_change(tmp_path):
     machine, pin, published, _ = build(tmp_path, readings=reading(soc=5.0))
     machine.once(apply=False)
     assert pin.levels == []
-    assert cycles(published) == 0.0
+    assert level_changes(published) == 0.0
 
 
 def test_the_count_survives_a_restart_within_a_boot_and_not_a_new_boot(
         tmp_path):
     """Kept with the rest of the loop's state, in tmpfs. A restarted loop
-    puts the load back where it had it, which changes nothing it drove, and
-    a new boot starts from nothing."""
+    that left the relay de-energized finds it there and puts it back
+    there, which changes nothing, and a new boot starts from nothing."""
     machine, _, published, state = build(tmp_path, readings=reading(soc=5.0))
     machine.once()
     state["readings"] = reading(soc=60.0)
     state["mono"] = 100.0
     machine.once()
-    assert cycles(published) == 2.0
+    assert level_changes(published) == 2.0
 
     resumed, pin, published, _ = build(tmp_path, readings=reading(soc=60.0),
                                        mono=200.0)
     resumed.once()
     assert pin.levels == [False], "put back where it was"
-    assert cycles(published) == 2.0
+    assert level_changes(published) == 2.0
 
     rebooted, pin, published, _ = build(tmp_path, readings=reading(soc=5.0),
                                         boot="the-next-boot")
     rebooted.once()
     assert pin.levels == [True]
-    assert cycles(published) == 1.0, "counted afresh from zero"
+    assert level_changes(published) == 1.0, "counted afresh from zero"
+
+
+def test_a_restart_that_finds_the_relay_dropped_counts_the_drop_and_the_return(
+        tmp_path):
+    """The line is released when a process ends, however it ends, so a relay
+    left energized drops before the next process can put it back. On the
+    camera branch that is the recorder powered and then cut again: two
+    changes of level, both of which happened to the load."""
+    machine, _, published, _ = build(tmp_path, readings=reading(soc=5.0))
+    machine.once()
+    assert level_changes(published) == 1.0
+
+    resumed, pin, published, _ = build(tmp_path, readings=reading(soc=5.0),
+                                       mono=100.0)
+    resumed.once()
+    assert pin.levels == [True], "put back where it was"
+    assert level_changes(published) == 3.0
+
+    resumed.once()
+    assert level_changes(published) == 3.0, "the drop is counted once"
 
 
 # -- state across passes ----------------------------------------------------

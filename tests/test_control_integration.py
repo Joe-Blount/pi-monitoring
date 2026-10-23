@@ -362,7 +362,7 @@ DOCUMENT = {
         "powered": 1.0, "level": 0.0, "shed_level": 2.0, "reason_code": 1.0,
         "reason": "state_of_charge_pct=24.0 below 50%",
         "schedule_suspended": 0.0, "decided_on": 24.0,
-        "floor_latched": 0.0, "cycles": 3.0}}}
+        "floor_latched": 0.0, "level_changes": 3.0}}}
 
 
 def written(tmp_path, document):
@@ -394,8 +394,8 @@ def test_the_lines_the_collector_writes_for_the_controller(tmp_path,
         'm,device=control,location=control clock_reason="synchronised",'
         'clock_synced=1.0,loop_monotonic=4.0,ok=1.0,passes=7.0,'
         'published_age_seconds=6.0 1700000000',
-        'm,device=control,load=cameras,location=control cycles=3.0,'
-        'decided_on=24.0,floor_latched=0.0,level=0.0,ok=1.0,powered=1.0,'
+        'm,device=control,load=cameras,location=control decided_on=24.0,'
+        'floor_latched=0.0,level=0.0,level_changes=3.0,ok=1.0,powered=1.0,'
         'reason="state_of_charge_pct=24.0 below 50%",reason_code=1.0,'
         'schedule_suspended=0.0,shed_level=2.0 1700000000']
 
@@ -409,6 +409,19 @@ def test_a_document_that_names_no_loads_is_a_fault(tmp_path):
     with pytest.raises(Exception) as raised:
         reader(written(tmp_path, document)).read()
     assert "loads" in str(raised.value)
+
+
+def test_a_document_with_no_loads_points_at_a_controller_not_restarted(
+        tmp_path):
+    """A controller still running code from before an install writes that
+    shape until the service restarts, which is the usual cause, and the
+    message has to send the reader to it rather than to the controller's
+    logic."""
+    document = dict(DOCUMENT)
+    del document["loads"]
+    with pytest.raises(Exception) as raised:
+        reader(written(tmp_path, document)).read()
+    assert "restart monitoring-control" in str(raised.value)
 
 
 def test_a_load_published_with_no_fields_is_a_fault(tmp_path):
