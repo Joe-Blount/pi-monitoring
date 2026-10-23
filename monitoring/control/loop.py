@@ -37,6 +37,10 @@ class LoopError(RuntimeError):
     """The loop cannot run, and will not pretend to."""
 
 
+#: What the loop records about a pin, apart from what decided it.
+PIN_RECORD = ("level", "applied", "level_changes")
+
+
 class Loop:
     """One node's control loop.
 
@@ -140,12 +144,19 @@ class Loop:
             suns, verdict = [], clock.Trust(
                 False, "the sun does not rise or set here on this date")
 
+        prior = self.state
         decisions, self.state = decide.decide(
             local_now, mono_now, verdict.trusted,
             self._readings(), self._switches(), self.specs, self.state, suns)
 
         if apply:
-            self._apply(decisions)
+            driven = []
+            try:
+                self._apply(decisions, driven)
+            except BaseException:
+                if persist:
+                    self._save_pins(prior, driven)
+                raise
 
         self.passes += 1
         if persist:
@@ -153,7 +164,7 @@ class Loop:
             self._publish_state(decisions, local_now, mono_now, verdict)
         return decisions
 
-    def _apply(self, decisions):
+    def _apply(self, decisions, driven):
         """Drive each pin, and record the level that actually went out.
 
         Nothing is driven for a load until some reading has informed a
@@ -195,16 +206,39 @@ class Loop:
             informed = decision.decided_on is not None
             if not held.get("applied") and not informed:
                 continue
-            if name not in self._driven and held.get("level"):
-                held["level_changes"] = int(
-                    held.get("level_changes", 0)) + 1
+            # Counted only once the drive has gone out, so a pin whose
+            # drive fails leaves its record as it was.
+            dropped = name not in self._driven and bool(held.get("level"))
             before = self._driven.get(name, False)
-            held["level"] = pin.apply(decision.connected)
+            level = pin.apply(decision.connected)
+            self._driven[name] = level
+            held["level"] = level
             held["applied"] = True
-            self._driven[name] = held["level"]
-            if held["level"] != before:
-                held["level_changes"] = int(
-                    held.get("level_changes", 0)) + 1
+            held["level_changes"] = (int(held.get("level_changes", 0))
+                                     + int(dropped) + int(level != before))
+            driven.append(name)
+
+    def _save_pins(self, prior, driven):
+        """Record the pins a failed pass did drive, and nothing else of it.
+
+        A pin that cannot be driven ends the process, and ending it releases
+        every line it held. The pins driven before the fault did move, so the
+        next process has to read where they were left. The rest of the pass
+        is not kept: a load the fault stopped short of was commanded and
+        never driven, and keeping that command would start its timers on a
+        change that never happened. The next process decides again from the
+        state before this pass.
+        """
+        state = {name: dict(load) for name, load in prior.items()}
+        for name in driven:
+            held = self.state[name]
+            state.setdefault(name, {}).update(
+                {key: held[key] for key in PIN_RECORD})
+        try:
+            files.write_state(state, self._state_path, boot=self._boot)
+        except Exception:
+            # The fault that ended the pass is the one to report.
+            pass
 
     # -- what it tells the world -------------------------------------------
 

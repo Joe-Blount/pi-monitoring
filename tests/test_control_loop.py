@@ -424,6 +424,112 @@ def test_a_restart_that_finds_the_relay_dropped_counts_the_drop_and_the_return(
     assert level_changes(published) == 3.0, "the drop is counted once"
 
 
+class StuckRelay:
+    """A relay whose line cannot be driven."""
+
+    def apply(self, connected):
+        raise relay.RelayError("cannot drive GPIO24: under test")
+
+    def close(self):
+        pass
+
+
+def two_loads(tmp_path, cameras=None, recorder=None, soc=5.0, mono=0.0,
+              state_path=None):
+    """Cameras on GPIO23 and a recorder on GPIO24, decided in that order,
+    either of whose relays may be one that cannot be driven."""
+    cameras = cameras or relay.Pretend(23, relay.ENERGIZE_TO_SHED)
+    recorder = recorder or relay.Pretend(24, relay.ENERGIZE_TO_SHED)
+    published = {}
+    machine = loop.Loop(
+        FakeNode({"cameras": CAMERAS,
+                  "recorder": dict(CAMERAS, control_pin=24, min_off="10m")}),
+        LOCATION, ZONE,
+        relays={"cameras": cameras, "recorder": recorder},
+        now=lambda: datetime.datetime(2026, 6, 21, 12, tzinfo=ZONE),
+        monotonic=lambda: mono,
+        trust=lambda high_water=None: clock.Trust(True, "under test"),
+        readings=lambda: reading(soc=soc),
+        switches=lambda: {"shedding_enabled": True, "loads": {}},
+        state_path=state_path or str(tmp_path / "state.json"),
+        published_path=str(tmp_path / "published.json"),
+        high_water_path=str(tmp_path / "hw.json"),
+        publish=lambda _path, data: published.update(data),
+        boot=BOOT)
+    return machine, cameras, recorder, published
+
+
+def test_a_pass_ended_by_a_relay_fault_keeps_what_the_other_pins_did(
+        tmp_path):
+    """A pin that cannot be driven ends the process, and the supervisor
+    starts another. The pins driven before it in that pass did change, and
+    the process ending released them, so the next process has to know
+    where they were left."""
+    machine, cameras, _, _ = two_loads(tmp_path, recorder=StuckRelay())
+    with pytest.raises(relay.RelayError):
+        machine.once()
+    assert cameras.levels == [True]
+
+    resumed, cameras, _, published = two_loads(tmp_path, mono=100.0)
+    resumed.once()
+    assert cameras.levels == [True]
+    assert published["loads"]["cameras"]["level_changes"] == 3.0
+
+
+def test_a_load_a_relay_fault_stopped_short_of_keeps_no_command(tmp_path):
+    """The recorder was commanded off and never driven. Keeping that command
+    would start its minimum off time on a change that never happened, and
+    hold it off after the battery had recovered."""
+    machine, _, _, _ = two_loads(tmp_path, soc=60.0)
+    machine.once()
+
+    failing, _, _, _ = two_loads(tmp_path, cameras=StuckRelay(), soc=5.0,
+                                 mono=100.0)
+    with pytest.raises(relay.RelayError):
+        failing.once()
+
+    resumed, _, recorder, published = two_loads(tmp_path, soc=60.0,
+                                                mono=200.0)
+    resumed.once()
+    assert recorder.levels == [False], "the recorder runs"
+    assert published["loads"]["recorder"]["powered"] == 1.0
+
+
+def test_a_drive_that_fails_counts_no_change_however_often_it_is_retried(
+        tmp_path):
+    """The relay dropped once, when the process that energized it ended.
+    Each later process that fails to drive it changes nothing."""
+    machine, cameras, _, _ = two_loads(tmp_path)
+    machine.once()
+    assert cameras.levels == [True]
+
+    for mono in (100.0, 200.0):
+        failing, _, _, _ = two_loads(tmp_path, cameras=StuckRelay(),
+                                     mono=mono)
+        with pytest.raises(relay.RelayError):
+            failing.once()
+
+    resumed, cameras, _, published = two_loads(tmp_path, mono=300.0)
+    resumed.once()
+    assert cameras.levels == [True]
+    assert published["loads"]["cameras"]["level_changes"] == 3.0
+
+
+def test_a_relay_fault_is_reported_even_when_the_state_cannot_be_saved(
+        tmp_path, monkeypatch):
+    attempts = []
+
+    def refuse(*args, **kwargs):
+        attempts.append(args)
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(files, "write_state", refuse)
+    machine, _, _, _ = two_loads(tmp_path, recorder=StuckRelay())
+    with pytest.raises(relay.RelayError):
+        machine.once()
+    assert len(attempts) == 1, "the state was offered for saving"
+
+
 # -- state across passes ----------------------------------------------------
 
 def test_latches_survive_between_passes(tmp_path):
