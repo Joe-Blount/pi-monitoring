@@ -18,6 +18,27 @@ class DriverError(Exception):
     """
 
 
+class Point:
+    """One series' worth of fields, and the tags that tell it apart.
+
+    A driver that returns a plain dict reports one point, and the runner tags
+    it as the device. A driver whose one device reports several things of
+    the same kind returns a list of these instead, each carrying the tag that
+    tells its series from the others, and the runner adds the device's own
+    tags to every one. The load controller is the case in point: it decides
+    each load on its own, and a reader wants one series per load, so that a
+    chart repeats over loads without naming any.
+
+    A point with no tags of its own is the device's own reading. There can be
+    only one, because two points on one series at one instant replace each
+    other at the database with no error anywhere.
+    """
+
+    def __init__(self, fields, tags=None):
+        self.fields = dict(fields or {})
+        self.tags = dict(tags or {})
+
+
 class Driver:
     """Base class. Subclasses implement read(), stream(), or both."""
 
@@ -53,7 +74,7 @@ class Driver:
         self.tags = dict(tags or {})
 
     def read(self):
-        """Return a dict of field name to value.
+        """Return a dict of field name to value, or a list of Point.
 
         Numbers and strings only. None means "no reading for this field",
         and the field is dropped rather than written.
@@ -61,7 +82,7 @@ class Driver:
         raise NotImplementedError("%s does not support polling" % type(self).__name__)
 
     def stream(self):
-        """Yield dicts of field name to value as readings arrive.
+        """Yield readings as they arrive, each shaped as read() returns one.
 
         Implemented by drivers whose device talks when it feels like it: a
         rain gauge counting pulses, a controller sending unprompted frames.

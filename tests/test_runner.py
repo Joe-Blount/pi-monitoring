@@ -8,7 +8,7 @@ import pytest
 from monitoring import config, runner
 from monitoring.control import files as control_files
 from monitoring.drivers import REGISTRY
-from monitoring.drivers.base import Driver, DriverError
+from monitoring.drivers.base import Driver, DriverError, Point
 
 NOW = 1700000000000000000
 
@@ -834,3 +834,129 @@ def test_reading_in_turn_is_the_default(tmp_path, slow_doubles):
     start = time.monotonic()
     runner.poll(node, out=io.StringIO(), err=io.StringIO())
     assert time.monotonic() - start >= SlowDriver.delay * 2
+
+
+# -- one device, several series ---------------------------------------------
+
+class SeveralSeriesDriver(Driver):
+    description = "test double whose one device reports several series"
+
+    def read(self):
+        return [Point({"value": 1.0}),
+                Point({"value": 2.0}, tags={"load": "x"}),
+                Point({"value": 3.0}, tags={"load": "y"})]
+
+
+class SeveralSeriesStreamingDriver(Driver):
+    description = "test double that streams several series per reading"
+
+    def stream(self):
+        yield [Point({"value": 1.0}), Point({"value": 2.0}, tags={"load": "x"})]
+        yield [Point({"value": 3.0}), Point({"value": 4.0}, tags={"load": "x"})]
+
+
+class SameSeriesTwiceDriver(Driver):
+    description = "test double that reports one series twice"
+
+    def read(self):
+        return [Point({"value": 1.0}, tags={"load": "x"}),
+                Point({"value": 2.0}, tags={"load": "x"})]
+
+
+class NothingUsableInSeveralDriver(Driver):
+    description = "test double whose several series carry nothing"
+
+    def read(self):
+        return [Point({"value": None}), Point({"value": None}, tags={"load": "x"})]
+
+
+@pytest.fixture
+def series_doubles():
+    original = dict(REGISTRY)
+    REGISTRY["several"] = ("tests.test_runner", "SeveralSeriesDriver")
+    REGISTRY["several_stream"] = ("tests.test_runner",
+                                  "SeveralSeriesStreamingDriver")
+    REGISTRY["twice"] = ("tests.test_runner", "SameSeriesTwiceDriver")
+    REGISTRY["nothing"] = ("tests.test_runner", "NothingUsableInSeveralDriver")
+    yield
+    REGISTRY.clear()
+    REGISTRY.update(original)
+
+
+def test_a_driver_may_report_several_series_from_one_device(
+        tmp_path, series_doubles):
+    """Each point carries the device's tags and then its own, so a panel can
+    repeat over the tag without naming any series."""
+    node = node_with(tmp_path, "  - {name: a, driver: several, mode: poll}\n")
+    result = runner.read_device(node, node.find("a"), NOW)
+    assert result.ok
+    assert result.lines == [
+        "m,device=a ok=1.0,value=1.0 %d" % NOW,
+        "m,device=a,load=x ok=1.0,value=2.0 %d" % NOW,
+        "m,device=a,load=y ok=1.0,value=3.0 %d" % NOW]
+
+
+def test_every_series_a_device_reports_is_written_and_counted(
+        tmp_path, series_doubles):
+    node = node_with(tmp_path, "  - {name: a, driver: several, mode: poll}\n")
+    out = io.StringIO()
+    written = runner.poll(node, NOW, out, io.StringIO())
+    assert written == 3
+    assert len(out.getvalue().splitlines()) == 3
+
+
+def test_a_streamed_reading_may_carry_several_series(
+        tmp_path, series_doubles):
+    node = node_with(
+        tmp_path, "  - {name: a, driver: several_stream, mode: resident}\n")
+    out = io.StringIO()
+    code = runner.stream_device(node, node.find("a"), out, io.StringIO(),
+                                max_readings=2, clock=frozen_clock)
+    assert code == 0
+    assert out.getvalue().splitlines() == [
+        "m,device=a ok=1.0,value=1.0 1700000000",
+        "m,device=a,load=x ok=1.0,value=2.0 1700000000",
+        "m,device=a ok=1.0,value=3.0 1700000000",
+        "m,device=a,load=x ok=1.0,value=4.0 1700000000"]
+
+
+def test_two_points_on_one_series_are_refused(tmp_path, series_doubles):
+    """Two points with the same tags at one instant replace each other at the
+    database with no error anywhere, so the read fails and says so."""
+    node = node_with(tmp_path, "  - {name: a, driver: twice, mode: poll}\n")
+    result = runner.read_device(node, node.find("a"), NOW)
+    assert not result.ok
+    assert "load=x" in result.error
+
+
+def test_a_point_tag_the_node_file_already_sets_is_refused(
+        tmp_path, series_doubles):
+    """A tag written in the node file must not be replaced in silence by one
+    the driver chose."""
+    node = node_with(tmp_path, """  - name: a
+    driver: several
+    mode: poll
+    tags: {load: fixed}
+""")
+    result = runner.read_device(node, node.find("a"), NOW)
+    assert not result.ok
+    assert "load" in result.error
+
+
+def test_several_series_carrying_nothing_usable_is_a_failed_read(
+        tmp_path, series_doubles):
+    node = node_with(tmp_path, "  - {name: a, driver: nothing, mode: poll}\n")
+    result = runner.read_device(node, node.find("a"), NOW)
+    assert not result.ok
+    assert "no usable values" in result.error
+
+
+def test_only_the_point_without_its_own_tags_reaches_the_cache(
+        tmp_path, series_doubles, cache):
+    """The cache is keyed by device name alone, so a tagged series has no
+    place in it; the device's own reading is the point with no tag of its
+    own."""
+    node = controlling_node(
+        tmp_path, "  - {name: a, driver: several, mode: poll}\n")
+    runner.poll(node, NOW, io.StringIO(), io.StringIO())
+    assert cached(cache)["a"]["fields"] == {"value": 1.0}

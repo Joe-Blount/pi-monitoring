@@ -17,7 +17,7 @@ import time
 from . import calibration, lineproto
 from . import drivers as driver_registry
 from .control import files as control_files
-from .drivers.base import DriverError
+from .drivers.base import DriverError, Point
 
 
 class Result:
@@ -61,16 +61,57 @@ RESERVED_FIELDS = ("ok", "error_message", "enabled")
 STDERR_REASON = 140
 
 
-def point(node, device, fields, now_ns):
+def point(node, device, fields, now_ns, tags=None):
     """Render one reading as line protocol, with calibration applied.
 
     Every reading carries ok=1.0 so that a dashboard can ask whether a device
     is working without inferring it from which fields happen to be present.
+
+    `tags` replaces the device's own when a reading is one of several series
+    the device reports; see `points`.
     """
     corrected = calibration.apply(fields, device.calibration)
     corrected = dict(corrected)
     corrected.setdefault("ok", 1.0)
-    return lineproto.line(node.measurement, device.tags, corrected, now_ns)
+    return lineproto.line(node.measurement,
+                          device.tags if tags is None else tags,
+                          corrected, now_ns)
+
+
+def points(device, reading):
+    """Every point one reading carries, each with its whole tag set.
+
+    A dict is the common case: one point, tagged as the device. A list of
+    Point is a device that reports several series, and each carries the
+    device's tags and then its own. Two points on one series would replace
+    each other at the database with no error anywhere, and a point tag that
+    replaced one the node file set would do the same to the series, so both
+    are refused rather than written.
+    """
+    if isinstance(reading, dict):
+        return [(device.tags, reading)]
+    out = []
+    seen = set()
+    for one in reading or []:
+        if not isinstance(one, Point):
+            raise DriverError(
+                "the driver returned a %s where a reading was expected"
+                % type(one).__name__)
+        taken = sorted(set(one.tags) & set(device.tags))
+        if taken:
+            raise DriverError(
+                "the driver sets tag(s) %s, which the node file already sets "
+                "for this device" % ", ".join(taken))
+        key = tuple(sorted(one.tags.items()))
+        if key in seen:
+            raise DriverError(
+                "the driver returned two points on one series, %s"
+                % (",".join("%s=%s" % pair for pair in key) or "the device's own"))
+        seen.add(key)
+        tags = dict(device.tags)
+        tags.update(one.tags)
+        out.append((tags, one.fields))
+    return out
 
 
 def failure_point(node, device, reason, now_ns):
@@ -144,6 +185,18 @@ def _cache(node, device, fields):
                 "from nothing: %s\n" % exc)
 
 
+def _cache_series(node, device, series):
+    """Hand the device's own reading to load control.
+
+    The cache is keyed by device name alone, so a series the device tags
+    apart from itself has no place in it. The device's own reading is the
+    point carrying exactly the device's tags, and that is the one cached.
+    """
+    for tags, fields in series:
+        if tags == device.tags:
+            _cache(node, device, fields)
+
+
 def read_device(node, device, now_ns=None, clock=None):
     """Read one device. Never raises for a device fault.
 
@@ -171,16 +224,18 @@ def read_device(node, device, now_ns=None, clock=None):
     driver = None
     try:
         driver = build_driver(device)
-        fields = driver.read()
-        if not any(value is not None for value in (fields or {}).values()):
+        series = points(device, driver.read())
+        if not any(value is not None for _, fields in series
+                   for value in fields.values()):
             # Every reading carries ok=1.0, so without this check a driver
             # that returned nothing would publish a point saying the device is
             # healthy and carrying no measurement at all. A read that produced
             # no value is a failed read.
             raise DriverError("the device returned no usable values")
         at = stamp()
-        _cache(node, device, fields)
-        return Result(device, lines=[point(node, device, fields, at)],
+        _cache_series(node, device, series)
+        return Result(device, lines=[point(node, device, fields, at, tags)
+                                     for tags, fields in series],
                       stamp=at)
     except DriverError as exc:
         return Result(device, error=str(exc), stamp=stamp())
@@ -358,10 +413,13 @@ def stream_device(node, device, out=None, err=None, max_readings=None,
     try:
         driver = build_driver(device)
         emitted = 0
-        for fields in driver.stream():
-            out.write(point(node, device, fields, int(clock() * 1e9)) + "\n")
+        for reading in driver.stream():
+            series = points(device, reading)
+            at = int(clock() * 1e9)
+            for tags, fields in series:
+                out.write(point(node, device, fields, at, tags) + "\n")
             out.flush()
-            _cache(node, device, fields)
+            _cache_series(node, device, series)
             out.flush()
             emitted += 1
             if max_readings is not None and emitted >= max_readings:
