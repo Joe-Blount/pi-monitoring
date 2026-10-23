@@ -28,6 +28,9 @@ ZONE = zoneinfo.ZoneInfo("America/Chicago")
 #: 06:54 central standard. That is an hour of error that looks authoritative.
 ALMANAC = [
     ((2026, 1, 15), "07:42", "17:37"),
+    ((2026, 2, 1), "07:32", "17:55"),      # the Julian day counts February
+    ((2026, 2, 15), "07:18", "18:10"),     # as the year before's fourteenth
+                                           # month
     ((2026, 3, 8), "07:51", "19:31"),      # clocks spring forward at 02:00
     ((2026, 3, 20), "07:33", "19:42"),     # equinox
     ((2026, 6, 13), "06:09", "20:50"),     # earliest sunrise of the year
@@ -153,13 +156,27 @@ def test_results_carry_the_offset_in_force_after_any_transition(day,
     assert set_.utcoffset() == expected
 
 
-def test_a_latitude_with_no_sunrise_is_refused_rather_than_guessed():
+def test_sunrise_and_sunset_are_also_offered_on_their_own():
+    """The same answers as the full set of events, for a caller that wants
+    one of them. Checked against the almanac rather than against events, so
+    a wrapper handing back the wrong member of the set is caught."""
+    day = datetime.date(2026, 6, 21)
+    assert abs(sun.sunrise(day, LAT, LON, ZONE)
+               - _expected((2026, 6, 21), "06:10")) <= TOLERANCE
+    assert abs(sun.sunset(day, LAT, LON, ZONE)
+               - _expected((2026, 6, 21), "20:53")) <= TOLERANCE
+
+
+@pytest.mark.parametrize("latitude", [70.0, 85.0])
+def test_a_latitude_with_no_sunrise_is_refused_rather_than_guessed(latitude):
     """Impossible where this runs, and an error rather than a number that
-    looks like a time."""
+    looks like a time. Just inside the polar circle the sun misses the
+    horizon by a little, and well inside it by a lot; both are refused the
+    same way."""
     with pytest.raises(sun.NoSunEvent):
-        sun.events(datetime.date(2026, 6, 21), 85.0, LON, ZONE)
+        sun.events(datetime.date(2026, 6, 21), latitude, LON, ZONE)
     with pytest.raises(sun.NoSunEvent):
-        sun.events(datetime.date(2026, 12, 21), 85.0, LON, ZONE)
+        sun.events(datetime.date(2026, 12, 21), latitude, LON, ZONE)
 
 
 def test_longitude_is_positive_east():
