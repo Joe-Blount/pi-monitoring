@@ -148,6 +148,55 @@ def test_an_unknown_key_inside_a_floor_source_is_refused():
     assert "unknown key" in refused(shed_ladder=broken)
 
 
+def test_an_unknown_key_on_the_floor_itself_is_refused():
+    """A bound written beside the sources rather than inside one would sit
+    in the file looking like a floor nothing reads."""
+    broken = dict(LADDER)
+    broken["floor"] = {"sources": LADDER["floor"]["sources"],
+                       "shed_below": 3.1}
+    assert "unknown key" in refused(shed_ladder=broken)
+
+
+def test_an_unknown_key_inside_the_source_is_refused():
+    assert "unknown key" in refused(shed_ladder=dict(
+        LADDER, source={"device": "bms", "field": "state_of_charge_pct",
+                        "unit": "pct"}))
+
+
+def test_an_unknown_key_inside_a_solar_window_is_refused():
+    broken = dict(LADDER, tiers=[{"below_pct": 50, "schedule": {
+        "type": "solar",
+        "on_windows": [{"from": ["sunrise", "-1h"], "to": ["sunrise", "1h"],
+                        "until": "dark"}]}}])
+    assert "unknown key" in refused(shed_ladder=broken)
+
+
+@pytest.mark.parametrize("where,load", [
+    ("load", None),
+    ("load", "dc_branch"),
+    ("shed_ladder", dict(CAMERAS, shed_ladder=None)),
+    ("shed_ladder", dict(CAMERAS, shed_ladder="see above")),
+    ("source", dict(CAMERAS, shed_ladder=dict(LADDER, source=None))),
+    ("floor", dict(CAMERAS, shed_ladder=dict(LADDER, floor=None))),
+    ("floor source",
+     dict(CAMERAS, shed_ladder=dict(LADDER, floor={"sources": [None]}))),
+    ("tier", dict(CAMERAS, shed_ladder=dict(LADDER, tiers=[None]))),
+    ("schedule", dict(CAMERAS, shed_ladder=dict(
+        LADDER, tiers=[{"below_pct": 50, "schedule": None}]))),
+    ("window", dict(CAMERAS, shed_ladder=dict(
+        LADDER, tiers=[{"below_pct": 50, "schedule": {
+            "type": "solar", "on_windows": [None]}}]))),
+])
+def test_a_key_with_nothing_after_it_is_refused_as_not_a_mapping(where, load):
+    """YAML reads a key with nothing after it as nothing at all. A mapping
+    that arrives as None or as a word is refused with the place named,
+    rather than crashing on the first key read out of it, because the
+    person reading the message is standing at the machine."""
+    with pytest.raises(spec.SpecError) as raised:
+        spec.load_spec("cameras", load, {"bms", "mppt"})
+    assert "expected a mapping" in str(raised.value), where
+
+
 # -- the ladder must descend ------------------------------------------------
 
 @pytest.mark.parametrize("values", [
@@ -178,10 +227,58 @@ def test_a_margin_of_zero_is_refused():
                                                   release_margin_pct=0))
 
 
+def test_the_smallest_positive_margin_is_accepted():
+    """Only zero chatters. Half a point is a margin."""
+    assert with_ladder(release_margin_pct=0.5)["shed_ladder"][
+        "release_margin_pct"] == 0.5
+
+
 @pytest.mark.parametrize("value", [0, -1, 1.5, True, "two"])
 def test_enter_after_readings_must_be_a_whole_number_of_at_least_one(value):
     assert "whole number" in refused(
         shed_ladder=dict(LADDER, enter_after_readings=value))
+
+
+def test_the_readings_needed_to_latch_default_to_two():
+    """Two is the smallest count that rejects one glitched sample."""
+    ladder = dict(LADDER)
+    del ladder["enter_after_readings"]
+    assert parse(shed_ladder=ladder)["shed_ladder"]["enter_after_readings"] == 2
+
+
+def test_a_ladder_with_no_tiers_is_refused():
+    """An empty list is a ladder that never sheds, and the file reads as
+    though it had one."""
+    assert "at least one tier" in refused(shed_ladder=dict(LADDER, tiers=[]))
+
+
+@pytest.mark.parametrize("missing", ["below_pct", "schedule"])
+def test_a_tier_needs_a_threshold_and_a_schedule(missing):
+    tier = {"below_pct": 50, "schedule": {"type": "never"}}
+    del tier[missing]
+    assert "needs %s" % missing in refused(
+        shed_ladder=dict(LADDER, tiers=[tier]))
+
+
+@pytest.mark.parametrize("value", ["fifty", True])
+def test_a_threshold_must_be_a_number(value):
+    """A word is not a number, and neither is a yes: true would read as one
+    percent and the tier would latch at the bottom of the pack."""
+    broken = dict(LADDER, tiers=[{"below_pct": value,
+                                  "schedule": {"type": "never"}}])
+    assert "must be a number" in refused(shed_ladder=broken)
+    assert "must be a number" in refused(
+        shed_ladder=dict(LADDER, release_margin_pct=value))
+
+
+@pytest.mark.parametrize("value", [100, 0.5])
+def test_below_pct_reaches_from_a_fraction_of_a_point_to_a_full_pack(value):
+    """A hundred latches on any discharge at all and half a point is the
+    bottom of the pack. Both are percentages above zero."""
+    broken = dict(LADDER, tiers=[{"below_pct": value,
+                                  "schedule": {"type": "never"}}])
+    tiers = parse(shed_ladder=broken)["shed_ladder"]["tiers"]
+    assert tiers[0]["below_pct"] == float(value)
 
 
 # -- sources ----------------------------------------------------------------
@@ -200,6 +297,23 @@ def test_a_floor_source_naming_an_undeclared_device_is_refused():
     broken["floor"] = {"sources": [{"device": "nope", "field": "v",
                                     "shed_below": 1, "restore_above": 2}]}
     assert "does not declare" in refused(shed_ladder=broken)
+
+
+@pytest.mark.parametrize("missing", ["device", "field"])
+def test_a_source_needs_a_device_and_a_field(missing):
+    source = {"device": "bms", "field": "state_of_charge_pct"}
+    del source[missing]
+    assert "needs a %s" % missing in refused(
+        shed_ladder=dict(LADDER, source=source))
+
+
+@pytest.mark.parametrize("value", [5, True, ""])
+def test_a_field_name_must_be_text(value):
+    """A reading is a mapping of names to numbers. A number or a yes used as
+    a name matches nothing, so the ladder would wait forever on a field the
+    device never writes."""
+    assert "needs a field" in refused(
+        shed_ladder=dict(LADDER, source={"device": "bms", "field": value}))
 
 
 # -- the floor --------------------------------------------------------------
@@ -266,6 +380,34 @@ def test_a_clock_window_may_wrap_midnight():
     assert schedule["on_from"] == 1320 and schedule["on_to"] == 300
 
 
+@pytest.mark.parametrize("value,minutes", [
+    ("00:30", 30),
+    ("05:30", 330),
+    ("23:59", 1439),
+    ("24:00", 1440),
+])
+def test_a_time_of_day_is_minutes_after_midnight(value, minutes):
+    """Both ends of the day are times. Midnight is 00:00 at the start and
+    24:00 at the end, so a window can close at midnight without being
+    written the way round that wraps."""
+    broken = dict(LADDER, tiers=[{"below_pct": 50,
+                                  "schedule": {"type": "clock",
+                                               "on_from": "12:00",
+                                               "on_to": value}}])
+    schedule = parse(shed_ladder=broken)["shed_ladder"]["tiers"][0]["schedule"]
+    assert schedule["on_to"] == minutes
+
+
+@pytest.mark.parametrize("value", ["24:01", "24:30", "24:59"])
+def test_a_time_past_the_end_of_the_day_is_refused(value):
+    """The hour of 24 exists only for the minute that closes the day."""
+    broken = dict(LADDER, tiers=[{"below_pct": 50,
+                                  "schedule": {"type": "clock",
+                                               "on_from": "12:00",
+                                               "on_to": value}}])
+    assert "not a time of day" in refused(shed_ladder=broken)
+
+
 @pytest.mark.parametrize("value", ["5pm", "25:00", "noon", 500, "05:0a"])
 def test_a_time_that_is_not_a_time_is_refused(value):
     broken = dict(LADDER, tiers=[{"below_pct": 50,
@@ -287,6 +429,35 @@ def test_a_solar_window_needs_both_edges():
         "type": "solar",
         "on_windows": [{"from": ["sunrise", "-1h"]}]}}])
     assert "needs a to" in refused(shed_ladder=broken)
+
+
+@pytest.mark.parametrize("edge", [["sunrise", "-1h", "sharp"], "sunrise"])
+def test_a_window_edge_is_exactly_an_event_and_an_offset(edge):
+    """A bare event, or an event with two offsets, is refused with the
+    shape it should have rather than read as far as it goes."""
+    broken = dict(LADDER, tiers=[{"below_pct": 50, "schedule": {
+        "type": "solar",
+        "on_windows": [{"from": edge, "to": ["sunrise", "1h"]}]}}])
+    assert "an event and an offset" in refused(shed_ladder=broken)
+
+
+def test_a_solar_schedule_with_no_windows_is_refused():
+    """An empty list reads as scheduled while behaving as never."""
+    broken = dict(LADDER, tiers=[{"below_pct": 50, "schedule": {
+        "type": "solar", "on_windows": []}}])
+    assert "at least one window" in refused(shed_ladder=broken)
+
+
+@pytest.mark.parametrize("key", ["on_from", "on_to"])
+def test_a_solar_schedule_carrying_a_clock_end_is_refused(key):
+    """The other way round from a clock schedule carrying windows, and
+    refused for the same reason: the end would sit in the file looking
+    like it bounded the windows."""
+    schedule = {"type": "solar", key: "05:00",
+                "on_windows": [{"from": ["sunrise", "-1h"],
+                                "to": ["sunrise", "1h"]}]}
+    broken = dict(LADDER, tiers=[{"below_pct": 50, "schedule": schedule}])
+    assert "no on_from or on_to" in refused(shed_ladder=broken)
 
 
 def test_a_never_schedule_takes_nothing_else():
@@ -335,6 +506,13 @@ def test_an_enabled_deferred_load_is_refused_rather_than_skipped():
     message = refused(type="sequenced_ac")
     assert "enabled: false" in message
     assert "indistinguishable" in message
+
+
+def test_a_deferred_load_that_does_not_say_enabled_is_refused():
+    """Absent reads as enabled, the way it does for every load, so a
+    deferred load has to say false in so many words."""
+    message = refused({"type": "sequenced_ac"})
+    assert "enabled: false" in message
 
 
 def test_a_disabled_deferred_load_is_accepted_and_not_driven():
@@ -436,6 +614,22 @@ def test_a_clock_policy_is_refused_by_name():
         "the general message sends the reader looking for a typo")
 
 
+def test_tags_for_the_published_decisions_are_refused_by_name():
+    """The decisions reach the database through a device declared like any
+    other, so the tags they carry belong on that device. Refused by name,
+    like the state path, so the reader is sent to the device block rather
+    than hunting for a typo in a key they spelled correctly."""
+    node = FakeNode({"cameras": CAMERAS})
+    node.control["publish_as"] = {"site": "blind"}
+    with pytest.raises(spec.SpecError) as raised:
+        spec.load_control(node)
+    message = str(raised.value)
+    assert "publish_as" in message
+    assert "is not read here" in message
+    assert "driver: control" in message
+    assert "unknown key" not in message
+
+
 def test_a_restore_dwell_is_required_rather_than_defaulted():
     """Entry needs consecutive readings so one glitched sample cannot latch
     a tier. Release with no dwell lets one glitched sample clear every tier
@@ -454,11 +648,36 @@ def test_a_staleness_limit_must_be_positive(value):
     assert refused(shed_ladder=dict(LADDER, stale_after=value))
 
 
+def test_the_smallest_positive_staleness_limit_is_accepted():
+    assert with_ladder(stale_after="1s")["shed_ladder"]["stale_after"] == 1.0
+
+
 def test_a_negative_minimum_time_is_refused():
     assert "cannot be negative" in refused(min_off="-30m")
+    assert "cannot be negative" in refused(min_run="-1s")
 
 
-@pytest.mark.parametrize("value", ["12:75", "23:60", "25:00", "-1:00"])
+def test_a_load_without_minimum_times_has_none():
+    """Zero is the honest default: nothing holds the relay, and the file
+    reads that way."""
+    load = dict(CAMERAS)
+    del load["min_run"]
+    del load["min_off"]
+    out = spec.load_spec("cameras", load, {"bms", "mppt"})
+    assert out["min_run"] == 0.0
+    assert out["min_off"] == 0.0
+
+
+def test_a_duration_that_is_not_a_duration_is_refused_where_it_sits():
+    """The message names the load and the key, because the person reading
+    it has the file open."""
+    message = refused(min_run="soon")
+    assert "load cameras" in message
+    assert "min_run" in message
+
+
+@pytest.mark.parametrize("value", ["12:75", "23:60", "25:00", "-1:00",
+                                   "12:-1"])
 def test_each_part_of_a_time_is_range_checked(value):
     """Checking only the total accepts 12:75 as 13:15, which is a typo read
     as a time."""
@@ -477,6 +696,15 @@ def test_a_solar_window_that_ends_before_it_starts_is_refused():
         "type": "solar",
         "on_windows": [{"from": ["sunrise", "2h"],
                         "to": ["sunrise", "-1h"]}]}}])
+    assert "never be on" in refused(shed_ladder=broken)
+
+
+def test_a_solar_window_that_ends_where_it_starts_is_refused():
+    """Zero width is never on, the same as ending first."""
+    broken = dict(LADDER, tiers=[{"below_pct": 50, "schedule": {
+        "type": "solar",
+        "on_windows": [{"from": ["sunset", "-1h"],
+                        "to": ["sunset", "-1h"]}]}}])
     assert "never be on" in refused(shed_ladder=broken)
 
 
