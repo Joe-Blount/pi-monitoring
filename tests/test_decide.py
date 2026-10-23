@@ -6,6 +6,7 @@ back up again in microseconds and the answers are the same on any machine at
 any hour.
 """
 
+import copy
 import datetime
 import itertools
 import zoneinfo
@@ -294,6 +295,32 @@ def test_a_source_dipping_back_restarts_the_restore_dwell():
     assert decision.connected, "never released after the restarted dwell"
 
 
+def test_a_source_falling_back_under_the_entry_restarts_the_restore_dwell():
+    """The dwell measures time continuously clear of the release. A source
+    that falls all the way back under the entry has not been clear at all,
+    and the dwell starts again from the next moment it is."""
+    patient = dict(LADDER, restore_dwell=900.0)
+    spec = dict(SPEC, shed_ladder=patient)
+    decision, state = settle(45.0, now=at(23), spec=spec)
+
+    # Clear at 100, under the entry at 200, clear again at 300. A dwell
+    # that restarted expires at 1200; one that kept the first stamp expires
+    # at 1000. The probe at 1100 is where the two answers differ.
+    for mono, soc in ((100.0, 66.0), (200.0, 45.0), (300.0, 66.0)):
+        decision, state = run(soc, now=at(23), mono=mono, state=state,
+                              spec=spec)
+
+    decision, state = run(66.0, now=at(23), mono=1100.0, state=state,
+                          spec=spec)
+    assert not decision.connected, (
+        "released at 1100, so the dwell was still measured from 100 and the "
+        "fall under the entry did not restart it")
+
+    decision, state = run(66.0, now=at(23), mono=1300.0, state=state,
+                          spec=spec)
+    assert decision.connected, "never released after the restarted dwell"
+
+
 def test_the_same_sample_seen_twice_is_one_reading():
     """Entry counts readings, and the loop runs far faster than the battery
     answers.
@@ -364,6 +391,19 @@ def test_a_re_read_still_releases_a_tier_on_time():
     assert state["cameras"]["latched"].get("0") is True
     _, state = pass_through(state, 70.0, 2000.0, 1400.0)
     assert state["cameras"]["latched"].get("0") is False
+
+
+def test_a_decision_leaves_the_state_it_was_given_untouched():
+    """Pure means the state goes in and the next one comes out. The loop
+    holds the state it passed in until the next is written, and a decision that
+    edited it in place would leave two versions of the truth sharing one
+    mapping, with the latches moving before the file said so."""
+    _, state = settle(45.0, now=at(23))
+    before = copy.deepcopy(state)
+    run(9.0, now=at(23), state=state)
+    run(66.0, now=at(23), state=state)
+    run(100.0, cell=3.10, state=state)
+    assert state == before
 
 
 # -- the schedules ----------------------------------------------------------
@@ -630,6 +670,33 @@ def test_a_latched_floor_holds_when_its_source_goes_quiet():
     assert "nothing readable to clear it" in decisions["cameras"].reason
 
 
+def test_a_floor_latched_by_a_source_no_longer_declared_holds():
+    """The state outlives an edit to the node file within one boot. A latch
+    owned by a source the ladder no longer names has nothing that can speak
+    for it, so it holds rather than releasing, and says it is holding."""
+    two = dict(SPEC, shed_ladder=TWO_SOURCE)
+    readings = {"bms": {"fields": {"state_of_charge_pct": 60.0,
+                                   "cell_min_volts": 3.30},
+                        "age_seconds": 1.0},
+                "mppt": {"fields": {"battery_volts": 12.1},
+                         "age_seconds": 1.0}}
+    decisions, state = decide.decide(
+        at(12), 0.0, True, readings, {"shedding_enabled": True, "loads": {}},
+        {"cameras": two}, {}, SUNS)
+    assert decisions["cameras"].reason_code == decide.FLOOR
+    assert "battery_volts" in decisions["cameras"].reason
+
+    # The pack source is removed from the ladder and the controller carries
+    # on with the state it had. The cell is fine; the pack cannot be asked.
+    decisions, _ = decide.decide(
+        at(12), 1.0, True, readings, {"shedding_enabled": True, "loads": {}},
+        {"cameras": SPEC}, state, SUNS)
+    assert not decisions["cameras"].connected, (
+        "a floor was released by removing the source that latched it")
+    assert decisions["cameras"].reason_code == decide.FLOOR
+    assert "nothing readable to clear it" in decisions["cameras"].reason
+
+
 def test_a_stale_floor_reading_cannot_release_a_latched_floor():
     """The dangerous direction. A cell record frozen at 3.30 from before the
     sag would otherwise read as proof the pack had recovered."""
@@ -796,6 +863,30 @@ def test_a_recovered_owner_hands_the_floor_over_only_on_a_live_reading():
     assert decisions["cameras"].connected, decisions["cameras"].reason
 
 
+def test_a_second_source_resting_on_its_bound_does_not_keep_a_resolved_floor():
+    """The second look sheds strictly below, like the entry. A pack resting
+    exactly on its shedding bound as the cell clears is not yet a fault, so
+    the load comes back rather than the pack taking the latch over."""
+    spec = dict(SPEC, shed_ladder=TWO_SOURCE)
+
+    def pass_through(state, cell, pack):
+        readings = {"bms": {"fields": {"state_of_charge_pct": 60.0,
+                                       "cell_min_volts": cell},
+                            "age_seconds": 1.0},
+                    "mppt": {"fields": {"battery_volts": pack},
+                             "age_seconds": 1.0}}
+        return decide.decide(at(12), 0.0, True, readings,
+                             {"shedding_enabled": True, "loads": {}},
+                             {"cameras": spec}, state, SUNS)
+
+    decisions, state = pass_through({}, 3.10, 12.6)
+    assert not decisions["cameras"].connected
+    assert "cell_min_volts" in decisions["cameras"].reason
+
+    decisions, _ = pass_through(state, 3.30, 12.6)
+    assert decisions["cameras"].connected, "12.6 is not below 12.6"
+
+
 #: Each floor source, at every position that means something to it: under
 #: its shedding bound, between the two bounds, clear of its restoring bound,
 #: and unreadable.
@@ -891,6 +982,19 @@ def test_a_value_that_is_not_a_number_is_not_a_reading():
     assert not decisions["cameras"].connected
 
 
+def test_an_infinite_value_is_not_a_reading():
+    """Infinity sits clear of every bound in one direction and under every
+    bound in the other, and neither is a measurement. Positive infinity
+    must not release a latched floor; negative infinity must not latch
+    one."""
+    _, state = run(100.0, cell=3.10)
+    decision, _ = run(100.0, cell=float("inf"), state=state)
+    assert not decision.connected, "infinity released a latched floor"
+
+    decision, _ = run(100.0, cell=float("-inf"))
+    assert decision.connected, "negative infinity latched the floor"
+
+
 def test_the_floor_reason_never_asserts_a_comparison_that_is_false():
     """Between the two bounds the value is not below the shedding one.
     Saying so would have an operator doubting the sensor."""
@@ -898,6 +1002,17 @@ def test_the_floor_reason_never_asserts_a_comparison_that_is_false():
     decision, _ = run(100.0, cell=3.20, state=state)
     assert not decision.connected
     assert "3.200 below" not in decision.reason
+    assert "has not cleared the 3.250 restoring bound" in decision.reason
+
+
+def test_a_cell_resting_on_the_shedding_bound_is_reported_as_not_yet_clear():
+    """3.15 is not below 3.15. A latched floor holding there is between the
+    bounds, and the reason has to say so rather than assert a comparison
+    the dashboard contradicts."""
+    _, state = run(100.0, cell=3.10)
+    decision, _ = run(100.0, cell=3.15, state=state)
+    assert not decision.connected
+    assert "below" not in decision.reason
     assert "has not cleared the 3.250 restoring bound" in decision.reason
 
 
@@ -1001,6 +1116,23 @@ def test_an_override_with_no_expiry_is_treated_as_expired():
     assert not decision.connected
 
 
+def test_a_force_that_is_neither_on_nor_off_is_no_override():
+    """The switches file lives on the card and can be edited by hand. A
+    force nobody recognises is ignored rather than read as off, which would
+    shed a load nobody asked to shed, or as on, which would defeat the
+    ladder. The ladder decides, and the reason is the ladder's."""
+    switches = {"shedding_enabled": True,
+                "loads": {"cameras": {"force": "maybe",
+                                      "expires_epoch": LATER}}}
+    decision, _ = settle(9.0, switches=switches)
+    assert not decision.connected
+    assert decision.reason_code == decide.STATE_OF_CHARGE
+
+    decision, _ = run(100.0, switches=switches)
+    assert decision.connected
+    assert decision.reason_code == decide.NONE
+
+
 def test_while_the_clock_is_untrusted_force_off_applies_and_force_on_does_not():
     """An expiry cannot be judged against a clock that may be wrong. Both
     halves fail safe: a force-off saves power, and ignoring a force-on costs
@@ -1022,6 +1154,15 @@ def test_shedding_switched_off_stops_the_tiers():
     assert decision.connected
     assert decision.reason_code == decide.SHEDDING_DISABLED
     assert "shedding is switched off" in decision.reason
+
+
+def test_switches_that_say_nothing_about_shedding_leave_it_enabled():
+    """Shedding enabled is the state the system is in when nobody has
+    touched it. A switches mapping that does not mention shedding means
+    exactly that, and must not read as the switch somebody reaches for."""
+    decision, _ = settle(9.0, switches={"loads": {}})
+    assert not decision.connected
+    assert decision.reason_code == decide.STATE_OF_CHARGE
 
 
 # -- the timers -------------------------------------------------------------
@@ -1061,6 +1202,23 @@ def test_a_timer_hold_publishes_its_own_reason_code():
                              state=run(100.0, mono=0.0, spec=TIMED)[1])
     assert decision.connected
     assert decision.reason_code == decide.HELD_BY_TIMER
+
+
+def test_a_timer_hold_says_how_long_it_will_hold():
+    """The seconds in the reason are what somebody standing at the machine
+    uses to decide whether to wait or to reach for a switch, so they are the
+    time left on the timer rather than the time already served."""
+    # Shed at 700 against a minimum off time of 1800, so at 760 there are
+    # 1740 seconds left.
+    state = _shed_with_timers()
+    decision, _ = run(100.0, mono=760.0, state=state, spec=TIMED)
+    assert "held for another 1740s" in decision.reason
+
+    # Restored at 0 against a minimum run time of 600, and the tier latches
+    # on its second reading at 61, so 539 seconds are left.
+    _, state = run(100.0, mono=0.0, spec=TIMED)
+    decision, _ = settle(9.0, mono=60.0, spec=TIMED, state=state)
+    assert "held for another 539s" in decision.reason
 
 
 def test_each_transition_restarts_the_clock_on_the_next_one():
@@ -1349,6 +1507,28 @@ def test_a_minimum_run_time_holds_a_load_up():
     assert "minimum run time" in decision.reason
 
 
+# -- what is published ------------------------------------------------------
+
+def test_each_reason_code_is_the_number_the_operating_guide_promises():
+    """The codes are published as numbers so an alert can match without
+    parsing text, and the operating guide prints the table. Each one is a
+    promise, so each is pinned here as the literal rather than through the
+    constant: a comparison against the constant would hold whatever value
+    the constant took, including one that collided with its neighbour.
+    """
+    assert decide.NONE == 0
+    assert decide.STATE_OF_CHARGE == 1
+    assert decide.FLOOR == 2
+    assert decide.HOLDING_STALE == 3
+    assert decide.OVERRIDE == 4
+    assert decide.SHEDDING_DISABLED == 5
+    assert decide.SCHEDULE_SUSPENDED == 6
+    assert decide.NO_READING == 7
+    assert decide.THERMAL == 8
+    assert decide.REFUSED == 9
+    assert decide.HELD_BY_TIMER == 10
+
+
 # -- types this does not drive ----------------------------------------------
 
 def test_a_load_type_this_does_not_drive_is_refused_rather_than_ignored():
@@ -1363,3 +1543,6 @@ def test_a_load_type_this_does_not_drive_is_refused_rather_than_ignored():
     assert not decisions["irrigation"].connected
     assert decisions["irrigation"].reason_code == decide.REFUSED
     assert "does not drive it" in decisions["irrigation"].reason
+    # Nothing is latched for a load nothing judges, and the published shed
+    # level says so.
+    assert decisions["irrigation"].tier == 0
