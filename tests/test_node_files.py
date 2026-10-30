@@ -338,7 +338,7 @@ def test_each_node_of_a_site_is_tagged_distinctly(site):
 #: Counts include the example site, which documents every option and so
 #: declares one of most things.
 EXPECTED_LOADS = {"battery_heating": 2, "vent_fan": 1,
-                  "dc_branch": 2, "sequenced_ac": 2, "cpu_fan": 3}
+                  "dc_branch": 4, "sequenced_ac": 2, "cpu_fan": 3}
 
 
 def loads_of_type(kind):
@@ -686,10 +686,11 @@ def test_the_shipped_camera_ladder_is_the_one_that_was_agreed():
     behaving differently from what anybody decided, on a machine an hour
     away, and nothing else in the suite reads this file's control block."""
     loads = enabled_everywhere(REPO / "sites" / "blind1" / "downstairs.yaml")
-    assert sorted(loads) == ["cameras", "cpu_fan"], (
+    assert sorted(loads) == ["cameras_far", "cameras_near", "cpu_fan",
+                             "nvr"], (
         "irrigation must stay declared and undriven")
 
-    cameras = loads["cameras"]
+    cameras = loads["cameras_near"]
     assert cameras["control_pin"] == 23
     assert cameras["polarity"] == "energize_to_shed", (
         "de-energized must connect the cameras, so a dead Pi leaves the site "
@@ -758,6 +759,38 @@ def test_the_upstairs_control_block_is_accepted_as_it_stands():
     assert sorted(loads) == ["cpu_fan"]
 
 
+#: What the far cameras and the recorder were agreed to do, beside the near
+#: cameras' ladder above: the pin, and each tier's threshold and schedule
+#: type. The far cameras keep the near ones' windows at higher thresholds.
+OTHER_CAMERA_BRANCHES = {
+    "cameras_far": (27, [(60.0, "clock"), (40.0, "solar"), (20.0, "never")]),
+    "nvr": (16, [(5.0, "never")]),
+}
+
+
+@pytest.mark.parametrize("name", sorted(OTHER_CAMERA_BRANCHES))
+def test_the_other_camera_branches_are_the_ones_that_were_agreed(name):
+    loads = enabled_everywhere(REPO / "sites" / "blind1" / "downstairs.yaml")
+    near, branch = loads["cameras_near"], loads[name]
+    pin, tiers = OTHER_CAMERA_BRANCHES[name]
+
+    assert branch["control_pin"] == pin
+    assert branch["polarity"] == "energize_to_shed", (
+        "a dead Pi must leave every camera branch running")
+    assert (branch["min_run"], branch["min_off"]) == (600.0, 1800.0)
+
+    ladder = branch["shed_ladder"]
+    assert [(tier["below_pct"], tier["schedule"]["type"])
+            for tier in ladder["tiers"]] == tiers
+    for key in ("source", "stale_after", "release_margin_pct",
+                "enter_after_readings", "restore_dwell", "floor"):
+        assert ladder[key] == near["shed_ladder"][key], key
+    for mine, theirs in zip(ladder["tiers"], near["shed_ladder"]["tiers"]):
+        if mine["schedule"]["type"] != "never":
+            assert mine["schedule"] == theirs["schedule"], (
+                "the far cameras keep the near cameras' windows")
+
+
 def test_the_camera_windows_stay_inside_the_tier_above_them_all_year():
     """A deeper tier must only ever remove running time.
 
@@ -774,7 +807,7 @@ def test_the_camera_windows_stay_inside_the_tier_above_them_all_year():
     from monitoring.control import sun
 
     loads = enabled_everywhere(REPO / "sites" / "blind1" / "downstairs.yaml")
-    tiers = loads["cameras"]["shed_ladder"]["tiers"]
+    tiers = loads["cameras_near"]["shed_ladder"]["tiers"]
     clock_tier = tiers[0]["schedule"]
     windows = tiers[1]["schedule"]["on_windows"]
 

@@ -296,8 +296,12 @@ def _pin_sources():
     upstairs = _node_yaml("sites/blind1/upstairs.yaml")
     garage = _node_yaml("sites/garage/garage.yaml")
     return {
-        ("blind1 / downstairs", "cameras"):
-            downstairs["control"]["loads"]["cameras"]["control_pin"],
+        ("blind1 / downstairs", "cameras near"):
+            downstairs["control"]["loads"]["cameras_near"]["control_pin"],
+        ("blind1 / downstairs", "cameras far"):
+            downstairs["control"]["loads"]["cameras_far"]["control_pin"],
+        ("blind1 / downstairs", "nvr"):
+            downstairs["control"]["loads"]["nvr"]["control_pin"],
         ("blind1 / downstairs", "irrigation: inverter"):
             downstairs["control"]["loads"]["irrigation"]["inverter"]["control_pin"],
         ("blind1 / downstairs", "irrigation: pump"):

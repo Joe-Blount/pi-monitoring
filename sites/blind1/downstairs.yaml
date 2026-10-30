@@ -151,24 +151,25 @@ control:
 
   loads:
 
-    cameras:
+    # Three DC branches, each on its own relay and switched on its 12 V
+    # input: the near cameras' PoE switch, the far cameras' PoE injector,
+    # and the recorder. Switching the 12 V side keeps every relay inside its
+    # 30 V DC contact rating whatever voltage the PoE side runs at. None of
+    # the three may carry the network gear, which reports what the
+    # controller did and has to stay up while the cameras are shed.
+
+    # The cameras near the blind, on the PoE switch.
+    cameras_near:
       type: dc_branch
       enabled: true
       control_pin: 23                 # physical 16
 
       # Normally closed, so de-energized connects the load. A dead Pi, a lost
-      # 12 V feed or a killed controller all leave the site watched, and a
-      # reboot does not power cycle the recorder.
-      #
-      # The cost of this choice is the one to keep in view: shedding does
-      # power cycle the recorder, once a day in the night tier and twice a
-      # day in the window tier. The recorder and the cameras share this
-      # branch, so there is no way to shed the cameras alone. Putting the
-      # recorder on its own channel is a wire and a second load block, not a
-      # redesign, if the cycling turns out to bother it.
+      # 12 V feed or a killed controller all leave the site watched. The same
+      # holds for the far cameras and the recorder below.
       polarity: energize_to_shed
 
-      min_run: 10m                    # a recorder should not be cycled
+      min_run: 10m                    # a camera branch should not be cycled
       min_off: 30m                    # repeatedly in either direction
 
       shed_ladder:
@@ -227,9 +228,7 @@ control:
         #
         # The ladder is keyed to what the cameras are for rather than to
         # clock convenience. Midday goes first because it is worthless for
-        # deer, then the night, then everything. Cameras and recorder are
-        # most of the steady draw here, so the remaining tiers are roughly
-        # 1.3x, 2.8x and 6.7x the runway of running them continuously.
+        # deer, then the night, then everything.
         tiers:
           - below_pct: 50
             schedule: {type: clock, on_from: "05:00", on_to: "22:00"}
@@ -252,6 +251,86 @@ control:
             # none of that can be shed because one of them is doing the
             # shedding. The floor above and the pack's own cutoff are what
             # actually stop the discharge.
+            schedule: {type: never}
+
+    # The four cameras further out, on one cable from their own PoE
+    # injector. Lower priority than the near cameras, so the same windows
+    # are entered 10 to 15 points earlier: by the time the near cameras lose
+    # the night, these are down to dawn and dusk, and they are off before
+    # the near cameras go dark.
+    cameras_far:
+      type: dc_branch
+      enabled: true
+      control_pin: 27                 # physical 13
+      polarity: energize_to_shed
+      min_run: 10m
+      min_off: 30m
+
+      shed_ladder:
+        source: {device: bms, field: state_of_charge_pct}
+        stale_after: 10m
+        enter_after_readings: 2
+        restore_dwell: 15m
+        release_margin_pct: 15
+
+        # The same floor as the near cameras, for the same reasons.
+        floor:
+          sources:
+            - device: bms
+              field: cell_min_volts
+              shed_below: 3.15
+              restore_above: 3.25
+            - device: mppt
+              field: battery_volts
+              shed_below: 12.6
+              restore_above: 13.0
+
+        tiers:
+          - below_pct: 60
+            schedule: {type: clock, on_from: "05:00", on_to: "22:00"}
+
+          - below_pct: 40
+            schedule:
+              type: solar
+              on_windows:
+                - {from: [sunrise, -1h], to: [sunrise, 2h]}
+                - {from: [sunset, -2h], to: [sunset, 1h]}
+
+          - below_pct: 20
+            schedule: {type: never}
+
+    # The recorder. It runs while any camera might, so it has one tier,
+    # below every camera tier: it goes dark at 5 percent, when both camera
+    # groups are already off and it has nothing to record. Kept up until
+    # then so recordings stay reachable.
+    nvr:
+      type: dc_branch
+      enabled: true
+      control_pin: 16                 # physical 36
+      polarity: energize_to_shed
+      min_run: 10m                    # a recorder should not be cycled
+      min_off: 30m                    # repeatedly in either direction
+
+      shed_ladder:
+        source: {device: bms, field: state_of_charge_pct}
+        stale_after: 10m
+        enter_after_readings: 2
+        restore_dwell: 15m
+        release_margin_pct: 15
+
+        floor:
+          sources:
+            - device: bms
+              field: cell_min_volts
+              shed_below: 3.15
+              restore_above: 3.25
+            - device: mppt
+              field: battery_volts
+              shed_below: 12.6
+              restore_above: 13.0
+
+        tiers:
+          - below_pct: 5
             schedule: {type: never}
 
     # A small 12 V fan aimed at the Pi, on a relay channel of its own. The

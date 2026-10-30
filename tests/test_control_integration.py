@@ -72,7 +72,7 @@ def reading(soc, cell=3.30, pack=13.4, age=1.0):
             "mppt": {"fields": {"battery_volts": pack}, "age_seconds": age}}
 
 
-def settled(loads, suns, soc, when, **kwargs):
+def settled(loads, suns, soc, when, load="cameras_near", **kwargs):
     """Drive the decision until the ladder has stopped moving.
 
     A tier needs consecutive readings to latch and the load starts connected,
@@ -87,7 +87,7 @@ def settled(loads, suns, soc, when, **kwargs):
         decisions, state = decide.decide(
             when, PAST_THE_TIMERS + step * PAST_THE_TIMERS, True, readings,
             switches, loads, state, suns)
-        decision = decisions["cameras"]
+        decision = decisions[load]
     return decision
 
 
@@ -116,11 +116,11 @@ def test_every_duration_in_the_parsed_block_is_the_unit_its_reader_expects(
     offset added to a datetime has to be a timedelta. Asserted by type, since
     both are perfectly valid values of the wrong kind.
     """
-    ladder = loads["cameras"]["shed_ladder"]
+    ladder = loads["cameras_near"]["shed_ladder"]
     for name in ("stale_after", "restore_dwell"):
         assert isinstance(ladder[name], float), name
     for name in ("min_run", "min_off"):
-        assert isinstance(loads["cameras"][name], float), name
+        assert isinstance(loads["cameras_near"][name], float), name
     for tier in ladder["tiers"]:
         schedule = tier["schedule"]
         if schedule["type"] == "clock":
@@ -176,6 +176,54 @@ def test_the_shipped_ladder_behaves_as_agreed(loads, suns, soc, hour, minute,
     assert decision.connected is connected, decision.reason
 
 
+@pytest.mark.parametrize("soc,far,near,nvr", [
+    # Above every threshold: everything runs overnight.
+    (70.0, True, True, True),
+    # The far cameras lose the night first.
+    (55.0, False, True, True),
+    # Below fifty the near cameras lose it too.
+    (45.0, False, False, True),
+    # Below twenty the far cameras are off for good; the recorder stays.
+    (15.0, False, False, True),
+    (8.0, False, False, True),
+    # Below five the recorder goes as well.
+    (4.0, False, False, False),
+])
+def test_the_far_cameras_go_first_and_the_recorder_last(loads, suns, soc,
+                                                        far, near, nvr):
+    """At 23:00, outside every window but the clock tier's. The order the
+    owner asked for: far cameras before near ones, the recorder after
+    both."""
+    for load, expected in (("cameras_far", far), ("cameras_near", near),
+                           ("nvr", nvr)):
+        decision = settled(loads, suns, soc, at(23), load=load)
+        assert decision.connected is expected, (load, decision.reason)
+
+
+@pytest.mark.parametrize("soc,hour,minute,connected", [
+    (55.0, 21, 59, True),
+    (55.0, 5, 1, True),
+    (35.0, 6, 30, True),
+    (35.0, 12, 0, False),
+    (35.0, 19, 30, True),
+    (19.0, 6, 30, False),
+])
+def test_the_far_cameras_keep_the_same_windows_at_higher_thresholds(
+        loads, suns, soc, hour, minute, connected):
+    decision = settled(loads, suns, soc, at(hour, minute), load="cameras_far")
+    assert decision.connected is connected, decision.reason
+
+
+@pytest.mark.parametrize("load", ["cameras_far", "cameras_near", "nvr"])
+def test_every_camera_branch_sheds_on_either_floor_source(loads, suns, load):
+    for kwargs, field in (({"cell": 3.10}, "cell_min_volts"),
+                          ({"pack": 12.1}, "battery_volts")):
+        decision = settled(loads, suns, 70.0, at(12), load=load, **kwargs)
+        assert not decision.connected, load
+        assert decision.reason_code == decide.FLOOR
+        assert field in decision.reason
+
+
 def test_the_cell_floor_overrides_the_schedule_end_to_end(loads, suns):
     """Parsed bounds, parsed sources, inside a window that would otherwise
     permit the load."""
@@ -204,7 +252,7 @@ def test_an_untrusted_clock_leaves_the_cameras_running(loads, suns):
         decisions, state = decide.decide(
             at(23), PAST_THE_TIMERS * (step + 1), False, readings, switches,
             loads, state, [])
-        decision = decisions["cameras"]
+        decision = decisions["cameras_near"]
     assert decision.connected
     assert decision.reason_code == decide.SCHEDULE_SUSPENDED
 
@@ -243,7 +291,7 @@ def run_the_real_loop(tmp_path, soc, cell=3.30):
     clock_state = {"mono": 0.0}
     machine = loop.Loop(
         node, {"latitude": LATITUDE, "longitude": LONGITUDE}, ZONE,
-        relays={"cameras": relay.Pretend(23, relay.ENERGIZE_TO_SHED)},
+        relays={"cameras_near": relay.Pretend(23, relay.ENERGIZE_TO_SHED)},
         now=lambda: at(19, 30),
         monotonic=lambda: clock_state["mono"],
         # Injected, because the suite runs on machines with no real-time
@@ -291,7 +339,7 @@ def test_the_collector_reads_the_document_the_loop_writes(tmp_path):
     """
     points = by_load(reader(run_the_real_loop(tmp_path, 24.0),
                             mono=3 * PAST_THE_TIMERS).read())
-    cameras, loop_point = points["cameras"], points[None]
+    cameras, loop_point = points["cameras_near"], points[None]
 
     # Powered and shed at the same time, which is the state a reader most
     # needs the two fields to be able to express: the battery has put the
@@ -312,9 +360,9 @@ def test_the_reported_shed_level_and_reason_follow_the_battery(tmp_path):
     (tmp_path / "low").mkdir()
     (tmp_path / "high").mkdir()
     low = by_load(reader(run_the_real_loop(tmp_path / "low", 9.0),
-                         mono=3 * PAST_THE_TIMERS).read())["cameras"]
+                         mono=3 * PAST_THE_TIMERS).read())["cameras_near"]
     high = by_load(reader(run_the_real_loop(tmp_path / "high", 60.0),
-                          mono=3 * PAST_THE_TIMERS).read())["cameras"]
+                          mono=3 * PAST_THE_TIMERS).read())["cameras_near"]
 
     assert low["powered"] == 0.0
     assert low["shed_level"] == 3.0
@@ -330,14 +378,15 @@ def test_each_load_is_its_own_point_tagged_with_the_load(tmp_path):
     points = reader(run_the_real_loop(tmp_path, 24.0),
                     mono=3 * PAST_THE_TIMERS).read()
     assert [one.tags for one in points] == [
-        {}, {"load": "cameras"}, {"load": "cpu_fan"}]
+        {}, {"load": "cameras_far"}, {"load": "cameras_near"},
+        {"load": "cpu_fan"}, {"load": "nvr"}]
 
 
 def test_the_floor_owner_names_the_shipped_source_that_tripped_it(tmp_path):
     """Through the real node file: the cell minimum is the first floor source
     declared there, and the owner is published as device.field."""
     cameras = by_load(reader(run_the_real_loop(tmp_path, 60.0, cell=3.10),
-                             mono=3 * PAST_THE_TIMERS).read())["cameras"]
+                             mono=3 * PAST_THE_TIMERS).read())["cameras_near"]
     assert cameras["reason_code"] == float(decide.FLOOR)
     assert cameras["floor_latched"] == 1.0
     assert cameras["floor_latched_by"] == "bms.cell_min_volts"
@@ -350,7 +399,7 @@ def test_the_age_is_on_the_loop_point_and_measured_by_the_reader(tmp_path):
     points = by_load(reader(run_the_real_loop(tmp_path, 24.0),
                             mono=3 * PAST_THE_TIMERS + 42.0).read())
     assert points[None]["published_age_seconds"] == 42.0
-    assert "published_age_seconds" not in points["cameras"]
+    assert "published_age_seconds" not in points["cameras_near"]
 
 
 #: A document written by hand, so that the rendered lines below can be
@@ -475,7 +524,7 @@ def test_a_missing_document_names_what_it_means(tmp_path):
 def test_the_collectors_check_names_the_loads_it_found(tmp_path):
     """What somebody sees from `collect --check` while standing at the
     machine, which is the only place this string is read."""
-    assert "cameras" in reader(run_the_real_loop(tmp_path, 24.0)).check()
+    assert "cameras_near" in reader(run_the_real_loop(tmp_path, 24.0)).check()
 
 
 def test_the_document_the_loop_writes_lands_where_the_node_files_point(

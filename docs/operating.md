@@ -11,7 +11,7 @@ installed machine that is always:
 ```
 
 `<load>` means a load's name from that machine's `control:` block, such as
-`cameras`. Find the names for this machine with:
+`cameras_near`. Find the names for this machine with:
 
 ```
 collect --node <file> --list
@@ -51,21 +51,24 @@ sensor. The full explanation, and the kernel version that fixes it, is in
 
 ## Force the cameras on right now
 
+Each camera group is its own load: `cameras_near`, `cameras_far`, and the
+recorder, `nvr`. Force each one you want:
+
 ```
-sudo control override cameras on --for 8h
+sudo control override cameras_near on --for 8h
 ```
 
 It runs for the time you gave and then returns to normal control on its own.
 Clear it sooner:
 
 ```
-sudo control override clear cameras
+sudo control override clear cameras_near
 ```
 
 ## Force the cameras off
 
 ```
-sudo control override cameras off --until "YYYY-MM-DD HH:MM"
+sudo control override cameras_far off --until "YYYY-MM-DD HH:MM"
 ```
 
 Always give an end time. An override with no end time is treated as already
@@ -196,7 +199,7 @@ de-energized and the cameras are running, which is correct. Use `powered`
 for whether the load has power.
 
 In the database the same fields carry the same names, on a point tagged
-`load=cameras`. See the table of published fields below.
+`load=cameras_near`. See the table of published fields below.
 
 ## Read one sensor by hand
 
@@ -286,7 +289,9 @@ never be the reason a site stays dark.
 
 | Machine | Load | GPIO | Physical pin | With no signal at all |
 |---|---|---|---|---|
-| blind1 / downstairs | cameras | 23 | 16 | running (normally closed) |
+| blind1 / downstairs | cameras near | 23 | 16 | running (normally closed) |
+| blind1 / downstairs | cameras far | 27 | 13 | running (normally closed) |
+| blind1 / downstairs | nvr | 16 | 36 | running (normally closed) |
 | blind1 / downstairs | irrigation: inverter | 25 | 22 | off (normally open) |
 | blind1 / downstairs | irrigation: pump | 22 | 15 | off (normally open) |
 | blind1 / downstairs | cpu fan | 24 | 18 | off (normally open) |
@@ -294,8 +299,8 @@ never be the reason a site stays dark.
 | blind1 / upstairs | vent fan | 26 | 37 | off (normally open) |
 | garage | battery heating | 24 | not recorded | off (normally open) |
 
-Of these, `cameras` and the two CPU fans are load types the controller
-drives. Irrigation and the vent fan are declared and deliberately held back,
+Of these, the two camera groups, the recorder and the two CPU fans are load
+types the controller drives. Irrigation and the vent fan are declared and deliberately held back,
 disabled in the node file. Battery heating is declared for its relay and
 wiring, but is not yet a load type this controller drives. `blind1 /
 downstairs` itself is not built yet; its pin assignments are the plan for
@@ -304,7 +309,7 @@ when it is.
 ## Published fields, per load
 
 Every load the controller drives is its own point, carrying the device's
-tags and a `load` tag naming the load, such as `load=cameras`. The field
+tags and a `load` tag naming the load, such as `load=cameras_near`. The field
 names are the same for every load, so one chart over `powered` repeats over
 loads and a table over all loads needs no column per load. A load added to
 the node file needs no panel edited.
