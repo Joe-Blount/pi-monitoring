@@ -350,7 +350,7 @@ a collector fault, never a load with nothing to say.
 | 4 | override | An operator forced this with `control override`. |
 | 5 | shedding disabled | `control shedding off` is holding this load on despite its tiers. |
 | 6 | schedule suspended | A latched tier has a schedule, and the clock cannot be trusted to judge it. |
-| 7 | no reading | A CPU fan has no fresh temperature. It runs if it has had a reading since the controller started in this boot, and stays off if it has not. |
+| 7 | no reading | A CPU fan has no fresh temperature. It runs if it has had a reading since the machine booted, and stays off if it has not. |
 | 8 | thermal | A CPU fan decided on its temperature: at or above its upper bound, at or below its lower bound, or between them and keeping its last state. |
 | 9 | refused | The node file declares a load type this controller does not drive. |
 | 10 | held by timer | The decision is correct, but a minimum run or minimum off time has not elapsed, so it has not taken effect yet. |
