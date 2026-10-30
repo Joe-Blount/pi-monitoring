@@ -431,6 +431,39 @@ def _depth(latched):
     return sum(1 for value in latched.values() if value)
 
 
+def fan_decision(name, spec, readings, state):
+    """Decide one CPU fan. Returns (Decision, new state).
+
+    Runs at or above the upper bound, stops at or below the lower, and
+    between them does whatever it last decided. With no fresh temperature it
+    runs: a small fan costs a fraction of an amp, and a chip nobody can see
+    is the one that throttles.
+    """
+    value = _reading(readings, spec["source"], spec["stale_after"])
+    field = spec["source"]["field"]
+    new_state = dict(state)
+    if value is None:
+        new_state["fan_on"] = True
+        return (Decision(name, True, 0, NO_READING,
+                         "no fresh %s, so the fan runs" % field, None),
+                new_state)
+    if value >= spec["run_above_f"]:
+        running = True
+        reason = "%s=%.1f at or above %.1f" % (field, value,
+                                               spec["run_above_f"])
+    elif value <= spec["stop_below_f"]:
+        running = False
+        reason = "%s=%.1f at or below %.1f" % (field, value,
+                                               spec["stop_below_f"])
+    else:
+        running = bool(state.get("fan_on", False))
+        reason = "%s=%.1f between %.1f and %.1f, so the fan stays %s" % (
+            field, value, spec["stop_below_f"], spec["run_above_f"],
+            "on" if running else "off")
+    new_state["fan_on"] = running
+    return Decision(name, running, 0, THERMAL, reason, value), new_state
+
+
 # -- the switches an operator holds -----------------------------------------
 
 def _override(name, switches, now, clock_trusted):
@@ -461,6 +494,17 @@ def _override(name, switches, now, clock_trusted):
     return force
 
 
+def _apply_override(decision, name, switches, now, clock_trusted):
+    """An operator's force, applied. Returns the decision and whether one is
+    in force."""
+    force = _override(name, switches, now, clock_trusted)
+    if force is None:
+        return decision, False
+    return decision._replace(
+        connected=(force == "on"), reason_code=OVERRIDE,
+        reason="forced %s by an operator" % force), True
+
+
 def _apply_switches(decision, name, switches, now, clock_trusted):
     """Let an operator's switches override a state-of-charge decision.
 
@@ -479,11 +523,10 @@ def _apply_switches(decision, name, switches, now, clock_trusted):
     not a floor, and the number it defends is the one standing between a
     forgotten command and a damaged cell.
     """
-    force = _override(name, switches, now, clock_trusted)
-    if force is not None:
-        return decision._replace(
-            connected=(force == "on"), reason_code=OVERRIDE,
-            reason="forced %s by an operator" % force), True
+    decision, forced = _apply_override(decision, name, switches, now,
+                                       clock_trusted)
+    if forced:
+        return decision, True
 
     if not switches.get("shedding_enabled", True):
         if not decision.connected:
@@ -567,6 +610,9 @@ def _hold(decision, spec, mono_now, state, operator=False):
 #: indistinguishable from one that is working.
 LADDER_TYPES = ("dc_branch",)
 
+#: Load types decided on one temperature between two bounds.
+FAN_TYPES = ("cpu_fan",)
+
 
 def decide(local_now, mono_now, clock_trusted, readings, switches,
            specs, state, suns):
@@ -601,6 +647,12 @@ def decide(local_now, mono_now, clock_trusted, readings, switches,
             if decision.reason_code != FLOOR:
                 decision, operator = _apply_switches(
                     decision, name, switches, local_now, clock_trusted)
+        elif spec["type"] in FAN_TYPES:
+            decision, load_state = fan_decision(name, spec, readings, prior)
+            # An override, and not the shedding switch. Shedding is about
+            # the battery, and switching it off must not run a fan.
+            decision, operator = _apply_override(
+                decision, name, switches, local_now, clock_trusted)
         else:
             decision = Decision(
                 name, False, 0, REFUSED,

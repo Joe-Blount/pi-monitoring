@@ -1546,3 +1546,91 @@ def test_a_load_type_this_does_not_drive_is_refused_rather_than_ignored():
     # Nothing is latched for a load nothing judges, and the published shed
     # level says so.
     assert decisions["irrigation"].tier == 0
+
+
+# -- the CPU fan ------------------------------------------------------------
+
+FAN = {"type": "cpu_fan", "min_run": 0.0, "min_off": 0.0,
+       "source": {"device": "host", "field": "cpu_temp_f"},
+       "stale_after": 120.0, "run_above_f": 165.0, "stop_below_f": 145.0}
+
+
+def fan(temp=None, age=1.0, state=None, switches=None, spec=None, mono=0.0,
+        clock_trusted=True):
+    """One pass of the whole decision for a single CPU fan."""
+    fields = {} if temp is None else {"cpu_temp_f": temp}
+    decisions, new_state = decide.decide(
+        at(12), mono, clock_trusted,
+        {"host": {"fields": fields, "age_seconds": age}},
+        switches or {"shedding_enabled": True, "loads": {}},
+        {"cpu_fan": spec or FAN}, state or {}, SUNS)
+    return decisions["cpu_fan"], new_state
+
+
+@pytest.mark.parametrize("temp,running", [(165.0, True), (180.0, True),
+                                          (145.0, False), (120.0, False)])
+def test_the_fan_runs_at_its_upper_bound_and_stops_at_its_lower(temp,
+                                                                running):
+    decision, _ = fan(temp)
+    assert decision.connected is running
+    assert decision.reason_code == decide.THERMAL
+    assert decision.decided_on == temp
+
+
+def test_between_the_bounds_a_running_fan_keeps_running():
+    _, state = fan(170.0)
+    decision, _ = fan(155.0, state=state)
+    assert decision.connected
+
+
+def test_between_the_bounds_a_stopped_fan_stays_stopped():
+    _, state = fan(140.0)
+    decision, _ = fan(155.0, state=state)
+    assert not decision.connected
+
+
+def test_between_the_bounds_with_nothing_before_it_the_fan_stays_off():
+    decision, _ = fan(155.0)
+    assert not decision.connected
+
+
+@pytest.mark.parametrize("temp,age", [(None, 1.0), (180.0, 121.0),
+                                      (float("nan"), 1.0)])
+def test_without_a_fresh_temperature_the_fan_runs(temp, age):
+    decision, _ = fan(temp, age=age)
+    assert decision.connected
+    assert decision.reason_code == decide.NO_READING
+    assert decision.decided_on is None
+
+
+def test_a_fan_that_ran_without_a_reading_keeps_running_inside_the_band():
+    _, state = fan(None)
+    decision, _ = fan(155.0, state=state)
+    assert decision.connected
+
+
+@pytest.mark.parametrize("force,running", [("off", False), ("on", True)])
+def test_an_operator_override_forces_the_fan(force, running):
+    switches = {"shedding_enabled": True,
+                "loads": {"cpu_fan": {"force": force,
+                                      "expires_epoch": LATER}}}
+    decision, _ = fan(155.0, switches=switches)
+    assert decision.connected is running
+    assert decision.reason_code == decide.OVERRIDE
+
+
+def test_the_shedding_switch_does_not_run_the_fan():
+    decision, _ = fan(120.0, switches={"shedding_enabled": False,
+                                       "loads": {}})
+    assert not decision.connected
+    assert decision.reason_code == decide.THERMAL
+
+
+def test_the_minimum_run_time_holds_the_fan_on():
+    timed = dict(FAN, min_run=120.0)
+    _, state = fan(170.0, spec=timed, mono=0.0)
+    decision, state = fan(140.0, spec=timed, state=state, mono=60.0)
+    assert decision.connected
+    assert decision.reason_code == decide.HELD_BY_TIMER
+    decision, _ = fan(140.0, spec=timed, state=state, mono=121.0)
+    assert not decision.connected
