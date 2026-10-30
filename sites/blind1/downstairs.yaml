@@ -264,9 +264,10 @@ control:
       # Energize to run. A dead Pi needs no cooling, so the fan stays off.
       polarity: energize_to_connect
 
-      # The chip temperature the host driver reads. With no fresh reading
-      # the fan runs: it costs a fraction of an amp, and a chip nobody can
-      # see is the one that throttles.
+      # The chip temperature the host driver reads. A fan that has had a
+      # reading and loses it runs: it costs a fraction of an amp, and a chip
+      # nobody can see is the one that throttles. Before its first reading
+      # after a boot it stays off, which is where the pin already is.
       source: {device: host, field: cpu_temp_f}
       stale_after: 2m
 

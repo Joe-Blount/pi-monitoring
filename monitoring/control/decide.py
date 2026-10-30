@@ -435,18 +435,31 @@ def fan_decision(name, spec, readings, state):
     """Decide one CPU fan. Returns (Decision, new state).
 
     Runs at or above the upper bound, stops at or below the lower, and
-    between them does whatever it last decided. With no fresh temperature it
-    runs: a small fan costs a fraction of an amp, and a chip nobody can see
-    is the one that throttles.
+    between them does whatever it last decided. A fan that has had a reading
+    and loses it runs: a small fan costs a fraction of an amp, and a chip
+    nobody can see is the one that throttles.
+
+    A fan that has never had a reading stays off, which is where its pin
+    already is. The loop drives nothing until a reading informs a decision,
+    and after a boot the controller's first pass usually comes before the
+    first temperature. Deciding on there would start the run timer on a
+    drive that never went out, and the first cold reading would then be held
+    on by it.
     """
     value = _reading(readings, spec["source"], spec["stale_after"])
     field = spec["source"]["field"]
     new_state = dict(state)
     if value is None:
+        if not state.get("informed"):
+            return (Decision(name, False, 0, NO_READING,
+                             "no %s yet, so the fan stays off" % field,
+                             None),
+                    new_state)
         new_state["fan_on"] = True
         return (Decision(name, True, 0, NO_READING,
                          "no fresh %s, so the fan runs" % field, None),
                 new_state)
+    new_state["informed"] = True
     if value >= spec["run_above_f"]:
         running = True
         reason = "%s=%.1f at or above %.1f" % (field, value,
@@ -605,12 +618,14 @@ def _hold(decision, spec, mono_now, state, operator=False):
 
 # -- the whole node ---------------------------------------------------------
 
-#: Load types this decides. A declared type that is not here is refused
-#: rather than ignored, because a load nobody drives and nobody mentions is
-#: indistinguishable from one that is working.
+#: Load types decided by a shed ladder.
 LADDER_TYPES = ("dc_branch",)
 
 #: Load types decided on one temperature between two bounds.
+#:
+#: A declared type in neither list is refused rather than ignored, because a
+#: load nobody drives and nobody mentions is indistinguishable from one that
+#: is working.
 FAN_TYPES = ("cpu_fan",)
 
 

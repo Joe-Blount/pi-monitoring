@@ -590,7 +590,8 @@ def build_parser():
         dest="shedding_action", required=True)
     shedding_sub.add_parser("on", help="let tiers shed loads as usual")
     shedding_sub.add_parser(
-        "off", help="hold every load on unless its floor fires")
+        "off", help="hold every shed load on unless its floor fires; a "
+                    "CPU fan still follows its temperature")
     shedding_sub.add_parser(
         "status", help="whether shedding is on and any override's expiry")
 

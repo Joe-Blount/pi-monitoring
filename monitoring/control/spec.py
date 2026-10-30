@@ -37,7 +37,7 @@ SCHEDULE_TYPES = ("clock", "solar", "never")
 #: Events a solar window may be measured from.
 SOLAR_EVENTS = ("sunrise", "sunset")
 
-#: Keys a driven load may carry. Deliberately only the ones something reads.
+#: Keys a ladder load may carry. Deliberately only the ones something reads.
 #:
 #: `readback` and `on_stale_data` are specified in the node files and nothing
 #: acts on either yet, so they are absent here and a load carrying one is

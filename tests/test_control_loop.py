@@ -581,25 +581,49 @@ FAN = {"type": "cpu_fan", "enabled": True, "control_pin": 24,
        "stale_after": "2m", "run_above_f": 165, "stop_below_f": 145}
 
 
-def test_the_cpu_fan_pin_follows_the_chip_temperature(tmp_path):
+def fan_loop(tmp_path, world, fan=FAN):
+    """A loop driving one CPU fan, with time and the reading held by the
+    test. A missing temperature is a host reading with no field."""
     pin = relay.Pretend(24, relay.ENERGIZE_TO_CONNECT)
-    world = {"temp": 170.0}
+    fields = lambda: ({} if world["temp"] is None
+                      else {"cpu_temp_f": world["temp"]})
     machine = loop.Loop(
-        FakeNode({"cpu_fan": FAN}, devices=("host",)), LOCATION, ZONE,
+        FakeNode({"cpu_fan": fan}, devices=("host",)), LOCATION, ZONE,
         relays={"cpu_fan": pin},
         now=lambda: datetime.datetime(2026, 6, 21, 12, tzinfo=ZONE),
-        monotonic=lambda: 0.0,
+        monotonic=lambda: world.get("mono", 0.0),
         trust=lambda high_water=None: clock.Trust(True, "under test"),
-        readings=lambda: {"host": {"fields": {"cpu_temp_f": world["temp"]},
-                                   "age_seconds": 1.0}},
+        readings=lambda: {"host": {"fields": fields(), "age_seconds": 1.0}},
         switches=lambda: {"shedding_enabled": True, "loads": {}},
         state_path=str(tmp_path / "state.json"),
         published_path=str(tmp_path / "published.json"),
         high_water_path=str(tmp_path / "hw.json"),
         publish=lambda _path, _data: None, boot=BOOT)
+    return machine, pin
+
+
+def test_the_cpu_fan_pin_follows_the_chip_temperature(tmp_path):
+    world = {"temp": 170.0}
+    machine, pin = fan_loop(tmp_path, world)
     machine.once()
     world["temp"] = 155.0
     machine.once()
     world["temp"] = 140.0
     machine.once()
     assert pin.levels == [True, True, False]
+
+
+def test_a_start_before_the_first_temperature_never_energizes_a_cold_fan(
+        tmp_path):
+    """After a reboot the controller's first pass usually beats the host
+    driver's first poll. The fan must stay off through that pass and through
+    the cold readings that follow, with the timers in force."""
+    world = {"temp": None, "mono": 0.0}
+    machine, pin = fan_loop(tmp_path, world,
+                            dict(FAN, min_run="2m", min_off="2m"))
+    machine.once()
+    world["temp"] = 100.0
+    for mono in (30.0, 60.0, 90.0, 120.0):
+        world["mono"] = mono
+        machine.once()
+    assert pin.levels and True not in pin.levels

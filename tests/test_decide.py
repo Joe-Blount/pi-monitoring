@@ -1596,17 +1596,38 @@ def test_between_the_bounds_with_nothing_before_it_the_fan_stays_off():
 
 @pytest.mark.parametrize("temp,age", [(None, 1.0), (180.0, 121.0),
                                       (float("nan"), 1.0)])
-def test_without_a_fresh_temperature_the_fan_runs(temp, age):
-    decision, _ = fan(temp, age=age)
+def test_a_fan_that_has_had_a_reading_runs_without_a_fresh_one(temp, age):
+    _, state = fan(120.0)
+    decision, _ = fan(temp, age=age, state=state)
     assert decision.connected
     assert decision.reason_code == decide.NO_READING
     assert decision.decided_on is None
 
 
+@pytest.mark.parametrize("temp,age", [(None, 1.0), (180.0, 121.0)])
+def test_a_fan_that_has_never_had_a_reading_stays_off(temp, age):
+    """The state the pin is already in. Deciding on would start the run
+    timer on a drive that never went out, and the first cold reading would
+    then be held on by it."""
+    decision, _ = fan(temp, age=age)
+    assert not decision.connected
+    assert decision.reason_code == decide.NO_READING
+    assert decision.decided_on is None
+
+
 def test_a_fan_that_ran_without_a_reading_keeps_running_inside_the_band():
-    _, state = fan(None)
+    _, state = fan(120.0)
+    _, state = fan(None, state=state)
     decision, _ = fan(155.0, state=state)
     assert decision.connected
+
+
+def test_a_cold_first_reading_after_a_start_with_none_is_not_held_on():
+    timed = dict(FAN, min_run=120.0, min_off=120.0)
+    _, state = fan(None, spec=timed, mono=0.0)
+    decision, _ = fan(100.0, spec=timed, state=state, mono=30.0)
+    assert not decision.connected
+    assert decision.reason_code == decide.THERMAL
 
 
 @pytest.mark.parametrize("force,running", [("off", False), ("on", True)])
