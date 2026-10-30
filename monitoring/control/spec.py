@@ -23,12 +23,14 @@ from . import relay
 #: Load types a controller will drive. Anything else declared is refused at
 #: load time rather than skipped at run time, because a load the file says is
 #: enabled and nothing drives is indistinguishable from one that works.
-DRIVEN_TYPES = ("dc_branch",)
+DRIVEN_TYPES = ("dc_branch", "cpu_fan")
 
 #: Declared, specified, and deliberately not driven yet. An enabled load of
-#: this type is refused: its thresholds are placeholders pending measurement,
-#: and it is the only load here that can flood a field.
-DEFERRED_TYPES = ("sequenced_ac",)
+#: one of these types is refused. The irrigation sequence waits on thresholds
+#: that are placeholders pending measurement, and it is the only load here
+#: that can flood a field. The vent fan waits on a decision that compares two
+#: sensors, which nothing here makes yet.
+DEFERRED_TYPES = ("sequenced_ac", "vent_fan")
 
 SCHEDULE_TYPES = ("clock", "solar", "never")
 
@@ -44,6 +46,12 @@ SOLAR_EVENTS = ("sunrise", "sunset")
 #: They go back in alongside the code that honours them.
 LOAD_KEYS = {"type", "enabled", "control_pin", "polarity",
              "shed_ladder", "min_run", "min_off"}
+
+#: Keys a CPU fan may carry. Its own set, because it shares nothing with a
+#: ladder but the relay and the timers.
+CPU_FAN_KEYS = {"type", "enabled", "control_pin", "polarity", "source",
+                "stale_after", "run_above_f", "stop_below_f", "min_run",
+                "min_off"}
 
 #: Keys the control block itself may carry. Owned by the loop rather than by
 #: a load, and listed so a misspelled loop_interval is refused rather than
@@ -198,8 +206,9 @@ def _source(where, raw, devices):
     if raw["device"] not in devices:
         _fail(where, "names device %r, which this node does not declare, or "
                      "which is declared and disabled. Either way nothing will "
-                     "ever write a reading for it, so no tier would latch and "
-                     "the controller would run and do nothing. Known: %s"
+                     "ever write a reading for it, so nothing would ever "
+                     "inform a decision and the controller would run and do "
+                     "nothing. Known: %s"
                      % (raw["device"], ", ".join(sorted(devices)) or "none"))
     return {"device": raw["device"], "field": raw["field"]}
 
@@ -365,6 +374,30 @@ def _ladder(where, raw, devices):
     }
 
 
+def _fan(where, raw, devices):
+    """A CPU fan's source and its two bounds.
+
+    Two bounds, not one threshold, and strictly apart. A fan switched at a
+    single temperature runs for one poll and stops for the next while the
+    chip sits on that number.
+    """
+    for key in ("source", "stale_after", "run_above_f", "stop_below_f"):
+        if key not in raw:
+            _fail(where, "needs %s" % key)
+    run = _number(where, raw["run_above_f"], "run_above_f")
+    stop = _number(where, raw["stop_below_f"], "stop_below_f")
+    if run <= stop:
+        _fail(where, "run_above_f (%g) must be above stop_below_f (%g), or "
+                     "the fan chatters at one temperature" % (run, stop))
+    return {
+        "source": _source(where + " source", raw["source"], devices),
+        "stale_after": _duration(where, raw["stale_after"], "stale_after",
+                                 allow_zero=False),
+        "run_above_f": run,
+        "stop_below_f": stop,
+    }
+
+
 def load_spec(name, raw, devices):
     """Parse one load. Returns the spec a decision can act on."""
     where = "load %s" % name
@@ -389,7 +422,7 @@ def load_spec(name, raw, devices):
         _fail(where, "type %r is not a type this controller drives; known: %s"
                      % (kind, ", ".join(DRIVEN_TYPES + DEFERRED_TYPES)))
 
-    _only(where, raw, LOAD_KEYS)
+    _only(where, raw, CPU_FAN_KEYS if kind == "cpu_fan" else LOAD_KEYS)
     if not _enabled(where, raw.get("enabled", True)):
         return None
 
@@ -403,19 +436,23 @@ def load_spec(name, raw, devices):
                      "controller leaves behind and there is no safe default"
                      % ", ".join(relay.POLARITIES))
 
-    if "shed_ladder" not in raw:
-        _fail(where, "needs a shed_ladder")
-
-    return {
+    out = {
         "name": name,
         "type": kind,
         "control_pin": pin,
         "polarity": polarity,
         "min_run": _duration(where, raw.get("min_run", 0), "min_run"),
         "min_off": _duration(where, raw.get("min_off", 0), "min_off"),
-        "shed_ladder": _ladder(where + " shed_ladder", raw["shed_ladder"],
-                               devices),
     }
+    if kind == "cpu_fan":
+        out.update(_fan(where, raw, devices))
+        return out
+
+    if "shed_ladder" not in raw:
+        _fail(where, "needs a shed_ladder")
+    out["shed_ladder"] = _ladder(where + " shed_ladder", raw["shed_ladder"],
+                                 devices)
+    return out
 
 
 def load_control(node):

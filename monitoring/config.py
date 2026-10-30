@@ -24,7 +24,8 @@ MODES = ("poll", "resident")
 #: string. A typo there does not fail: it yields no loads, and every test about
 #: that load passes by finding nothing to check. The load itself would also
 #: never be driven.
-LOAD_TYPES = ("dc_branch", "sequenced_ac", "battery_heating", "vent_fan")
+LOAD_TYPES = ("dc_branch", "sequenced_ac", "battery_heating", "vent_fan",
+              "cpu_fan")
 
 REQUIRED_TOP_LEVEL = ("site", "node", "measurement")
 

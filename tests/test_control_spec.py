@@ -522,7 +522,94 @@ def test_a_disabled_deferred_load_is_accepted_and_not_driven():
 
 
 def test_a_load_type_nothing_drives_is_refused():
-    assert "not a type this controller drives" in refused(type="vent_fan")
+    assert "not a type this controller drives" in refused(
+        type="battery_heating")
+
+
+def test_a_vent_fan_is_specified_and_not_driven():
+    assert spec.load_spec("vent_fan", {"type": "vent_fan", "enabled": False,
+                                       "inside": {}}, {"box"}) is None
+    assert "enabled: false" in refused({"type": "vent_fan"})
+
+
+# -- a CPU fan --------------------------------------------------------------
+
+FAN = {
+    "type": "cpu_fan",
+    "enabled": True,
+    "control_pin": 24,
+    "polarity": "energize_to_connect",
+    "source": {"device": "host", "field": "cpu_temp_f"},
+    "stale_after": "2m",
+    "run_above_f": 165,
+    "stop_below_f": 145,
+    "min_run": "2m",
+    "min_off": "2m",
+}
+
+
+def parse_fan(**changes):
+    merged = dict(FAN)
+    merged.update(changes)
+    return spec.load_spec("cpu_fan", merged, {"host"})
+
+
+def fan_refused(**changes):
+    with pytest.raises(spec.SpecError) as raised:
+        parse_fan(**changes)
+    return str(raised.value)
+
+
+def test_a_cpu_fan_parses_to_what_its_decision_reads():
+    assert parse_fan() == {
+        "name": "cpu_fan", "type": "cpu_fan", "control_pin": 24,
+        "polarity": "energize_to_connect", "min_run": 120.0,
+        "min_off": 120.0,
+        "source": {"device": "host", "field": "cpu_temp_f"},
+        "stale_after": 120.0, "run_above_f": 165.0, "stop_below_f": 145.0}
+
+
+@pytest.mark.parametrize("key", ["source", "stale_after", "run_above_f",
+                                 "stop_below_f"])
+def test_a_cpu_fan_missing_a_required_key_is_refused(key):
+    merged = dict(FAN)
+    del merged[key]
+    with pytest.raises(spec.SpecError) as raised:
+        spec.load_spec("cpu_fan", merged, {"host"})
+    assert "needs %s" % key in str(raised.value)
+
+
+@pytest.mark.parametrize("run,stop", [(150, 150), (140, 150)])
+def test_a_cpu_fan_whose_bounds_do_not_leave_a_gap_is_refused(run, stop):
+    assert "must be above stop_below_f" in fan_refused(
+        run_above_f=run, stop_below_f=stop)
+
+
+def test_a_cpu_fan_with_an_unknown_key_is_refused():
+    assert "unknown key(s) shed_ladder" in fan_refused(shed_ladder={})
+
+
+def test_a_cpu_fan_reading_a_device_nothing_writes_is_refused():
+    with pytest.raises(spec.SpecError) as raised:
+        spec.load_spec("cpu_fan", FAN, {"bms"})
+    assert "names device 'host'" in str(raised.value)
+
+
+def test_a_cpu_fan_with_no_staleness_limit_is_refused():
+    assert "must be positive" in fan_refused(stale_after="0s")
+
+
+def test_a_cpu_fan_threshold_that_is_not_a_number_is_refused():
+    assert "run_above_f must be a number" in fan_refused(run_above_f="hot")
+
+
+@pytest.mark.parametrize("key", ["control_pin", "polarity"])
+def test_a_cpu_fan_without_its_relay_is_refused(key):
+    merged = dict(FAN)
+    del merged[key]
+    with pytest.raises(spec.SpecError) as raised:
+        spec.load_spec("cpu_fan", merged, {"host"})
+    assert key in str(raised.value)
 
 
 def test_a_disabled_load_is_not_returned():
