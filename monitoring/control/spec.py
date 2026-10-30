@@ -158,7 +158,13 @@ def _enabled(where, value):
 def _number(where, value, what):
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         _fail(where, "%s must be a number, found %r" % (what, value))
-    return float(value)
+    value = float(value)
+    # YAML spells these .nan and .inf. Every comparison against a NaN is
+    # false, so a bound that is one passes every order check below and then
+    # never trips.
+    if value != value or value in (float("inf"), float("-inf")):
+        _fail(where, "%s must be finite, found %r" % (what, value))
+    return value
 
 
 def _minutes(where, value, what):

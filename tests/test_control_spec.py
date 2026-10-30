@@ -599,6 +599,23 @@ def test_a_cpu_fan_with_no_staleness_limit_is_refused():
     assert "must be positive" in fan_refused(stale_after="0s")
 
 
+@pytest.mark.parametrize("key", ["run_above_f", "stop_below_f"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"),
+                                   float("-inf")])
+def test_a_cpu_fan_bound_that_is_not_finite_is_refused(key, value):
+    """Every comparison against a NaN is false, so a fan with one as its
+    upper bound never runs and a file saying it does reads as fine."""
+    assert "finite" in fan_refused(**{key: value})
+
+
+def test_a_floor_bound_that_is_not_finite_is_refused():
+    floor = {"sources": [{"device": "bms", "field": "cell_min_volts",
+                          "shed_below": float("nan"), "restore_above": 3.25}]}
+    with pytest.raises(spec.SpecError) as raised:
+        with_ladder(floor=floor)
+    assert "finite" in str(raised.value)
+
+
 def test_a_cpu_fan_threshold_that_is_not_a_number_is_refused():
     assert "run_above_f must be a number" in fan_refused(run_above_f="hot")
 

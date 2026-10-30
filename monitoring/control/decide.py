@@ -676,6 +676,14 @@ def decide(local_now, mono_now, clock_trusted, readings, switches,
             load_state = dict(prior)
             operator = False
 
+        if spec["type"] in FAN_TYPES and not load_state.get("informed"):
+            # Nothing reaches the pin before a reading informs a decision,
+            # so a timer started here would time a drive that never went
+            # out, and hold the first real decision against it.
+            decisions[name] = decision
+            new_state[name] = load_state
+            continue
+
         decision, load_state = _hold(decision, spec, mono_now, load_state,
                                      operator)
         decisions[name] = decision

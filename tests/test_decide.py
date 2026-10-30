@@ -1655,3 +1655,30 @@ def test_the_minimum_run_time_holds_the_fan_on():
     assert decision.reason_code == decide.HELD_BY_TIMER
     decision, _ = fan(140.0, spec=timed, state=state, mono=121.0)
     assert not decision.connected
+
+
+def test_exactly_the_lower_bound_stops_a_running_fan():
+    _, state = fan(170.0)
+    decision, _ = fan(145.0, state=state)
+    assert not decision.connected
+
+
+def test_a_hot_first_reading_after_a_start_with_none_runs_the_fan_at_once():
+    timed = dict(FAN, min_run=120.0, min_off=120.0)
+    _, state = fan(None, spec=timed, mono=0.0)
+    decision, _ = fan(170.0, spec=timed, state=state, mono=30.0)
+    assert decision.connected
+    assert decision.reason_code == decide.THERMAL
+
+
+def test_an_override_before_the_first_reading_starts_no_timer():
+    """Nothing reaches the pin before a reading informs a decision, so an
+    override that comes and goes in that time has moved nothing, and the
+    first cold reading is not held on by it."""
+    timed = dict(FAN, min_run=120.0, min_off=120.0)
+    forced = {"shedding_enabled": True,
+              "loads": {"cpu_fan": {"force": "on", "expires_epoch": LATER}}}
+    _, state = fan(None, spec=timed, switches=forced, mono=0.0)
+    decision, _ = fan(100.0, spec=timed, state=state, mono=30.0)
+    assert not decision.connected
+    assert decision.reason_code == decide.THERMAL
