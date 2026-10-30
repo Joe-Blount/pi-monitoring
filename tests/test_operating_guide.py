@@ -302,6 +302,10 @@ def _pin_sources():
             downstairs["control"]["loads"]["irrigation"]["inverter"]["control_pin"],
         ("blind1 / downstairs", "irrigation: pump"):
             downstairs["control"]["loads"]["irrigation"]["pump"]["control_pin"],
+        ("blind1 / downstairs", "cpu fan"):
+            downstairs["control"]["loads"]["cpu_fan"]["control_pin"],
+        ("blind1 / upstairs", "cpu fan"):
+            upstairs["control"]["loads"]["cpu_fan"]["control_pin"],
         ("blind1 / upstairs", "vent fan"):
             upstairs["control"]["loads"]["vent_fan"]["control_pin"],
         ("garage", "battery heating"):

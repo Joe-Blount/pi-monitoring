@@ -3,11 +3,13 @@
 # NOT BUILT YET. This machine does not exist. The file is here so the schema
 # can be reviewed and so the design has somewhere concrete to live.
 #
-# Control is commissioned in place rather than on a bench, which is how
-# everything else here was built. What makes that reasonable is that the
-# run-time cap and the guard are in force from the first live run, so a relay
-# that sticks on is bounded rather than unbounded. Have those working before
-# the first live test.
+# The Pi, its relays and the controller are proven on a bench rig in their
+# box before the box goes to the blind: the camera branch and the CPU fan are
+# driven by the controller there, and the irrigation relays are clicked by
+# hand. The pump sequence itself is commissioned in place. What makes that
+# reasonable is that its run-time cap and its guard are in force from the
+# first live run, so a relay that sticks on is bounded rather than unbounded.
+# Have those working before the first live test.
 #
 # Two questions that a bench would have answered are software rather than
 # hardware, and are settled remotely with nothing wired:
@@ -251,6 +253,32 @@ control:
             # shedding. The floor above and the pack's own cutoff are what
             # actually stop the discharge.
             schedule: {type: never}
+
+    # A small 12 V fan aimed at the Pi, on a relay channel of its own. The
+    # relay switches the battery's 12 V straight to the fan.
+    cpu_fan:
+      type: cpu_fan
+      enabled: true
+      control_pin: 24               # physical 18
+
+      # Energize to run. A dead Pi needs no cooling, so the fan stays off.
+      polarity: energize_to_connect
+
+      # The chip temperature the host driver reads. With no fresh reading
+      # the fan runs: it costs a fraction of an amp, and a chip nobody can
+      # see is the one that throttles.
+      source: {device: host, field: cpu_temp_f}
+      stale_after: 2m
+
+      # The firmware throttles hard at 185 F. On 20 F below that, off 20 F
+      # below that, and between them the fan does what it last did. Some
+      # boards in this family also step the clock down at 140 F; run
+      # `vcgencmd get_config temp_soft_limit` on the machine, and if it
+      # answers 60, lower both bounds below 140.
+      run_above_f: 165
+      stop_below_f: 145
+      min_run: 2m
+      min_off: 2m
 
     irrigation:
       type: sequenced_ac

@@ -288,13 +288,15 @@ never be the reason a site stays dark.
 | blind1 / downstairs | cameras | 23 | 16 | running (normally closed) |
 | blind1 / downstairs | irrigation: inverter | 25 | 22 | off (normally open) |
 | blind1 / downstairs | irrigation: pump | 22 | 15 | off (normally open) |
+| blind1 / downstairs | cpu fan | 24 | 18 | off (normally open) |
+| blind1 / upstairs | cpu fan | 24 | 18 | off (normally open) |
 | blind1 / upstairs | vent fan | 26 | 37 | off (normally open) |
 | garage | battery heating | 24 | not recorded | off (normally open) |
 
-Of these, only `cameras` is a load type the controller currently drives.
-Irrigation is declared and deliberately held back until it is enabled in the
-node file. The vent fan and battery heating are declared for their relays and
-wiring, but are not yet a load type this controller drives. `blind1 /
+Of these, `cameras` and the two CPU fans are load types the controller
+drives. Irrigation and the vent fan are declared and deliberately held back,
+disabled in the node file. Battery heating is declared for its relay and
+wiring, but is not yet a load type this controller drives. `blind1 /
 downstairs` itself is not built yet; its pin assignments are the plan for
 when it is.
 

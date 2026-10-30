@@ -329,7 +329,8 @@ def test_each_load_is_its_own_point_tagged_with_the_load(tmp_path):
     generic: a load added to the node file needs no panel edited."""
     points = reader(run_the_real_loop(tmp_path, 24.0),
                     mono=3 * PAST_THE_TIMERS).read()
-    assert [one.tags for one in points] == [{}, {"load": "cameras"}]
+    assert [one.tags for one in points] == [
+        {}, {"load": "cameras"}, {"load": "cpu_fan"}]
 
 
 def test_the_floor_owner_names_the_shipped_source_that_tripped_it(tmp_path):

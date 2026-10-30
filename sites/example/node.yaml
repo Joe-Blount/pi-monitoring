@@ -603,3 +603,31 @@ control:
       # disconnect in the circuit as a backstop, and put a mechanical
       # over-temperature cutout in series with the heater. Software must not
       # be the only thing between a heater and a battery.
+
+    # -- CPU fan ---------------------------------------------------------
+    # A small 12 V fan aimed at the Pi, decided on the chip temperature
+    # alone. Every key below is required except enabled, min_run and min_off,
+    # which default to true, zero and zero.
+    cpu_fan:
+      type: cpu_fan
+      enabled: true
+      control_pin: 27               # physical 13
+
+      # Energize to run. A dead Pi needs no cooling, so the fan stays off.
+      polarity: energize_to_connect
+
+      # The chip temperature the host driver reads. With no fresh reading
+      # the fan runs: it costs a fraction of an amp, and a chip nobody can
+      # see is the one that throttles.
+      source: {device: host, field: cpu_temp_f}
+      stale_after: 2m
+
+      # The firmware throttles hard at 185 F. On 20 F below that, off 20 F
+      # below that, and between them the fan does what it last did. Some
+      # boards in this family also step the clock down at 140 F; run
+      # `vcgencmd get_config temp_soft_limit` on the machine, and if it
+      # answers 60, lower both bounds below 140.
+      run_above_f: 165
+      stop_below_f: 145
+      min_run: 2m
+      min_off: 2m

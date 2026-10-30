@@ -260,11 +260,12 @@ block including the charge setpoints is unmapped. Each driver's docstring
 separates what was confirmed against an independent reading from what is
 inferred, which is worth reading before trusting a field.
 
-Control: written and tested for one load type, a DC branch shed on the
-battery's state of charge with a floor beneath it. The controller is installed
-at both sites, disabled, because neither live node declares a load of that
-type. The other load types are specified in the node files and refused by the
-controller until a decision for them is written. The pump sequence is
+Control: written and tested for two load types. One is a DC branch shed on
+the battery's state of charge with a floor beneath it. The other is a fan
+aimed at the Pi, run on the chip temperature with a band between on and off.
+The controller is installed at both sites, disabled. The other load types are
+specified in the node files and refused by the controller until a decision
+for them is written. The pump sequence is
 commissioned in place rather than on a bench, with its run-time cap and its
 guard in force from the first live run, so that a relay which sticks on is
 bounded rather than unbounded.

@@ -571,3 +571,35 @@ def test_a_dry_run_touches_no_pin(tmp_path):
     assert pin.levels == []
     assert published["loads"]["cameras"]["powered"] == 0.0, (
         "a dry run must still say what it would have done")
+
+
+# -- a CPU fan ----------------------------------------------------------------
+
+FAN = {"type": "cpu_fan", "enabled": True, "control_pin": 24,
+       "polarity": "energize_to_connect",
+       "source": {"device": "host", "field": "cpu_temp_f"},
+       "stale_after": "2m", "run_above_f": 165, "stop_below_f": 145}
+
+
+def test_the_cpu_fan_pin_follows_the_chip_temperature(tmp_path):
+    pin = relay.Pretend(24, relay.ENERGIZE_TO_CONNECT)
+    world = {"temp": 170.0}
+    machine = loop.Loop(
+        FakeNode({"cpu_fan": FAN}, devices=("host",)), LOCATION, ZONE,
+        relays={"cpu_fan": pin},
+        now=lambda: datetime.datetime(2026, 6, 21, 12, tzinfo=ZONE),
+        monotonic=lambda: 0.0,
+        trust=lambda high_water=None: clock.Trust(True, "under test"),
+        readings=lambda: {"host": {"fields": {"cpu_temp_f": world["temp"]},
+                                   "age_seconds": 1.0}},
+        switches=lambda: {"shedding_enabled": True, "loads": {}},
+        state_path=str(tmp_path / "state.json"),
+        published_path=str(tmp_path / "published.json"),
+        high_water_path=str(tmp_path / "hw.json"),
+        publish=lambda _path, _data: None, boot=BOOT)
+    machine.once()
+    world["temp"] = 155.0
+    machine.once()
+    world["temp"] = 140.0
+    machine.once()
+    assert pin.levels == [True, True, False]

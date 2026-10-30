@@ -338,7 +338,7 @@ def test_each_node_of_a_site_is_tagged_distinctly(site):
 #: Counts include the example site, which documents every option and so
 #: declares one of most things.
 EXPECTED_LOADS = {"battery_heating": 2, "vent_fan": 1,
-                  "dc_branch": 2, "sequenced_ac": 2}
+                  "dc_branch": 2, "sequenced_ac": 2, "cpu_fan": 3}
 
 
 def loads_of_type(kind):
@@ -686,7 +686,7 @@ def test_the_shipped_camera_ladder_is_the_one_that_was_agreed():
     behaving differently from what anybody decided, on a machine an hour
     away, and nothing else in the suite reads this file's control block."""
     loads = enabled_everywhere(REPO / "sites" / "blind1" / "downstairs.yaml")
-    assert sorted(loads) == ["cameras"], (
+    assert sorted(loads) == ["cameras", "cpu_fan"], (
         "irrigation must stay declared and undriven")
 
     cameras = loads["cameras"]
@@ -726,6 +726,36 @@ def test_the_shipped_camera_ladder_is_the_one_that_was_agreed():
         "second opinion, because the battery radio goes quiet for minutes")
     assert (floor[0]["shed_below"], floor[0]["restore_above"]) == (3.15, 3.25)
     assert (floor[1]["shed_below"], floor[1]["restore_above"]) == (12.6, 13.0)
+
+
+BLIND_NODES = [REPO / "sites" / "blind1" / name
+               for name in ("upstairs.yaml", "downstairs.yaml")]
+
+
+@pytest.mark.parametrize("path", BLIND_NODES, ids=lambda path: path.stem)
+def test_each_blind_pi_has_the_cpu_fan_that_was_agreed(path):
+    """The same block on both machines, so the two box builds are wired
+    alike: one relay channel on GPIO24, on at 165 F and off at 145 F."""
+    fan = enabled_everywhere(path)["cpu_fan"]
+    assert fan["control_pin"] == 24
+    assert fan["source"] == {"device": "host", "field": "cpu_temp_f"}
+    assert (fan["run_above_f"], fan["stop_below_f"]) == (165.0, 145.0)
+    assert fan["stale_after"] == 120.0
+
+
+def test_a_cpu_fan_fails_off():
+    """A dead Pi needs no cooling."""
+    for label, spec in loads_of_type("cpu_fan"):
+        assert spec.get("polarity") == "energize_to_connect", label
+
+
+def test_the_upstairs_control_block_is_accepted_as_it_stands():
+    """Nothing forced. The vent fan is specified and not driven, and the CPU
+    fan reads a device the node polls, so the block can run once control is
+    switched on."""
+    loads = control_spec.load_control(
+        load(REPO / "sites" / "blind1" / "upstairs.yaml"))
+    assert sorted(loads) == ["cpu_fan"]
 
 
 def test_the_camera_windows_stay_inside_the_tier_above_them_all_year():
