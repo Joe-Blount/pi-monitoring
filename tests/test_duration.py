@@ -11,7 +11,9 @@ def test_understood_durations(text, expected):
     assert duration.seconds(text) == expected
 
 
-@pytest.mark.parametrize("text", ["", "soon", "30x", "m", True, None, ["30s"]])
+@pytest.mark.parametrize("text", ["", "soon", "30x", "m", True, None, ["30s"],
+                                  float("nan"), float("inf"), float("-inf"),
+                                  "nans", "infm", "-infh"])
 def test_refused_durations(text):
     """A silently wrong interval is worse than a refusal to start."""
     with pytest.raises(duration.DurationError):

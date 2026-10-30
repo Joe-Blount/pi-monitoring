@@ -11,6 +11,19 @@ class DurationError(ValueError):
     """A duration string that cannot be understood."""
 
 
+def _finite(parsed, what, value):
+    """Refuse NaN and infinity, which float() accepts and YAML can write.
+
+    Every comparison against a NaN is false, so a staleness limit that is
+    one would let a reading of any age through, and a timer that is one
+    would never hold.
+    """
+    if parsed != parsed or parsed in (float("inf"), float("-inf")):
+        raise DurationError("%s must be a finite duration, found %r"
+                            % (what, value))
+    return parsed
+
+
 def seconds(value, what="duration"):
     """Return `value` as seconds.
 
@@ -21,7 +34,7 @@ def seconds(value, what="duration"):
     if isinstance(value, bool):
         raise DurationError("%s must be a duration, not a boolean" % what)
     if isinstance(value, (int, float)):
-        return float(value)
+        return _finite(float(value), what, value)
     if not isinstance(value, str):
         raise DurationError("%s must be a duration string such as 30s" % what)
 
@@ -30,9 +43,10 @@ def seconds(value, what="duration"):
         if text.endswith(suffix):
             number = text[: -len(suffix)].strip()
             try:
-                return float(number) * UNITS[suffix]
+                parsed = float(number) * UNITS[suffix]
             except ValueError:
                 break
+            return _finite(parsed, what, value)
     raise DurationError(
         "%s: cannot read %r as a duration; use a number with one of %s"
         % (what, value, ", ".join(sorted(UNITS)))
