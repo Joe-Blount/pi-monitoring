@@ -676,10 +676,12 @@ def decide(local_now, mono_now, clock_trusted, readings, switches,
             load_state = dict(prior)
             operator = False
 
-        if spec["type"] in FAN_TYPES and not load_state.get("informed"):
+        if (spec["type"] in FAN_TYPES and not load_state.get("informed")
+                and not load_state.get("applied")):
             # Nothing reaches the pin before a reading informs a decision,
             # so a timer started here would time a drive that never went
-            # out, and hold the first real decision against it.
+            # out, and hold the first real decision against it. A pin that
+            # has been driven is timed whatever the record of readings says.
             decisions[name] = decision
             new_state[name] = load_state
             continue

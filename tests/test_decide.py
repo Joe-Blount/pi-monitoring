@@ -1682,3 +1682,16 @@ def test_an_override_before_the_first_reading_starts_no_timer():
     decision, _ = fan(100.0, spec=timed, state=state, mono=30.0)
     assert not decision.connected
     assert decision.reason_code == decide.THERMAL
+
+
+def test_a_fan_pin_driven_before_its_first_recorded_reading_is_timed():
+    """A relay fault can save the pins a pass drove without the rest of the
+    pass. The fan then restarts with its pin driven and no reading on
+    record, and the off it is driven to must still be held by the minimum
+    off time."""
+    timed = dict(FAN, min_run=120.0, min_off=120.0)
+    _, state = fan(None, spec=timed, mono=0.0,
+                   state={"cpu_fan": {"applied": True, "level": True}})
+    decision, _ = fan(170.0, spec=timed, state=state, mono=20.0)
+    assert not decision.connected
+    assert decision.reason_code == decide.HELD_BY_TIMER
