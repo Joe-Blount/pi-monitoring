@@ -90,8 +90,8 @@ def open_output(pin, initial_value=False):
     `active_high` is stated rather than left to the library's default. It is
     the third place polarity can invert, and the most dangerous, because it
     inverts the state the pin is claimed in as well as every level after:
-    with it wrong, claiming the camera relay energizes it, cutting the
-    recorder, and then every later decision drives the opposite way.
+    with it wrong, claiming a camera relay energizes it, cutting that
+    branch, and then every later decision drives the opposite way.
     """
     os.environ["GPIOZERO_PIN_FACTORY"] = PIN_FACTORY
     try:

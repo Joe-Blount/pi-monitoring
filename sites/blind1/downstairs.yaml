@@ -4,11 +4,12 @@
 # can be reviewed and so the design has somewhere concrete to live.
 #
 # The Pi, its relays and the controller are proven on a bench rig in their
-# box before the box goes to the blind: the camera branch and the CPU fan are
-# driven by the controller there, and the irrigation relays are clicked by
-# hand. The pump sequence itself is commissioned in place. What makes that
-# reasonable is that its run-time cap and its guard are in force from the
-# first live run, so a relay that sticks on is bounded rather than unbounded.
+# box before the box goes to the blind: the three camera branches and the CPU
+# fan are driven by the controller there, and the irrigation relays are
+# clicked by hand. The pump sequence itself is commissioned in place. What
+# makes that reasonable is that its run-time cap and its guard are in force
+# from the first live run, so a relay that sticks on is bounded rather than
+# unbounded.
 # Have those working before the first live test.
 #
 # Two questions that a bench would have answered are software rather than
@@ -246,11 +247,13 @@ control:
                 - {from: [sunset, -2h], to: [sunset, 1h]}
 
           - below_pct: 10
-            # Buys runway rather than safety. With this branch off, the Pi,
-            # the charge controller and the battery radios still draw, and
-            # none of that can be shed because one of them is doing the
-            # shedding. The floor above and the pack's own cutoff are what
-            # actually stop the discharge.
+            # Buys runway rather than safety. With both camera groups off,
+            # the recorder still draws until it sheds at 5 percent, and the
+            # Pi, the network gear, the charge controller and the battery
+            # radios draw after that. None of those can be shed, because the
+            # controller needs them to shed anything and to say so. The
+            # floor above and the pack's own cutoff are what actually stop
+            # the discharge.
             schedule: {type: never}
 
     # The four cameras further out, on one cable from their own PoE

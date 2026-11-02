@@ -207,10 +207,10 @@ def _step_floor(ladder, readings, was_latched, latched_by):
     #
     # Without it the load reconnects for exactly one pass and sheds again on
     # the next, because the entry loop would then see that source and latch.
-    # One pass is one loop interval, and on the camera branch that is a
-    # recorder power cycle onto a bank the pack source says is below its
-    # floor. The timers cannot absorb it either, since the floor is exempt
-    # from them.
+    # One pass is one loop interval, and on a camera or recorder branch that
+    # is a power cycle onto a bank the pack source says is below its floor.
+    # The timers cannot absorb it either, since the floor is exempt from
+    # them.
     for key, (other, reading) in seen.items():
         if key == latched_by:
             continue
