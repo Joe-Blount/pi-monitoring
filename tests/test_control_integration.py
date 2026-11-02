@@ -200,6 +200,39 @@ def test_the_far_cameras_go_first_and_the_recorder_last(loads, suns, soc,
         assert decision.connected is expected, (load, decision.reason)
 
 
+def walk(loads, suns, start, steps):
+    """Run the decision a minute at a time from `start`, one step per
+    (soc, cell) pair, and return each minute's decisions."""
+    switches = {"shedding_enabled": True, "loads": {}}
+    state, out = {}, []
+    for minute, (soc, cell) in enumerate(steps):
+        readings = reading(soc, cell=cell)
+        for record in readings.values():
+            record["taken_at"] = float(minute)
+        decisions, state = decide.decide(
+            start + datetime.timedelta(minutes=minute), 60.0 * minute, True,
+            readings, switches, loads, state, suns)
+        out.append(decisions)
+    return out
+
+
+@pytest.mark.parametrize("steps", [
+    [(80.0 - 78.0 * minute / 1439, 3.30) for minute in range(1440)],
+    [(2.0 + 78.0 * minute / 1439, 3.30) for minute in range(1440)],
+], ids=["discharge", "recovery"])
+def test_the_recorder_is_running_whenever_a_camera_is(loads, suns, steps):
+    """On the battery's own path, a day's discharge from full to nearly
+    empty or a day's recovery: the recorder sheds after both camera groups
+    and comes back before them. A floor trip that clears within minutes can
+    break this for up to the recorder's off time, which the node file
+    accepts and explains."""
+    for minute, decisions in enumerate(walk(loads, suns, at(0), steps)):
+        if (decisions["cameras_far"].connected
+                or decisions["cameras_near"].connected):
+            assert decisions["nvr"].connected, (
+                minute, decisions["nvr"].reason)
+
+
 @pytest.mark.parametrize("soc,hour,minute,connected", [
     (55.0, 21, 59, True),
     (55.0, 5, 1, True),

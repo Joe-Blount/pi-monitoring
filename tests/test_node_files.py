@@ -763,8 +763,9 @@ def test_the_upstairs_control_block_is_accepted_as_it_stands():
 #: cameras' ladder above: the pin, and each tier's threshold and schedule
 #: type. The far cameras keep the near ones' windows at higher thresholds.
 OTHER_CAMERA_BRANCHES = {
-    "cameras_far": (27, [(60.0, "clock"), (40.0, "solar"), (20.0, "never")]),
-    "nvr": (16, [(5.0, "never")]),
+    "cameras_far": (27, [(60.0, "clock"), (40.0, "solar"), (20.0, "never")],
+                    (600.0, 1800.0)),
+    "nvr": (16, [(5.0, "never")], (600.0, 1800.0)),
 }
 
 
@@ -772,12 +773,12 @@ OTHER_CAMERA_BRANCHES = {
 def test_the_other_camera_branches_are_the_ones_that_were_agreed(name):
     loads = enabled_everywhere(REPO / "sites" / "blind1" / "downstairs.yaml")
     near, branch = loads["cameras_near"], loads[name]
-    pin, tiers = OTHER_CAMERA_BRANCHES[name]
+    pin, tiers, timers = OTHER_CAMERA_BRANCHES[name]
 
     assert branch["control_pin"] == pin
     assert branch["polarity"] == "energize_to_shed", (
         "a dead Pi must leave every camera branch running")
-    assert (branch["min_run"], branch["min_off"]) == (600.0, 1800.0)
+    assert (branch["min_run"], branch["min_off"]) == timers
 
     ladder = branch["shed_ladder"]
     assert [(tier["below_pct"], tier["schedule"]["type"])

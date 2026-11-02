@@ -254,10 +254,9 @@ control:
             schedule: {type: never}
 
     # The four cameras further out, on one cable from their own PoE
-    # injector. Lower priority than the near cameras, so the same windows
-    # are entered 10 to 15 points earlier: by the time the near cameras lose
-    # the night, these are down to dawn and dusk, and they are off before
-    # the near cameras go dark.
+    # injector. Lower priority than the near cameras, so each of the same
+    # windows is entered 10 to 15 points earlier, and they are off for good
+    # at 20 percent, before the near cameras go dark.
     cameras_far:
       type: dc_branch
       enabled: true
@@ -310,6 +309,14 @@ control:
       polarity: energize_to_shed
       min_run: 10m                    # a recorder should not be cycled
       min_off: 30m                    # repeatedly in either direction
+
+      # The off time is the recorder's own, started when it was shed, not
+      # when the cameras were. So after a floor trip that clears within
+      # minutes, a camera branch can come back before the recorder does and
+      # run for up to this long with nothing recording. That is accepted.
+      # Without the off time, a weak cell crossing the floor every few
+      # minutes would power cycle the recorder each time, which is the
+      # harder failure on its disk.
 
       shed_ladder:
         source: {device: bms, field: state_of_charge_pct}
