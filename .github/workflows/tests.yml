@@ -10,6 +10,12 @@
 # Two Python versions on purpose: 3.9 because that is what the oldest deployed
 # machine runs, and 3.11 because that is what the newest runs. A change that
 # only works on one of them is a change that breaks a site.
+#
+# Each runs in the official Python image for its version rather than on a
+# Python installed onto the runner. The runner's image moves on its own
+# schedule, and an installer that has no build for a version on it fails the
+# job before a test runs. The full images carry git, which the suite uses to
+# list tracked files.
 
 name: tests
 
@@ -25,14 +31,10 @@ jobs:
       fail-fast: false
       matrix:
         python: ["3.9", "3.11"]
+    container: python:${{ matrix.python }}
 
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-          cache: pip
 
       - name: install
         run: python -m pip install -e ".[dev]"
