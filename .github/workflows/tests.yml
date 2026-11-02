@@ -36,11 +36,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The checkout belongs to the runner's user and the container runs as
+      # root. actions/checkout trusts the directory only for its own git
+      # calls, in a temporary config, so after it git refuses the directory
+      # and the tests that list tracked files skip rather than run.
+      - name: trust the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: install
         run: python -m pip install -e ".[dev]"
 
+      # -rs prints the reason for each skip, so a test that skips here and
+      # runs on a laptop is visible in the log.
       - name: tests
-        run: python -m pytest -q
+        run: python -m pytest -q -rs
 
       - name: every committed node file is valid
         run: |
