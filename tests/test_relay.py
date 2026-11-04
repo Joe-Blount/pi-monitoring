@@ -74,7 +74,7 @@ def test_an_unknown_polarity_is_refused_rather_than_guessed():
     assert "dead controller" in str(raised.value)
 
     with pytest.raises(relay.RelayError):
-        relay.Relay(23, "backwards")
+        relay.Relay(23, "backwards", relay.HIGH)
 
 
 # -- the voltage on the pin -------------------------------------------------
@@ -93,7 +93,7 @@ def test_the_pin_carries_the_voltage_the_polarity_demands(pins, polarity,
     with that wrong `on()` drives the pin low and a double recording `on`
     and `off` sees nothing amiss.
     """
-    pin = relay.Relay(23, polarity)
+    pin = relay.Relay(23, polarity, relay.HIGH)
     pin.apply(connected)
     assert pin._device.pin.state is expected
     pin.close()
@@ -104,7 +104,7 @@ def test_claiming_a_pin_leaves_it_low_whatever_the_load(pins):
     the cameras that is the recorder cut every time the controller starts,
     which is what the normally closed wiring exists to prevent."""
     for polarity in relay.POLARITIES:
-        pin = relay.Relay(24, polarity)
+        pin = relay.Relay(24, polarity, relay.HIGH)
         pin._open()
         assert pin._device.pin.state is False, polarity
         pin.close()
@@ -125,9 +125,9 @@ def test_the_backend_is_requested_rather_than_inherited(monkeypatch):
 
 def test_a_pin_that_cannot_be_claimed_names_itself_and_the_pin(pins):
     """The message is read by somebody standing at a machine."""
-    taken = relay.Relay(25, relay.ENERGIZE_TO_SHED)
+    taken = relay.Relay(25, relay.ENERGIZE_TO_SHED, relay.HIGH)
     taken._open()
-    second = relay.Relay(25, relay.ENERGIZE_TO_SHED)
+    second = relay.Relay(25, relay.ENERGIZE_TO_SHED, relay.HIGH)
     with pytest.raises(relay.RelayError) as raised:
         second._open()
     assert "GPIO25" in str(raised.value)
@@ -137,12 +137,12 @@ def test_a_pin_that_cannot_be_claimed_names_itself_and_the_pin(pins):
 # -- driving, through the recording device ----------------------------------
 
 def test_the_level_reaches_the_device_for_each_polarity():
-    shed = relay.Relay(23, relay.ENERGIZE_TO_SHED, factory=relay.Recording)
+    shed = relay.Relay(23, relay.ENERGIZE_TO_SHED, relay.HIGH, factory=relay.Recording)
     shed.apply(True)
     shed.apply(False)
     assert shed._device.levels == [False, True]
 
-    connect = relay.Relay(25, relay.ENERGIZE_TO_CONNECT,
+    connect = relay.Relay(25, relay.ENERGIZE_TO_CONNECT, relay.HIGH,
                           factory=relay.Recording)
     connect.apply(True)
     connect.apply(False)
@@ -156,7 +156,7 @@ def test_the_device_is_constructed_the_way_the_shipping_code_constructs_it():
     here exercised a construction the shipping code never makes, and the
     construction is where two of the three polarity inversions live.
     """
-    pin = relay.Relay(22, relay.ENERGIZE_TO_CONNECT, factory=relay.Recording)
+    pin = relay.Relay(22, relay.ENERGIZE_TO_CONNECT, relay.HIGH, factory=relay.Recording)
     pin._open()
     assert pin._device.pin == 22
     assert pin._device.claimed is False
@@ -168,11 +168,11 @@ def test_the_pin_is_opened_once_and_reused():
     load wired to the normally closed contact would twitch each time."""
     opened = []
 
-    def counting(pin, initial_value=False):
+    def counting(pin, initial_value=False, active_high=True):
         opened.append(pin)
         return relay.Recording(pin, initial_value=initial_value)
 
-    pin = relay.Relay(23, relay.ENERGIZE_TO_SHED, factory=counting)
+    pin = relay.Relay(23, relay.ENERGIZE_TO_SHED, relay.HIGH, factory=counting)
     for _ in range(5):
         pin.apply(True)
     assert len(opened) == 1
@@ -181,13 +181,13 @@ def test_the_pin_is_opened_once_and_reused():
 def test_apply_reports_the_level_it_drove():
     """The loop publishes this, so it must be what happened rather than what
     was wanted."""
-    pin = relay.Relay(23, relay.ENERGIZE_TO_SHED, factory=relay.Recording)
+    pin = relay.Relay(23, relay.ENERGIZE_TO_SHED, relay.HIGH, factory=relay.Recording)
     assert pin.apply(True) is False
     assert pin.apply(False) is True
 
 
 def test_closing_releases_the_line_and_can_be_repeated():
-    pin = relay.Relay(23, relay.ENERGIZE_TO_SHED, factory=relay.Recording)
+    pin = relay.Relay(23, relay.ENERGIZE_TO_SHED, relay.HIGH, factory=relay.Recording)
     pin.apply(True)
     device = pin._device
     assert not device.closed, "the line was released while still driven"
@@ -202,12 +202,12 @@ def test_a_closed_relay_claims_the_line_afresh_when_driven_again():
     on the real backend is a call on a released handle."""
     opened = []
 
-    def counting(pin, initial_value=False):
+    def counting(pin, initial_value=False, active_high=True):
         device = relay.Recording(pin, initial_value=initial_value)
         opened.append(device)
         return device
 
-    pin = relay.Relay(23, relay.ENERGIZE_TO_SHED, factory=counting)
+    pin = relay.Relay(23, relay.ENERGIZE_TO_SHED, relay.HIGH, factory=counting)
     pin.apply(True)
     pin.close()
     assert pin.apply(True) is False
@@ -219,13 +219,13 @@ def test_a_closed_relay_claims_the_line_afresh_when_driven_again():
 def test_a_failed_claim_leaves_no_device_and_is_retried():
     attempts = []
 
-    def flaky(pin, initial_value=False):
+    def flaky(pin, initial_value=False, active_high=True):
         attempts.append(pin)
         if len(attempts) == 1:
             raise relay.RelayError("line is busy")
         return relay.Recording(pin, initial_value=initial_value)
 
-    pin = relay.Relay(23, relay.ENERGIZE_TO_SHED, factory=flaky)
+    pin = relay.Relay(23, relay.ENERGIZE_TO_SHED, relay.HIGH, factory=flaky)
     with pytest.raises(relay.RelayError):
         pin.apply(True)
     assert pin._device is None, "a failed claim left a half-open device"
@@ -240,7 +240,7 @@ def test_a_dry_run_goes_through_the_same_apply():
     dry run on site would show the right answer while the real relay drove
     the wrong way."""
     for polarity in relay.POLARITIES:
-        pretend = relay.Pretend(23, polarity)
+        pretend = relay.Pretend(23, polarity, relay.HIGH)
         for connected in (True, False, True):
             pretend.apply(connected)
         assert pretend.levels == [relay.level_for(polarity, True),
@@ -257,7 +257,7 @@ def test_a_dry_run_records_through_the_device_not_beside_it(pins):
     goes unexercised, which is the one thing the dry run is meant to
     rehearse.
     """
-    pretend = relay.Pretend(23, relay.ENERGIZE_TO_SHED)
+    pretend = relay.Pretend(23, relay.ENERGIZE_TO_SHED, relay.HIGH)
     pretend.apply(True)
     assert pretend._device is not None, (
         "apply did not go through the shared open and drive path")
@@ -267,16 +267,16 @@ def test_a_dry_run_records_through_the_device_not_beside_it(pins):
 def test_a_dry_run_claims_no_pin(pins):
     """On a machine where the controller already holds the line, a dry run
     must not try to take it."""
-    taken = relay.Relay(23, relay.ENERGIZE_TO_SHED)
+    taken = relay.Relay(23, relay.ENERGIZE_TO_SHED, relay.HIGH)
     taken._open()
-    pretend = relay.Pretend(23, relay.ENERGIZE_TO_SHED)
+    pretend = relay.Pretend(23, relay.ENERGIZE_TO_SHED, relay.HIGH)
     pretend.apply(True)
     assert pretend.levels == [False]
     taken.close()
 
 
 def test_a_dry_run_reports_no_levels_before_it_is_used():
-    assert relay.Pretend(23, relay.ENERGIZE_TO_SHED).levels == []
+    assert relay.Pretend(23, relay.ENERGIZE_TO_SHED, relay.HIGH).levels == []
 
 
 # -- the backend that releases a pin ----------------------------------------
@@ -344,3 +344,68 @@ def test_the_fix_names_the_kernel_setting_it_turns_off():
     assert relay.PERSIST_FIX == "pinctrl_bcm2835.persist_gpio_outputs=n"
     assert KERNEL_SETTING == (
         "/sys/module/pinctrl_bcm2835/parameters/persist_gpio_outputs")
+
+
+# -- a board that energizes its relay on a low input ------------------------
+
+@pytest.mark.parametrize("polarity,connected,expected", [
+    ("energize_to_shed", True, True),
+    ("energize_to_shed", False, False),
+    ("energize_to_connect", True, False),
+    ("energize_to_connect", False, True),
+])
+def test_on_a_low_trigger_board_the_pin_carries_the_inverse_voltage(
+        pins, polarity, connected, expected):
+    """Read from the pin through the real library. An energized coil on a
+    low trigger board is a pin driven low."""
+    pin = relay.Relay(23, polarity, relay.LOW)
+    pin.apply(connected)
+    assert pin._device.pin.state is expected
+    pin.close()
+
+
+def test_claiming_a_pin_on_a_low_trigger_board_leaves_it_high(pins):
+    """High is a de-energized coil on that board. A pin claimed low would
+    cut the cameras and start the pump for the width of the claim, every
+    time the controller starts."""
+    for polarity in relay.POLARITIES:
+        pin = relay.Relay(24, polarity, relay.LOW)
+        pin._open()
+        assert pin._device.pin.state is True, polarity
+        pin.close()
+
+
+def test_apply_reports_whether_the_coil_is_energized_whatever_the_trigger():
+    """The loop publishes this, and a dashboard reads it as the relay's
+    state, so it must not change meaning with the board."""
+    for trigger in relay.TRIGGERS:
+        pin = relay.Relay(23, relay.ENERGIZE_TO_SHED, trigger,
+                          factory=relay.Recording)
+        assert pin.apply(True) is False, trigger
+        assert pin.apply(False) is True, trigger
+
+
+def test_the_trigger_reaches_the_device_as_its_active_level():
+    high = relay.Relay(23, relay.ENERGIZE_TO_SHED, relay.HIGH,
+                       factory=relay.Recording)
+    low = relay.Relay(23, relay.ENERGIZE_TO_SHED, relay.LOW,
+                      factory=relay.Recording)
+    high._open()
+    low._open()
+    assert high._device.active_high is True
+    assert low._device.active_high is False
+
+
+@pytest.mark.parametrize("trigger", [None, "", "active_low", True, "LOW"])
+def test_an_unknown_trigger_is_refused(trigger):
+    """Guessing it drives every load backwards, and nothing reveals that
+    until a load is seen doing the opposite of its decision."""
+    with pytest.raises(relay.RelayError) as raised:
+        relay.Relay(23, relay.ENERGIZE_TO_SHED, trigger)
+    assert "GPIO23" in str(raised.value)
+
+
+def test_a_pretend_relay_keeps_the_trigger():
+    pretend = relay.Pretend(23, relay.ENERGIZE_TO_SHED, relay.LOW)
+    pretend.apply(True)
+    assert pretend._device.active_high is False

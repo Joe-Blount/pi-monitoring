@@ -285,9 +285,23 @@ a crashed controller would leave loads energized, and says how to fix it.
 Unreadable is reported as unreadable, because not knowing must not look like a
 pass.
 
-Buy **active-high** relay modules. An active-low module carries its own pull-up
-that beats the Pi's weak internal pull-down and energizes the relay during
-every boot.
+Say how the relay board triggers, in `control.relay_trigger`: `high` for a
+board that energizes a coil on a high input, `low` for one that energizes on a
+low input. The controller refuses to start without it, because the two drive
+every load in opposite directions.
+
+A board with a high and low jumper is simplest: set it to high. A low trigger
+board works if it is wired so an undriven pin leaves every coil off:
+
+- remove the JD-VCC jumper and feed JD-VCC and its ground from the 5 V supply,
+- feed the input side's VCC from the Pi's 3.3 V, not 5 V. A pin driven high then
+  carries no current through the input, and a dead Pi takes the inputs down
+  with it.
+
+Either way, watch the indicator LEDs through a complete boot, and through a
+controller killed with `kill -9`, with the loads disconnected. No LED may
+light. The Pi holds an undriven pin low only weakly, and whether that is too
+little to energize a coil is a property of the board.
 
 ---
 

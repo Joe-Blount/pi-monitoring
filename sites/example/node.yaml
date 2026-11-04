@@ -280,6 +280,13 @@ control:
                               # honours it.
   loop_interval: 10s
 
+  # Whether the relay board energizes a coil on a high input or a low one.
+  # Required wherever a load is driven: the two drive every load in
+  # opposite directions, so there is no default. A board with a high and low
+  # jumper is set to high. A low trigger board has its input side powered
+  # from the Pi's 3.3 V, so a pin driven high carries no current through it.
+  relay_trigger: high
+
   # There is no clock key. The Pi has no real-time clock, and after a power
   # cut it boots with whatever fake-hwclock saved, which can be days wrong. So
   # until the clock is synced, tiers whose schedule needs the time are

@@ -19,10 +19,13 @@ class FakeDevice:
 
 
 class FakeNode:
-    def __init__(self, loads, devices=("bms", "mppt"), disabled=()):
+    def __init__(self, loads, devices=("bms", "mppt"), disabled=(),
+                 trigger="high"):
         self.devices = [FakeDevice(name) for name in devices]
         self.devices += [FakeDevice(name, enabled=False) for name in disabled]
         self.control = {"loads": loads}
+        if trigger is not None:
+            self.control["relay_trigger"] = trigger
 
 
 LADDER = {
@@ -857,3 +860,30 @@ def test_one_unreadable_load_refuses_the_whole_block():
                      "broken": dict(CAMERAS, polarity="sideways")})
     with pytest.raises(spec.SpecError):
         spec.load_control(node)
+
+
+# -- the relay board's trigger -----------------------------------------------
+
+@pytest.mark.parametrize("trigger", ["high", "low"])
+def test_the_relay_trigger_reaches_every_load(trigger):
+    node = FakeNode({"cameras": CAMERAS,
+                     "recorder": dict(CAMERAS, control_pin=24)},
+                    trigger=trigger)
+    out = spec.load_control(node)
+    assert {load["trigger"] for load in out.values()} == {trigger}
+
+
+@pytest.mark.parametrize("trigger", [None, "", "active_low", "LOW", 1])
+def test_a_block_that_drives_a_load_must_say_how_its_board_triggers(trigger):
+    """A board that energizes on a low input, driven as one that energizes
+    on a high one, does the opposite of every decision. There is no safe
+    guess, so the block is refused until it says."""
+    node = FakeNode({"cameras": CAMERAS}, trigger=trigger)
+    with pytest.raises(spec.SpecError) as raised:
+        spec.load_control(node)
+    assert "relay_trigger" in str(raised.value)
+
+
+def test_a_block_with_nothing_to_drive_needs_no_trigger():
+    node = FakeNode({"spare": dict(CAMERAS, enabled=False)}, trigger=None)
+    assert spec.load_control(node) == {}

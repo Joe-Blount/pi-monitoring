@@ -110,7 +110,7 @@ def controlled_node(tmp_path, loop_interval=None, polarity="energize_to_shed",
     defaults to the clock-tier fixture above; a test that needs a solar tier
     latched passes SOLAR_LADDER instead.
     """
-    body = NODE_HEADER + "control:\n  enabled: true\n"
+    body = NODE_HEADER + "control:\n  enabled: true\n  relay_trigger: high\n"
     if loop_interval is not None:
         body += "  loop_interval: %s\n" % loop_interval
     body += "  loads:\n    cameras:\n      type: dc_branch\n"
@@ -132,7 +132,7 @@ def empty_node(tmp_path, loop_interval=None):
 
 
 def bad_polarity_node(tmp_path):
-    body = NODE_HEADER + "control:\n  enabled: true\n"
+    body = NODE_HEADER + "control:\n  enabled: true\n  relay_trigger: high\n"
     body += "  loads:\n    cameras:\n      type: dc_branch\n"
     body += "      control_pin: 23\n      polarity: sideways\n"
     body += LADDER

@@ -165,7 +165,8 @@ def _pretend_relays(node):
     nothing in it moved.
     """
     specs = spec.load_control(node)
-    return {name: relay.Pretend(load["control_pin"], load["polarity"])
+    return {name: relay.Pretend(load["control_pin"], load["polarity"],
+                                load["trigger"])
             for name, load in specs.items()}
 
 

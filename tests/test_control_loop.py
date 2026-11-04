@@ -31,7 +31,7 @@ class FakeDevice:
 class FakeNode:
     def __init__(self, loads, devices=("bms", "mppt")):
         self.devices = [FakeDevice(name) for name in devices]
-        self.control = {"loads": loads}
+        self.control = {"loads": loads, "relay_trigger": "high"}
 
 
 LADDER = {
@@ -63,7 +63,7 @@ def reading(soc=60.0, cell=3.30, age=1.0):
 def build(tmp_path, readings=None, at=None, mono=0.0, trusted=True,
           switches=None, loads=None, boot=BOOT):
     """A loop whose world is entirely under the test's control."""
-    pin = relay.Pretend(23, relay.ENERGIZE_TO_SHED)
+    pin = relay.Pretend(23, relay.ENERGIZE_TO_SHED, relay.HIGH)
     published = {}
 
     state = {"now": at or datetime.datetime(2026, 6, 21, 12, tzinfo=ZONE),
@@ -286,7 +286,7 @@ def test_the_pass_count_advances_so_a_wedged_loop_is_visible(tmp_path):
 
 def test_a_failure_to_publish_does_not_stop_it_controlling(tmp_path):
     """Publishing is how somebody finds out. Controlling is the job."""
-    pin = relay.Pretend(23, relay.ENERGIZE_TO_SHED)
+    pin = relay.Pretend(23, relay.ENERGIZE_TO_SHED, relay.HIGH)
 
     def explode(_path, _data):
         raise OSError("no space")
@@ -438,8 +438,8 @@ def two_loads(tmp_path, cameras=None, recorder=None, soc=5.0, mono=0.0,
               state_path=None):
     """Cameras on GPIO23 and a recorder on GPIO24, decided in that order,
     either of whose relays may be one that cannot be driven."""
-    cameras = cameras or relay.Pretend(23, relay.ENERGIZE_TO_SHED)
-    recorder = recorder or relay.Pretend(24, relay.ENERGIZE_TO_SHED)
+    cameras = cameras or relay.Pretend(23, relay.ENERGIZE_TO_SHED, relay.HIGH)
+    recorder = recorder or relay.Pretend(24, relay.ENERGIZE_TO_SHED, relay.HIGH)
     published = {}
     machine = loop.Loop(
         FakeNode({"cameras": CAMERAS,
@@ -584,7 +584,7 @@ FAN = {"type": "cpu_fan", "enabled": True, "control_pin": 24,
 def fan_loop(tmp_path, world, fan=FAN):
     """A loop driving one CPU fan, with time and the reading held by the
     test. A missing temperature is a host reading with no field."""
-    pin = relay.Pretend(24, relay.ENERGIZE_TO_CONNECT)
+    pin = relay.Pretend(24, relay.ENERGIZE_TO_CONNECT, relay.HIGH)
     fields = lambda: ({} if world["temp"] is None
                       else {"cpu_temp_f": world["temp"]})
     machine = loop.Loop(

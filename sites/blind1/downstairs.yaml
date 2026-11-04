@@ -21,10 +21,10 @@
 #   2. can two processes hold one input line? They cannot, under the GPIO
 #      character device, which decides whether the guard needs its own pin.
 #
-# The third is genuinely hardware and is settled when the part is bought: a
-# relay module that triggers on a LOW input carries its own pull-up, which
-# beats the Pi's weak internal pull-down and energizes the relay during every
-# boot. Buy active-high.
+# The third is genuinely hardware: whether the relay board leaves every coil
+# off while a pin is undriven, through a boot and after a killed controller.
+# The board here triggers on a low input, wired as control.relay_trigger
+# describes, and only watching its LEDs through both settles it.
 #
 # Every threshold below is a placeholder until the loads are characterized.
 
@@ -183,6 +183,14 @@ control:
   # or load can take either pin without the file being refused. Both pins are
   # pulled low at boot, as every relay pin here must be.
   spare_pins: [17, 10]               # physical 11 and 19
+
+  # The relay board energizes a coil when its input is pulled to ground.
+  # Wired so an undriven pin leaves every coil off: the JD-VCC jumper is
+  # removed, the coils take 5 V from the supply on JD-VCC, and the input
+  # side's VCC takes the Pi's 3.3 V on physical 1, outside the connector.
+  # A pin driven high then carries no current through the input at all, and
+  # a dead Pi takes the input side down with it.
+  relay_trigger: low
 
   loads:
 

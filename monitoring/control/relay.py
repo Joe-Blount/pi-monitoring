@@ -34,13 +34,27 @@ to connect" passes just as happily while the pin drives the opposite way.
 
 Trigger level
 -------------
-Separate from polarity and just as easy to get wrong, but it lives in
-hardware. These boards select whether a relay energizes on a high input or a
-low one. On a low-trigger board the module's own pull-up beats the Pi's weak
-internal pull-down and every relay energizes during boot, before any software
-runs. That inverts the fail-safe for every load at once, and the only check
-on it is a person watching the indicator LEDs through a complete boot with
-the loads disconnected. It is in the commissioning steps for that reason.
+Separate from polarity and just as easy to get wrong. A relay board
+energizes its coil on a high input or on a low one, and the node file says
+which, because the two drive every load in opposite directions. ``high``
+and ``low`` change only which voltage on the pin energizes the coil. What
+this module reports, and what the loop publishes, is whether the coil is
+energized, whichever board carries it.
+
+A low trigger board energizes a coil when its input is pulled to ground, so
+a pin claimed low would cut the cameras and start the pump for the width of
+the claim. Every pin is claimed at the voltage that leaves its coil
+de-energized.
+
+The trigger also decides what an undriven pin does, before any software
+runs and after a controller dies. The Pi holds such a pin low through a weak
+internal pull-down. A high trigger board reads that as off. A low trigger
+board with its input side powered from the Pi's 3.3 V sees too little
+current through that pull-down to energize a coil, but that is a property of
+the board, not of this code. The only check on either is a person watching
+the indicator LEDs through a complete boot, and through a killed
+controller, with the loads disconnected. It is in the commissioning steps
+for that reason.
 
 One path, not two
 -----------------
@@ -79,6 +93,14 @@ ENERGIZE_TO_SHED = "energize_to_shed"
 ENERGIZE_TO_CONNECT = "energize_to_connect"
 
 POLARITIES = (ENERGIZE_TO_SHED, ENERGIZE_TO_CONNECT)
+
+#: The board energizes a coil on a high input.
+HIGH = "high"
+
+#: The board energizes a coil on a low input.
+LOW = "low"
+
+TRIGGERS = (HIGH, LOW)
 
 #: The gpiozero backend that releases a pin when the process holding it dies.
 #: Set before gpiozero is imported, because it reads this at import time, and
@@ -121,14 +143,15 @@ def refuse_if_outputs_persist(what):
             "/boot/firmware/cmdline.txt and reboot" % (what, PERSIST_FIX))
 
 
-def open_output(pin, initial_value=False):
+def open_output(pin, initial_value=False, active_high=True):
     """Claim one output pin through gpiozero.
 
-    `active_high` is stated rather than left to the library's default. It is
-    the third place polarity can invert, and the most dangerous, because it
-    inverts the state the pin is claimed in as well as every level after:
+    `active_high` is passed on rather than left to the library's default. It
+    is the third place polarity can invert, and the most dangerous, because
+    it inverts the state the pin is claimed in as well as every level after:
     with it wrong, claiming a camera relay energizes it, cutting that
-    branch, and then every later decision drives the opposite way.
+    branch, and then every later decision drives the opposite way. It comes
+    from the board's trigger, and nowhere else.
     """
     os.environ["GPIOZERO_PIN_FACTORY"] = PIN_FACTORY
     refuse_if_outputs_persist("GPIO%s" % pin)
@@ -138,7 +161,7 @@ def open_output(pin, initial_value=False):
         raise RelayError("load control needs gpiozero: %s" % exc)
     try:
         return DigitalOutputDevice(pin, initial_value=initial_value,
-                                   active_high=True)
+                                   active_high=active_high)
     except Exception as exc:
         raise RelayError("cannot drive GPIO%s: %s" % (pin, exc))
 
@@ -193,26 +216,34 @@ class Relay:
     reads like a missing package.
     """
 
-    def __init__(self, pin, polarity, factory=None):
+    def __init__(self, pin, polarity, trigger, factory=None):
         if polarity not in POLARITIES:
             raise RelayError(
                 "load on GPIO%s declares polarity %r; it must be one of %s"
                 % (pin, polarity, ", ".join(POLARITIES)))
+        if isinstance(trigger, bool) or trigger not in TRIGGERS:
+            raise RelayError(
+                "load on GPIO%s is on a board with trigger %r; it must be one "
+                "of %s" % (pin, trigger, ", ".join(TRIGGERS)))
         self.pin = pin
         self.polarity = polarity
+        self.trigger = trigger
         self._factory = factory or open_output
         self._device = None
 
     def _open(self):
         if self._device is None:
-            # initial_value False so claiming the pin does not drive it high
-            # on the way past. On a shed-to-energize load that would cut the
-            # recorder for the width of the call.
-            self._device = self._factory(self.pin, initial_value=False)
+            # initial_value False so claiming the pin does not energize the
+            # coil on the way past. On a shed-to-energize load that would cut
+            # the recorder for the width of the call. The library turns that
+            # into a high pin on a low trigger board.
+            self._device = self._factory(self.pin, initial_value=False,
+                                         active_high=self.trigger == HIGH)
         return self._device
 
     def apply(self, connected):
-        """Put the load in `connected`, and return the level driven."""
+        """Put the load in `connected`, and return whether the coil is now
+        energized."""
         level = level_for(self.polarity, connected)
         device = self._open()
         if level:
@@ -239,8 +270,8 @@ class Pretend(Relay):
     drove the wrong way.
     """
 
-    def __init__(self, pin, polarity):
-        Relay.__init__(self, pin, polarity, factory=Recording)
+    def __init__(self, pin, polarity, trigger):
+        Relay.__init__(self, pin, polarity, trigger, factory=Recording)
 
     @property
     def levels(self):

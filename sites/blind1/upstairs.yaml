@@ -168,6 +168,12 @@ devices:
 control:
   enabled: false
   loop_interval: 30s
+
+  # The four channel board here energizes a coil when its input is pulled
+  # to ground. Its loads are fans, so a coil that pulled in while the Pi
+  # boots would cost nothing. Wired as the downstairs board is anyway, with
+  # the input side's VCC on the Pi's 3.3 V.
+  relay_trigger: low
   loads:
 
     # A tiny fan, half an amp. This is the one load that needs no second relay

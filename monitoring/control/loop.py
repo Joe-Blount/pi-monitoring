@@ -67,7 +67,8 @@ class Loop:
         self.zone = zone
 
         self._relays = relays if relays is not None else {
-            name: relay.Relay(load["control_pin"], load["polarity"])
+            name: relay.Relay(load["control_pin"], load["polarity"],
+                              load["trigger"])
             for name, load in self.specs.items()}
 
         self._now = now or (lambda: datetime.datetime.now(self.zone))

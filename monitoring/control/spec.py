@@ -66,7 +66,8 @@ CPU_FAN_KEYS = {"type", "enabled", "control_pin", "polarity", "source",
 #: since restarted at zero, so keeping them would hold a dwell for as long as
 #: the machine had previously been up. A path here could only move the writes
 #: onto the card in exchange for state that is thrown away on arrival.
-CONTROL_KEYS = {"enabled", "loads", "loop_interval", "spare_pins"}
+CONTROL_KEYS = {"enabled", "loads", "loop_interval", "relay_trigger",
+                "spare_pins"}
 
 #: Keys this module answers for itself, with the reason an operator needs.
 #:
@@ -477,4 +478,15 @@ def load_control(node):
         spec = load_spec(name, node.control["loads"][name], devices)
         if spec is not None:
             loads[name] = spec
+    if loads:
+        trigger = node.control.get("relay_trigger")
+        if isinstance(trigger, bool) or trigger not in relay.TRIGGERS:
+            _fail("control", "relay_trigger must be one of %s, found %r. It "
+                             "says whether the relay board energizes a coil on "
+                             "a high input or a low one, the two drive every "
+                             "load in opposite directions, and there is no "
+                             "safe default" % (", ".join(relay.TRIGGERS),
+                                               trigger))
+        for spec in loads.values():
+            spec["trigger"] = trigger
     return loads
