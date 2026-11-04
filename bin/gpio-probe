@@ -430,10 +430,10 @@ def verdict(results):
 
     if function == "OUTPUT" and killed.get("level") == "0":
         print("  INCONCLUSIVE. A killed process left the pin still an output,")
-        print("  driving low. That is safe with an active-high relay module and")
-        print("  energizes an active-low one, and either way the line was not")
-        print("  released. Confirm the module is active-high before relying on")
-        print("  it, and prefer installing python3-lgpio so the line is freed.")
+        print("  driving low. That leaves a coil off on a board that triggers")
+        print("  high and energizes it on one that triggers low, and either way")
+        print("  the line was not released. Do not rely on it: install")
+        print("  python3-lgpio so the line is freed, and run this again.")
         return 1
 
     if released:

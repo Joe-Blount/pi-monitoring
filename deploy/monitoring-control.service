@@ -60,16 +60,12 @@ ExecStart=/opt/monitoring/bin/control run --node /etc/monitoring/node.yaml
 Environment=HOME=/var/lib/monitoring
 WorkingDirectory=/var/lib/monitoring
 
-# Belt and braces with what monitoring/control/relay.py already sets before
-# it imports gpiozero. This line changes nothing while that code is doing
-# its job; what it buys is a second, independent place the setting comes
-# from. The sysfs backend does not release a pin when the process holding it
-# dies, so every restart would find the pin busy and the controller would
-# never recover -- and the fail-safe story for every load, that a dead
-# controller leaves it exactly where its wiring decides, rests on that
-# release happening. Pinning it here as well means a future change to the
-# module's import order cannot silently let the environment fall through to
-# that backend instead.
+# Not read for a relay: monitoring/control/relay.py claims every relay
+# through its own lgpio factory, passed to each device. This names the same
+# backend for anything else in the process that builds a gpiozero device.
+# The sysfs backend does not release a pin when the process holding it dies,
+# so every restart would find the pin busy and the controller would never
+# recover, and the fail-safe for every load rests on that release.
 Environment=GPIOZERO_PIN_FACTORY=lgpio
 
 # The loop releases every pin it holds when it dies -- that is what the

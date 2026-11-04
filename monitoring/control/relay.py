@@ -46,12 +46,13 @@ a pin claimed low would cut the cameras and start the pump for the width of
 the claim. Every pin is claimed at the voltage that leaves its coil
 de-energized.
 
-The trigger also decides what an undriven pin does, before any software
-runs and after a controller dies. The Pi holds such a pin low through a weak
-internal pull-down. A high trigger board reads that as off. A low trigger
-board with its input side powered from the Pi's 3.3 V sees too little
-current through that pull-down to energize a coil, but that is a property of
-the board, not of this code. The only check on either is a person watching
+The trigger also decides what an undriven pin does. At boot the Pi holds
+such a pin low through a weak internal pull-down. Once a controller has
+claimed it, the line is freed with its bias turned off, so after a crash it
+floats, and the board's own input decides: a high trigger board's input
+holds it near ground, and a low trigger board's input, powered from the
+Pi's 3.3 V, holds it high. Either way that is a property of the board, not
+of this code. The only check on either is a person watching
 the indicator LEDs through a complete boot, and through a killed
 controller, with the loads disconnected. It is in the commissioning steps
 for that reason.
@@ -70,9 +71,10 @@ Releasing the line
 ------------------
 The whole fail-safe story rests on a dying process releasing its pins. The
 character device backend does; the sysfs one does not, and leaves a pin
-driven and busy so the next start cannot even claim it. The installer pins
-the backend for exactly this reason, and this module asks for it again rather
-than trusting the environment it finds.
+driven and busy so the next start cannot even claim it. Every relay is
+therefore claimed through this module's own lgpio factory, passed to each
+device, so neither the environment nor the library's default decides the
+backend.
 
 The backend is not the whole of it. A Raspberry Pi kernel can be built to
 keep an output driven after the line is freed, through a parameter of its
@@ -101,13 +103,6 @@ HIGH = "high"
 LOW = "low"
 
 TRIGGERS = (HIGH, LOW)
-
-#: The gpiozero backend that releases a pin when the process holding it dies.
-#: Set before gpiozero is imported, because it reads this at import time, and
-#: set rather than defaulted: an environment that already names another one
-#: would otherwise win silently, and the one it would most likely name is the
-#: fallback that leaves a pin driven and busy when the process dies.
-PIN_FACTORY = "lgpio"
 
 
 #: The kernel's answer to whether a freed output stays driven, Y or N. Absent
@@ -150,7 +145,8 @@ def claim_output_at(pin, state):
     0, then written to its starting level. On a low trigger board that 0 is
     a coil energized for as long as the gap between the two lasts, which a
     busy machine can stretch past a relay's pull-in time. lgpio takes the
-    starting level in the claim itself, so there is no gap to stretch.
+    starting level in the claim itself, so the line goes from undriven
+    straight to that level.
     """
     import lgpio
     if getattr(pin, "_callback", None) is not None:
@@ -230,7 +226,6 @@ def open_output(pin, initial_value=False, active_high=True):
     branch, and then every later decision drives the opposite way. It comes
     from the board's trigger, and nowhere else.
     """
-    os.environ["GPIOZERO_PIN_FACTORY"] = PIN_FACTORY
     refuse_if_outputs_persist("GPIO%s" % pin)
     try:
         from gpiozero import DigitalOutputDevice

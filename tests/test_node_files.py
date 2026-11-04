@@ -852,8 +852,9 @@ def test_the_downstairs_control_block_is_refused_until_the_pack_moves():
 HEADER = {17: 11, 18: 12, 27: 13, 22: 15, 23: 16, 24: 18, 10: 19, 25: 22,
           9: 21, 11: 23, 8: 24}
 
-#: GPIOs the board pulls low at boot. A relay on any other energizes while
-#: the Pi starts, before any software runs. The serial console holds 14 and 15.
+#: GPIOs the Pi pulls low at boot. Every relay pin on one board shares one
+#: resting state, so a single watched boot shows how the board takes it on
+#: every channel. The serial console drives 14 and 15.
 PULLED_LOW_AT_BOOT = set(range(9, 28)) - {14, 15}
 
 
@@ -882,12 +883,12 @@ def test_the_downstairs_harness_is_one_connector_on_physical_11_to_24():
         assert 11 <= HEADER[pin] <= 24
 
 
-def test_every_downstairs_relay_pin_is_pulled_low_at_boot():
+def test_every_downstairs_relay_pin_rests_the_same_way_at_boot():
     node = load(REPO / "sites" / "blind1" / "downstairs.yaml")
     for pin in downstairs_relay_pins(node) + node.control["spare_pins"]:
         assert pin in PULLED_LOW_AT_BOOT, (
-            "GPIO%d is not pulled low at boot, so its relay would energize "
-            "while the Pi starts" % pin)
+            "GPIO%d does not rest like the other relay pins at boot, so the "
+            "boot watched on them says nothing about it" % pin)
 
 
 def test_the_downstairs_spare_channels_are_held():

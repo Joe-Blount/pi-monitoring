@@ -116,7 +116,7 @@ devices:
   #
   #     dtoverlay=dht11,gpiopin=8
   #
-  # GPIO8 is pulled high at boot, which rules it out for a relay and does
+  # GPIO8 is pulled high at boot, unlike every relay pin here, which does
   # not matter to an input. It is also SPI chip select 0, so SPI stays off
   # on this machine.
   #
@@ -180,8 +180,9 @@ control:
   #
   # The two relay channels no load uses yet, wired to the board so a load
   # added later needs no visit with a soldering iron. Held here so no sensor
-  # or load can take either pin without the file being refused. Both pins are
-  # pulled low at boot, as every relay pin here must be.
+  # or load can take either pin without the file being refused. Both share
+  # the weak pull-down every relay pin here has at boot, so one watched boot
+  # shows how the board takes it on every channel.
   spare_pins: [17, 10]               # physical 11 and 19
 
   # The relay board energizes a coil when its input is pulled to ground.

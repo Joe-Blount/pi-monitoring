@@ -300,8 +300,9 @@ board works if it is wired so an undriven pin leaves every coil off:
 
 Either way, watch the indicator LEDs through a complete boot, and through a
 controller killed with `kill -9`, with the loads disconnected. No LED may
-light. The Pi holds an undriven pin low only weakly, and whether that is too
-little to energize a coil is a property of the board.
+light. At boot the Pi holds an undriven pin low only weakly, and after a
+controller dies the pin floats with no bias at all, so in both cases the
+board's own input decides, and only watching it settles that.
 
 ---
 

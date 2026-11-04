@@ -107,17 +107,6 @@ def test_claiming_a_pin_leaves_it_low_whatever_the_load(pins):
         pin.close()
 
 
-def test_the_backend_is_requested_rather_than_inherited(monkeypatch):
-    """The sysfs fallback does not release a pin when the process holding it
-    dies, which is the property every fail-safe here depends on. An
-    environment already naming it must not win."""
-    import os
-    monkeypatch.setenv("GPIOZERO_PIN_FACTORY", "something-else")
-    try:
-        relay.open_output(23)
-    except relay.RelayError:
-        pass
-    assert os.environ["GPIOZERO_PIN_FACTORY"] == relay.PIN_FACTORY
 
 
 def test_a_pin_that_cannot_be_claimed_names_itself_and_the_pin(pins):
@@ -278,11 +267,13 @@ def test_a_dry_run_reports_no_levels_before_it_is_used():
 
 # -- the backend that releases a pin ----------------------------------------
 
-def test_the_pin_backend_is_the_one_that_releases_on_death():
+def test_the_pin_backend_is_the_one_that_releases_on_death(lgpio):
     """The fail-safe rests on a dying process releasing its pins. The sysfs
     backend does not, and leaves the line driven and busy so the next start
     cannot claim it."""
-    assert relay.PIN_FACTORY == "lgpio"
+    from gpiozero.pins.lgpio import LGPIOFactory
+    factory_class, _ = relay.lgpio_classes()
+    assert issubclass(factory_class, LGPIOFactory)
 
 
 def test_a_missing_gpiozero_says_so_rather_than_failing_obscurely(monkeypatch):
@@ -487,3 +478,84 @@ def test_the_factory_classes_are_built_once(lgpio):
     """A second pair would not recognize the pins the first built, and would
     refuse every one of them."""
     assert relay.lgpio_classes() is relay.lgpio_classes()
+
+
+# -- the controller's factory, through gpiozero's own pin cache ---------------
+
+class RecordingLgpio:
+    """lgpio, recording every call, answering the mode of a line from the
+    last claim made on it."""
+
+    SET_PULL_NONE = 128
+
+    def __init__(self):
+        self.calls = []
+
+    def __getattr__(self, name):
+        if name.isupper():
+            return 0
+        if name == "error":
+            return RuntimeError
+
+        def call(*args):
+            self.calls.append((name,) + args)
+            if name == "gpiochip_open":
+                return 9
+            if name == "gpio_get_mode":
+                for made in reversed(self.calls[:-1]):
+                    if (made[0].startswith("gpio_claim")
+                            and made[2] == args[1]):
+                        return 2 if made[0] == "gpio_claim_output" else 0
+            return 0
+        return call
+
+    def claims(self):
+        return [c for c in self.calls if c[0].startswith("gpio_claim")]
+
+
+@pytest.fixture
+def board(monkeypatch):
+    """The real gpiozero lgpio backend over a recording lgpio, on a fixed
+    board revision, with the library's shared pin cache emptied first and
+    put back after."""
+    import sys
+    import types
+    from collections import defaultdict
+    fake = RecordingLgpio()
+    module = types.ModuleType("lgpio")
+    module.__getattr__ = fake.__getattr__
+    module.SET_PULL_NONE = RecordingLgpio.SET_PULL_NONE
+    monkeypatch.setitem(sys.modules, "lgpio", module)
+    monkeypatch.delitem(sys.modules, "gpiozero.pins.lgpio", raising=False)
+    from gpiozero.pins import local
+    monkeypatch.setattr(local, "get_pi_revision", lambda: 0xa02082)
+    monkeypatch.setattr(local.LocalPiFactory, "pins", {})
+    monkeypatch.setattr(local.LocalPiFactory, "_reservations",
+                        defaultdict(list))
+    monkeypatch.setattr(relay, "_LGPIO_CLASSES", None)
+    monkeypatch.setattr(relay, "_FACTORY", None)
+    return fake
+
+
+def test_a_low_trigger_relay_is_claimed_high_in_one_call_through_the_library(
+        board):
+    """The whole path the machine takes: the library's own device and pin
+    cache, the controller's factory, and an lgpio that only records."""
+    device = relay.open_output(23, active_high=False)
+    try:
+        assert board.claims()[-1] == ("gpio_claim_output", 9, 23, 1)
+        assert not [c for c in board.claims()
+                    if c[0] == "gpio_claim_output" and c[3] == 0]
+    finally:
+        device.close()
+
+
+def test_a_pin_the_stock_backend_built_is_refused_by_the_controller(board):
+    """The library shares one pin cache between every factory of its kind,
+    so a pin built through its own backend would come back here and claim
+    at 0."""
+    from gpiozero.pins.lgpio import LGPIOFactory
+    LGPIOFactory().pin(24)
+    with pytest.raises(relay.RelayError) as raised:
+        relay.open_output(24, active_high=False)
+    assert "GPIO24" in str(raised.value)
