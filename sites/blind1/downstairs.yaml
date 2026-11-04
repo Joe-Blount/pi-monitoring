@@ -116,11 +116,12 @@ devices:
   #
   #     dtoverlay=dht11,gpiopin=3
   #
-  # The sensor has its own 3-pin plug at the end of the header: 3V3 on
-  # physical 1, data on 5, ground on 6. The plug butts against the end of
-  # the header, so it cannot go on one pin off. GPIO3 carries the board's
-  # own pull-up to 3V3, which the sensor's data line needs, and rests high
-  # at boot. It is also the I2C clock, so I2C stays off on this machine.
+  # The sensor has its own 2x3 plug on physical 1 to 6, with three
+  # positions wired: 3V3 on 1, data on 5, ground on 6. The plug butts
+  # against the end of the header, so it cannot go on one pin off. GPIO3
+  # carries the board's own pull-up to 3V3, which the sensor's data line
+  # needs, and rests high at boot. It is also the I2C clock, so I2C stays
+  # off on this machine.
   #
   # The overlay is what binds the sensor, and the driver finds it on the
   # industrial I/O bus. The pin here must match gpiopin in the overlay: the

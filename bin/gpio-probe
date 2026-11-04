@@ -453,9 +453,9 @@ def verdict(results):
             print("  line in /boot/firmware/cmdline.txt, reboot, and run this")
             print("  again.")
         else:
-            print("  Fix before wiring anything: install python3-lgpio and set")
-            print("  GPIOZERO_PIN_FACTORY=lgpio in the controller's unit file,")
-            print("  then run this again. Note that needs gpiozero 2.x, so on")
+            print("  Fix before wiring anything: install python3-lgpio, which")
+            print("  the controller claims every relay through, then run this")
+            print("  again. Note that needs gpiozero 2.x, so on")
             print("  Raspberry Pi OS Bullseye the machine has to be upgraded")
             print("  first; 1.6.2 has no lgpio factory and no such package.")
 

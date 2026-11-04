@@ -84,9 +84,9 @@ def test_the_unit_does_not_use_runtime_directory():
 def test_the_unit_names_the_lgpio_backend():
     """The sysfs backend does not release a pin when the process holding it
     dies, so every restart would find the pin busy and the controller would
-    never recover. This is belt and braces with what relay.py already sets,
-    so a future change to its import order cannot silently fall through to
-    that backend."""
+    never recover. relay.py passes its own lgpio factory to every relay, so
+    this names the same backend for anything else in the process that builds
+    a gpiozero device."""
     assert "GPIOZERO_PIN_FACTORY=lgpio" in UNIT
 
 

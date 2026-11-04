@@ -324,7 +324,7 @@ def run_the_real_loop(tmp_path, soc, cell=3.30):
     clock_state = {"mono": 0.0}
     machine = loop.Loop(
         node, {"latitude": LATITUDE, "longitude": LONGITUDE}, ZONE,
-        relays={"cameras_near": relay.Pretend(23, relay.ENERGIZE_TO_SHED, relay.LOW)},
+        relays={"cameras_near": relay.Pretend(27, relay.ENERGIZE_TO_SHED, relay.LOW)},
         now=lambda: at(19, 30),
         monotonic=lambda: clock_state["mono"],
         # Injected, because the suite runs on machines with no real-time

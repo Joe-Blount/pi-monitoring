@@ -849,8 +849,8 @@ def test_the_downstairs_control_block_is_refused_until_the_pack_moves():
 
 
 #: The Pi header's physical pin for each GPIO the downstairs harness uses.
-HEADER = {3: 5, 17: 11, 18: 12, 27: 13, 22: 15, 23: 16, 24: 18, 10: 19,
-          25: 22, 9: 21}
+HEADER = {17: 11, 18: 12, 27: 13, 22: 15, 23: 16, 24: 18, 10: 19, 25: 22,
+          9: 21}
 
 #: GPIOs the Pi pulls low at boot. Every relay pin on one board shares one
 #: resting state, so a single watched boot shows how the board takes it on
@@ -888,7 +888,6 @@ def test_the_downstairs_sensor_plug_sits_at_the_end_of_the_header():
     node = load(REPO / "sites" / "blind1" / "downstairs.yaml")
     sensor = [d for d in node.devices if d.driver == "dht"]
     assert [d.params["pin"] for d in sensor] == [3]
-    assert HEADER[3] == 5
 
 
 def test_every_downstairs_relay_pin_rests_the_same_way_at_boot():

@@ -315,7 +315,7 @@ class Relay:
         return self._device
 
     def apply(self, connected):
-        """Put the load in `connected`, and return whether the coil is now
+        """Put the load in `connected`, and return whether the coil is
         energized."""
         level = level_for(self.polarity, connected)
         device = self._open()
