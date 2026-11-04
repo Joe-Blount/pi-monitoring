@@ -208,7 +208,7 @@ control:
     cameras_near:
       type: dc_branch
       enabled: true
-      control_pin: 23                 # physical 16
+      control_pin: 27                 # physical 13
 
       # Normally closed, so de-energized connects the load. A dead Pi, a lost
       # 12 V feed or a killed controller all leave the site watched. The same
@@ -308,7 +308,7 @@ control:
     cameras_far:
       type: dc_branch
       enabled: true
-      control_pin: 27                 # physical 13
+      control_pin: 23                 # physical 16
       polarity: energize_to_shed
       min_run: 10m
       min_off: 30m

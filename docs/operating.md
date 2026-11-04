@@ -290,8 +290,8 @@ never be the reason a site stays dark.
 
 | Machine | Load | GPIO | Physical pin | With no signal at all |
 |---|---|---|---|---|
-| blind1 / downstairs | cameras near | 23 | 16 | running (normally closed) |
-| blind1 / downstairs | cameras far | 27 | 13 | running (normally closed) |
+| blind1 / downstairs | cameras near | 27 | 13 | running (normally closed) |
+| blind1 / downstairs | cameras far | 23 | 16 | running (normally closed) |
 | blind1 / downstairs | nvr | 18 | 12 | running (normally closed) |
 | blind1 / downstairs | irrigation: inverter | 25 | 22 | off (normally open) |
 | blind1 / downstairs | irrigation: pump | 22 | 15 | off (normally open) |

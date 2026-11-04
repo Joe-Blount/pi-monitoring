@@ -691,7 +691,7 @@ def test_the_shipped_camera_ladder_is_the_one_that_was_agreed():
         "irrigation must stay declared and undriven")
 
     cameras = loads["cameras_near"]
-    assert cameras["control_pin"] == 23
+    assert cameras["control_pin"] == 27
     assert cameras["polarity"] == "energize_to_shed", (
         "de-energized must connect the cameras, so a dead Pi leaves the site "
         "watched and a reboot does not power cycle the recorder")
@@ -763,7 +763,7 @@ def test_the_upstairs_control_block_is_accepted_as_it_stands():
 #: cameras' ladder above: the pin, and each tier's threshold and schedule
 #: type. The far cameras keep the near ones' windows at higher thresholds.
 OTHER_CAMERA_BRANCHES = {
-    "cameras_far": (27, [(60.0, "clock"), (40.0, "solar"), (20.0, "never")],
+    "cameras_far": (23, [(60.0, "clock"), (40.0, "solar"), (20.0, "never")],
                     (600.0, 1800.0)),
     "nvr": (18, [(5.0, "never")], (600.0, 1800.0)),
 }
