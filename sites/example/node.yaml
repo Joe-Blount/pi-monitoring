@@ -110,9 +110,9 @@ devices:
       location: box           # tags are per device, merged over the node tags
     params:
       model: DHT22            # DHT11, DHT22 or AM2302; informational only
-      pin: 4                  # documentation: the overlay binds the sensor,
-                              # and the driver finds it on the industrial I/O
-                              # bus rather than by pin
+      pin: 4                  # must match gpiopin in the overlay: the
+                              # driver refuses a sensor the kernel reports on
+                              # any other pin
       retries: 3              # a single failed reading is routine for these
                               # sensors, not exceptional
       # Needs a boot configuration line and a reboot:

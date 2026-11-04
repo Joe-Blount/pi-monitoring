@@ -846,3 +846,50 @@ def test_the_downstairs_control_block_is_refused_until_the_pack_moves():
     with pytest.raises(control_spec.SpecError) as raised:
         control_spec.load_control(node)
     assert "declared and disabled" in str(raised.value)
+
+
+#: The Pi header's physical pin for each GPIO the downstairs harness uses.
+HEADER = {17: 11, 18: 12, 27: 13, 22: 15, 23: 16, 24: 18, 10: 19, 25: 22,
+          9: 21, 11: 23, 8: 24}
+
+#: GPIOs the board pulls low at boot. A relay on any other energizes while
+#: the Pi starts, before any software runs. The serial console holds 14 and 15.
+PULLED_LOW_AT_BOOT = set(range(9, 28)) - {14, 15}
+
+
+def downstairs_relay_pins(node):
+    pins = []
+    for load in node.control["loads"].values():
+        pins.append(load.get("control_pin"))
+        for part in ("inverter", "pump"):
+            if isinstance(load.get(part), dict):
+                pins.append(load[part]["control_pin"])
+    return [pin for pin in pins if pin is not None]
+
+
+def test_the_downstairs_harness_is_one_connector_on_physical_11_to_24():
+    """Every relay channel and the box sensor share one 2x7 connector, so a
+    replacement Pi takes the harness as one plug. A pin outside the block is
+    a loose wire somebody has to find again in three years."""
+    node = load(REPO / "sites" / "blind1" / "downstairs.yaml")
+    relays = downstairs_relay_pins(node) + node.control["spare_pins"]
+    assert len(relays) == 8, "one per channel of the relay board"
+    assert len(set(relays)) == 8
+    sensor = [d for d in node.devices if d.driver == "dht"]
+    assert [d.params["pin"] for d in sensor] == [8]
+    for pin in relays + [8]:
+        assert pin in HEADER, "GPIO%d is outside physical 11 to 24" % pin
+        assert 11 <= HEADER[pin] <= 24
+
+
+def test_every_downstairs_relay_pin_is_pulled_low_at_boot():
+    node = load(REPO / "sites" / "blind1" / "downstairs.yaml")
+    for pin in downstairs_relay_pins(node) + node.control["spare_pins"]:
+        assert pin in PULLED_LOW_AT_BOOT, (
+            "GPIO%d is not pulled low at boot, so its relay would energize "
+            "while the Pi starts" % pin)
+
+
+def test_the_downstairs_spare_channels_are_held():
+    node = load(REPO / "sites" / "blind1" / "downstairs.yaml")
+    assert node.control["spare_pins"] == [17, 10]

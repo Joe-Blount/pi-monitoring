@@ -21,8 +21,9 @@ devices:
   # The overlay is called dht11 whatever sensor is attached. A DHT22 uses the
   # same line, which is the commonest reason people think it is unsupported.
   #
-  # The pin here is documentation: the overlay is what binds the sensor, and
-  # the driver finds it on the industrial I/O bus rather than by pin.
+  # The overlay is what binds the sensor, and the driver finds it on the
+  # industrial I/O bus. The pin here must match gpiopin in the overlay: the
+  # driver refuses a sensor the kernel reports on any other pin.
   - name: box
     driver: dht
     mode: poll
