@@ -849,8 +849,8 @@ def test_the_downstairs_control_block_is_refused_until_the_pack_moves():
 
 
 #: The Pi header's physical pin for each GPIO the downstairs harness uses.
-HEADER = {17: 11, 18: 12, 27: 13, 22: 15, 23: 16, 24: 18, 10: 19, 25: 22,
-          9: 21, 11: 23, 8: 24}
+HEADER = {3: 5, 17: 11, 18: 12, 27: 13, 22: 15, 23: 16, 24: 18, 10: 19,
+          25: 22, 9: 21}
 
 #: GPIOs the Pi pulls low at boot. Every relay pin on one board shares one
 #: resting state, so a single watched boot shows how the board takes it on
@@ -868,19 +868,27 @@ def downstairs_relay_pins(node):
     return [pin for pin in pins if pin is not None]
 
 
-def test_the_downstairs_harness_is_one_connector_on_physical_11_to_24():
-    """Every relay channel and the box sensor share one 2x7 connector, so a
-    replacement Pi takes the harness as one plug. A pin outside the block is
-    a loose wire somebody has to find again in three years."""
+def test_the_downstairs_relay_harness_is_one_connector_on_physical_11_to_22():
+    """Every relay channel shares one 2x6 connector, so a replacement Pi
+    takes the relay harness as one plug. A pin outside the block is a loose
+    wire somebody has to find again in three years."""
     node = load(REPO / "sites" / "blind1" / "downstairs.yaml")
     relays = downstairs_relay_pins(node) + node.control["spare_pins"]
     assert len(relays) == 8, "one per channel of the relay board"
     assert len(set(relays)) == 8
+    for pin in relays:
+        assert pin in HEADER, "GPIO%d is outside physical 11 to 22" % pin
+        assert 11 <= HEADER[pin] <= 22
+
+
+def test_the_downstairs_sensor_plug_sits_at_the_end_of_the_header():
+    """The sensor's plug takes physical 1, 5 and 6, butted against the end
+    of the header so it cannot go on one pin off. Its data pin is GPIO3,
+    which carries the board's own pull-up."""
+    node = load(REPO / "sites" / "blind1" / "downstairs.yaml")
     sensor = [d for d in node.devices if d.driver == "dht"]
-    assert [d.params["pin"] for d in sensor] == [8]
-    for pin in relays + [8]:
-        assert pin in HEADER, "GPIO%d is outside physical 11 to 24" % pin
-        assert 11 <= HEADER[pin] <= 24
+    assert [d.params["pin"] for d in sensor] == [3]
+    assert HEADER[3] == 5
 
 
 def test_every_downstairs_relay_pin_rests_the_same_way_at_boot():

@@ -114,11 +114,13 @@ devices:
   # the kernel's driver, which needs this in /boot/firmware/config.txt and a
   # reboot:
   #
-  #     dtoverlay=dht11,gpiopin=8
+  #     dtoverlay=dht11,gpiopin=3
   #
-  # GPIO8 is pulled high at boot, unlike every relay pin here, which does
-  # not matter to an input. It is also SPI chip select 0, so SPI stays off
-  # on this machine.
+  # The sensor has its own 3-pin plug at the end of the header: 3V3 on
+  # physical 1, data on 5, ground on 6. The plug butts against the end of
+  # the header, so it cannot go on one pin off. GPIO3 carries the board's
+  # own pull-up to 3V3, which the sensor's data line needs, and rests high
+  # at boot. It is also the I2C clock, so I2C stays off on this machine.
   #
   # The overlay is what binds the sensor, and the driver finds it on the
   # industrial I/O bus. The pin here must match gpiopin in the overlay: the
@@ -130,7 +132,7 @@ devices:
     tags: {location: pi}
     params:
       model: DHT11
-      pin: 8
+      pin: 3
       retries: 3
 
   - name: host
@@ -173,10 +175,10 @@ control:
 
   loop_interval: 10s
 
-  # Every relay channel and the box sensor share one 2x7 connector on
-  # physical pins 11 to 24, so the harness moves to a replacement Pi as one
-  # plug. Ground for the relay board is physical 14, and the sensor takes
-  # 3V3 on 17, ground on 20 and data on 24.
+  # Every relay channel shares one 2x6 connector on physical pins 11 to 22,
+  # so the relay harness moves to a replacement Pi as one plug. The relay
+  # board's ground is physical 14 and its input VCC is 3V3 on 17, both in
+  # the same connector. The box sensor has its own plug.
   #
   # The two relay channels no load uses yet, wired to the board so a load
   # added later needs no visit with a soldering iron. Held here so no sensor
@@ -188,7 +190,7 @@ control:
   # The relay board energizes a coil when its input is pulled to ground.
   # Wired so an undriven pin leaves every coil off: the JD-VCC jumper is
   # removed, the coils take 5 V from the supply on JD-VCC, and the input
-  # side's VCC takes the Pi's 3.3 V on physical 1, outside the connector.
+  # side's VCC takes the Pi's 3.3 V on physical 17, inside the connector.
   # A pin driven high then carries no current through the input at all, and
   # a dead Pi takes the input side down with it.
   relay_trigger: low
