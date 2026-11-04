@@ -110,6 +110,28 @@ devices:
       # reports a magnitude and a direction separately and the driver
       # combines them, so nothing here needs a wiring-dependent setting.
 
+  # The box's own air, on the same kind of sensor as upstairs. Read through
+  # the kernel's driver, which needs this in /boot/firmware/config.txt and a
+  # reboot:
+  #
+  #     dtoverlay=dht11,gpiopin=8
+  #
+  # GPIO8 is pulled high at boot, which rules it out for a relay and does
+  # not matter to an input. It is also SPI chip select 0, so SPI stays off
+  # on this machine.
+  #
+  # The pin here is documentation: the overlay is what binds the sensor, and
+  # the driver finds it on the industrial I/O bus rather than by pin.
+  - name: box
+    driver: dht
+    mode: poll
+    interval: 30s
+    tags: {location: pi}
+    params:
+      model: DHT11
+      pin: 8
+      retries: 3
+
   - name: host
     driver: host
     mode: poll
@@ -150,11 +172,16 @@ control:
 
   loop_interval: 10s
 
+  # Every relay channel and the box sensor share one 2x7 connector on
+  # physical pins 11 to 24, so the harness moves to a replacement Pi as one
+  # plug. Ground for the relay board is physical 14, and the sensor takes
+  # 3V3 on 17, ground on 20 and data on 24.
+  #
   # The two relay channels no load uses yet, wired to the board so a load
   # added later needs no visit with a soldering iron. Held here so no sensor
   # or load can take either pin without the file being refused. Both pins are
   # pulled low at boot, as every relay pin here must be.
-  spare_pins: [26, 20]
+  spare_pins: [17, 10]               # physical 11 and 19
 
   loads:
 
@@ -314,7 +341,7 @@ control:
     nvr:
       type: dc_branch
       enabled: true
-      control_pin: 16                 # physical 36
+      control_pin: 18                 # physical 12
       polarity: energize_to_shed
       min_run: 10m                    # a recorder should not be cycled
       min_off: 30m                    # repeatedly in either direction

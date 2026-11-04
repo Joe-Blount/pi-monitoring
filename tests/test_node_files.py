@@ -765,7 +765,7 @@ def test_the_upstairs_control_block_is_accepted_as_it_stands():
 OTHER_CAMERA_BRANCHES = {
     "cameras_far": (27, [(60.0, "clock"), (40.0, "solar"), (20.0, "never")],
                     (600.0, 1800.0)),
-    "nvr": (16, [(5.0, "never")], (600.0, 1800.0)),
+    "nvr": (18, [(5.0, "never")], (600.0, 1800.0)),
 }
 
 

@@ -291,7 +291,7 @@ never be the reason a site stays dark.
 |---|---|---|---|---|
 | blind1 / downstairs | cameras near | 23 | 16 | running (normally closed) |
 | blind1 / downstairs | cameras far | 27 | 13 | running (normally closed) |
-| blind1 / downstairs | nvr | 16 | 36 | running (normally closed) |
+| blind1 / downstairs | nvr | 18 | 12 | running (normally closed) |
 | blind1 / downstairs | irrigation: inverter | 25 | 22 | off (normally open) |
 | blind1 / downstairs | irrigation: pump | 22 | 15 | off (normally open) |
 | blind1 / downstairs | cpu fan | 24 | 18 | off (normally open) |
