@@ -1034,3 +1034,19 @@ def test_the_installer_warns_about_the_kernel_setting_the_controller_refuses():
     assert ("/sys/module/pinctrl_bcm2835/parameters/persist_gpio_outputs"
             in INSTALL_CODE)
     assert relay.PERSIST_FIX in INSTALL_CODE
+
+
+def test_the_kernel_warning_is_given_only_where_control_may_run():
+    """On a node with control off there is no controller to refuse, and an
+    instruction to edit the boot line there is one nobody needs."""
+    start = INSTALL_CODE.index('case "$CONTROL_WANTED" in')
+    block = INSTALL_CODE[start:]
+    branches = {}
+    for label in ("yes)", "no)", "*)"):
+        body = block[block.index(label):]
+        branches[label] = body[:body.index(";;")]
+    assert "warn_if_outputs_persist" in branches["yes)"]
+    assert "warn_if_outputs_persist" in branches["*)"]
+    assert "warn_if_outputs_persist" not in branches["no)"]
+    assert INSTALL_CODE[:start].count("warn_if_outputs_persist") == 1, (
+        "defined before the case and called from nowhere else")

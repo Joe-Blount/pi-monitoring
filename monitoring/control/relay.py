@@ -64,9 +64,9 @@ The backend is not the whole of it. A Raspberry Pi kernel can be built to
 keep an output driven after the line is freed, through a parameter of its
 pin controller, and some ship with it turned on. There the
 character device frees the claim and the pin goes on driving anyway. No pin
-is claimed while that parameter is on: a controller that will not start
-leaves every load at its wired fail-safe, which a dead one on such a kernel
-would not.
+is claimed while that parameter is on, and the controller refuses to start
+at all: one that never runs leaves every load at its wired fail-safe, which
+a dead one on such a kernel would not.
 """
 
 import os
@@ -90,7 +90,9 @@ PIN_FACTORY = "lgpio"
 
 #: The kernel's answer to whether a freed output stays driven, Y or N. Absent
 #: on kernels without the setting, which free an output as an input.
-PERSIST_PARAMETER = "/sys/module/pinctrl_bcm2835/parameters/persist_gpio_outputs"
+PERSIST_PARAMETER = os.environ.get(
+    "MONITORING_PERSIST_PARAMETER",
+    "/sys/module/pinctrl_bcm2835/parameters/persist_gpio_outputs")
 
 #: The boot parameter that turns it off.
 PERSIST_FIX = "pinctrl_bcm2835.persist_gpio_outputs=n"
@@ -109,6 +111,16 @@ def outputs_persist():
         return False
 
 
+def refuse_if_outputs_persist(what):
+    """Raise rather than drive `what` on a kernel that keeps outputs driven."""
+    if outputs_persist():
+        raise RelayError(
+            "refusing to drive %s: this kernel keeps an output driven after "
+            "the process holding it dies, so a crashed controller would leave "
+            "its relays where they were. Add %s to the end of the line in "
+            "/boot/firmware/cmdline.txt and reboot" % (what, PERSIST_FIX))
+
+
 def open_output(pin, initial_value=False):
     """Claim one output pin through gpiozero.
 
@@ -119,12 +131,7 @@ def open_output(pin, initial_value=False):
     branch, and then every later decision drives the opposite way.
     """
     os.environ["GPIOZERO_PIN_FACTORY"] = PIN_FACTORY
-    if outputs_persist():
-        raise RelayError(
-            "refusing to drive GPIO%s: this kernel keeps an output driven "
-            "after the process holding it dies, so a crashed controller would "
-            "leave its relays where they were. Add %s to the end of the line "
-            "in /boot/firmware/cmdline.txt and reboot" % (pin, PERSIST_FIX))
+    refuse_if_outputs_persist("GPIO%s" % pin)
     try:
         from gpiozero import DigitalOutputDevice
     except ImportError as exc:

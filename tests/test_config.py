@@ -410,6 +410,20 @@ control:
     assert "GPIO20" in str(exc.value)
 
 
+def test_a_single_spare_pin_written_without_a_list_is_named_as_such(tmp_path):
+    with pytest.raises(config.ConfigError) as exc:
+        config.load(write(tmp_path, """
+site: s
+node: n
+measurement: m
+control:
+  enabled: false
+  spare_pins: 26
+"""), KNOWN)
+    assert "list" in str(exc.value)
+    assert "whole number" not in str(exc.value)
+
+
 @pytest.mark.parametrize("spares", ["26", "[26, x]", "[26, 26.5]"])
 def test_spare_pins_must_be_a_list_of_whole_numbers(tmp_path, spares):
     with pytest.raises(config.ConfigError):

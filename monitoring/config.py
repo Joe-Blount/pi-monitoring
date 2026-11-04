@@ -124,11 +124,8 @@ def claimed_pins(devices, control, on_conflict=None, on_bad_pin=None):
             claim(params.get(key), "device %s" % device.name)
 
     spares = control.get("spare_pins")
-    if spares is not None and not isinstance(spares, list):
-        if on_bad_pin:
-            on_bad_pin(spares, "control spare_pins")
-    else:
-        for pin in spares or ():
+    if isinstance(spares, list):
+        for pin in spares:
             claim(pin, "a spare relay channel")
 
     for load_name, load in (control.get("loads") or {}).items():
@@ -158,6 +155,10 @@ def _check_pins(path, devices, control):
     Cheap to check and expensive to debug: a duplicated pin usually shows up
     as one device working and another silently reading nonsense.
     """
+    spares = control.get("spare_pins")
+    if spares is not None and not isinstance(spares, list):
+        _fail(path, "control.spare_pins must be a list of pins, found %r"
+                    % (spares,))
     claimed_pins(
         devices, control,
         on_conflict=lambda pin, first, second: _fail(

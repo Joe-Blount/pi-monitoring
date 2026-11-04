@@ -313,10 +313,11 @@ def cmd_run(args):
     try:
         node = config.load(args.node, known_drivers=driver_registry.names())
         _refuse_if_control_is_off(node)
+        relay.refuse_if_outputs_persist("any relay")
         interval = _loop_interval(node)
         machine = _build_machine(node)
     except (config.ConfigError, spec.SpecError,
-            location.LocationError) as exc:
+            location.LocationError, relay.RelayError) as exc:
         # The two ways a control block can be unusable. Starting anyway
         # would drive every pin from defaults nobody wrote.
         sys.stderr.write("%s\n" % exc)
@@ -343,9 +344,10 @@ def cmd_once(args):
     try:
         node = config.load(args.node, known_drivers=driver_registry.names())
         _refuse_if_control_is_off(node)
+        relay.refuse_if_outputs_persist("any relay")
         machine = _build_machine(node)
     except (config.ConfigError, spec.SpecError,
-            location.LocationError) as exc:
+            location.LocationError, relay.RelayError) as exc:
         sys.stderr.write("%s\n" % exc)
         return 2
 

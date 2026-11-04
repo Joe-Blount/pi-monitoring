@@ -160,6 +160,9 @@ def run_control(tmp_path, *args, extra_env=None, timeout=30):
     env["MONITORING_PUBLISHED"] = str(tmp_path / "published.json")
     env["MONITORING_HIGH_WATER"] = str(tmp_path / "hw.json")
     env["MONITORING_BOOT_ID"] = BOOT
+    # As on a kernel that frees outputs, whatever the machine running this
+    # reports. A test about the other kind passes a file of its own.
+    env["MONITORING_PERSIST_PARAMETER"] = str(tmp_path / "no-such-setting")
     env.setdefault("MONITORING_LOCATION",
                    str(location_file(tmp_path)) if not (
                        tmp_path / "location.yaml").exists()
@@ -434,6 +437,9 @@ def _start_run(tmp_path, node, extra_env=None):
     env["MONITORING_PUBLISHED"] = str(tmp_path / "published.json")
     env["MONITORING_HIGH_WATER"] = str(tmp_path / "hw.json")
     env["MONITORING_BOOT_ID"] = BOOT
+    # As on a kernel that frees outputs, whatever the machine running this
+    # reports. A test about the other kind passes a file of its own.
+    env["MONITORING_PERSIST_PARAMETER"] = str(tmp_path / "no-such-setting")
     env.setdefault("MONITORING_LOCATION",
                    str(location_file(tmp_path)) if not (
                        tmp_path / "location.yaml").exists()
@@ -825,3 +831,36 @@ def test_run_closes_the_relays_even_when_a_pass_raises(control_module):
     with pytest.raises(RuntimeError):
         control_module._run(machine, 0, lambda: False, sleep=lambda s: None)
     assert machine.closed
+
+
+# -- a kernel that keeps freed outputs driven ---------------------------------
+
+@pytest.mark.parametrize("command", ["run", "once"])
+def test_a_kernel_that_keeps_outputs_driven_is_refused_at_start(tmp_path,
+                                                                command):
+    """A controller on such a kernel would leave its relays where they were
+    if it crashed. It refuses at start, in one line naming the fix, rather
+    than running until its first decision and failing there."""
+    node = controlled_node(tmp_path)
+    setting = tmp_path / "persist_gpio_outputs"
+    setting.write_text("Y\n")
+    result = run_control(
+        tmp_path, command, "--node", str(node),
+        extra_env={"MONITORING_PERSIST_PARAMETER": str(setting)})
+    assert result.returncode == 2
+    assert "pinctrl_bcm2835.persist_gpio_outputs=n" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert not (tmp_path / "published.json").exists()
+
+
+def test_a_dry_run_is_not_refused_on_a_kernel_that_keeps_outputs_driven(
+        tmp_path):
+    """A dry run drives nothing, so it still shows what the controller
+    would decide on a machine waiting for the fix."""
+    node = controlled_node(tmp_path)
+    setting = tmp_path / "persist_gpio_outputs"
+    setting.write_text("Y\n")
+    result = run_control(
+        tmp_path, "dry-run", "--node", str(node),
+        extra_env={"MONITORING_PERSIST_PARAMETER": str(setting)})
+    assert result.returncode == 0, result.stderr

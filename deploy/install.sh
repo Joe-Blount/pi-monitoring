@@ -605,19 +605,23 @@ WANTS
 
     # Some kernels keep an output driven after the process holding it dies,
     # and then a crashed controller leaves every relay where it was. The
-    # controller refuses to claim a pin on such a kernel, so this is reported
-    # here, where it can be fixed, rather than first seen as a controller that
-    # will not start.
-    PERSIST=/sys/module/pinctrl_bcm2835/parameters/persist_gpio_outputs
-    if [[ -r "$PERSIST" ]] && [[ "$(cat "$PERSIST")" == Y* ]]; then
-        echo "    WARNING: this kernel keeps a freed GPIO output driven, so the" >&2
-        echo "    controller will refuse to drive any relay. Add" >&2
-        echo "    pinctrl_bcm2835.persist_gpio_outputs=n to the end of the line" >&2
-        echo "    in /boot/firmware/cmdline.txt and reboot." >&2
-    fi
+    # controller refuses to start on such a kernel, so a node that runs
+    # control is told here, where it can be fixed, rather than first finding
+    # a controller that will not start. A node that runs no controller has
+    # nothing to fix.
+    warn_if_outputs_persist() {
+        local persist=/sys/module/pinctrl_bcm2835/parameters/persist_gpio_outputs
+        if [[ -r "$persist" ]] && [[ "$(cat "$persist")" == Y* ]]; then
+            echo "    WARNING: this kernel keeps a freed GPIO output driven, so" >&2
+            echo "    the controller refuses to start. Add" >&2
+            echo "    pinctrl_bcm2835.persist_gpio_outputs=n to the end of the" >&2
+            echo "    line in /boot/firmware/cmdline.txt and reboot." >&2
+        fi
+    }
 
     case "$CONTROL_WANTED" in
     yes)
+        warn_if_outputs_persist
         systemctl enable monitoring-control >/dev/null 2>&1 || true
         # Guarded, because errexit makes a bare failing command end the
         # script. A restart that fails would otherwise exit here, before the
@@ -645,6 +649,7 @@ WANTS
         echo "    installed, not started: this node file has control disabled"
         ;;
     *)
+        warn_if_outputs_persist
         echo "    installed, not started: could not read the node file to" >&2
         echo "    tell whether this node runs control" >&2
         ;;
