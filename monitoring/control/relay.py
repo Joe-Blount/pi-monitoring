@@ -62,7 +62,7 @@ than trusting the environment it finds.
 
 The backend is not the whole of it. A Raspberry Pi kernel can be built to
 keep an output driven after the line is freed, through a parameter of its
-pin controller, and the kernels shipped with Debian 13 turn it on. There the
+pin controller, and some ship with it turned on. There the
 character device frees the claim and the pin goes on driving anyway. No pin
 is claimed while that parameter is on: a controller that will not start
 leaves every load at its wired fail-safe, which a dead one on such a kernel

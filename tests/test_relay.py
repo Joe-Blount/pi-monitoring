@@ -298,6 +298,10 @@ def test_a_missing_gpiozero_says_so_rather_than_failing_obscurely(monkeypatch):
 
 # -- a kernel that keeps outputs driven -------------------------------------
 
+#: The setting's real location, read before any test points it elsewhere.
+KERNEL_SETTING = relay.PERSIST_PARAMETER
+
+
 def persist(tmp_path, monkeypatch, value):
     path = tmp_path / "persist_gpio_outputs"
     if value is not None:
@@ -306,10 +310,17 @@ def persist(tmp_path, monkeypatch, value):
 
 
 def test_no_pin_is_claimed_while_the_kernel_keeps_outputs_after_death(
-        tmp_path, monkeypatch, pins):
+        tmp_path, monkeypatch):
     """On such a kernel a killed controller leaves its relays where they
     were, and an inverter or a pump stays energized. Refusing every claim
-    leaves each load at its wired fail-safe instead."""
+    leaves each load at its wired fail-safe instead. Even a claim released
+    at once drives the pin for its width, so none may be made at all."""
+    import sys
+    import types
+    claims = []
+    module = types.ModuleType("gpiozero")
+    module.DigitalOutputDevice = lambda *args, **kwargs: claims.append(args)
+    monkeypatch.setitem(sys.modules, "gpiozero", module)
     persist(tmp_path, monkeypatch, "Y")
     with pytest.raises(relay.RelayError) as raised:
         relay.open_output(25)
@@ -317,8 +328,7 @@ def test_no_pin_is_claimed_while_the_kernel_keeps_outputs_after_death(
     assert "GPIO25" in message
     assert relay.PERSIST_FIX in message
     assert "cmdline.txt" in message
-    persist(tmp_path, monkeypatch, "N")
-    relay.open_output(25).close()
+    assert claims == []
 
 
 @pytest.mark.parametrize("value", ["N", None])
@@ -332,5 +342,5 @@ def test_a_kernel_that_releases_outputs_is_driven(tmp_path, monkeypatch, pins,
 
 def test_the_fix_names_the_kernel_setting_it_turns_off():
     assert relay.PERSIST_FIX == "pinctrl_bcm2835.persist_gpio_outputs=n"
-    assert relay.PERSIST_PARAMETER.endswith(
-        "pinctrl_bcm2835/parameters/persist_gpio_outputs")
+    assert KERNEL_SETTING == (
+        "/sys/module/pinctrl_bcm2835/parameters/persist_gpio_outputs")

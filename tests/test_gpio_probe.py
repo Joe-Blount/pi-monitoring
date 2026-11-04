@@ -209,12 +209,9 @@ def test_a_pin_left_as_a_driving_output_is_not_called_a_pass(probe, capsys):
     assert "PASS" not in out
 
 
-def test_the_remedy_names_its_own_prerequisite(probe, tmp_path, monkeypatch,
-                                               capsys):
+def test_the_remedy_names_its_own_prerequisite(probe, capsys):
     """The older of the two deployed systems ships gpiozero 1.6.2, which has
     no lgpio factory, so the advice cannot be followed there as written."""
-    from monitoring.control import relay
-    monkeypatch.setattr(relay, "PERSIST_PARAMETER", str(tmp_path / "absent"))
     probe["verdict"]({"after_kill": {"level": "1", "func": "OUTPUT"}})
     out = capsys.readouterr().out
     assert "Bullseye" in out or "gpiozero 2" in out
@@ -324,3 +321,24 @@ def test_a_failure_on_a_kernel_that_keeps_outputs_names_the_boot_setting(
     out = capsys.readouterr().out
     assert relay.PERSIST_FIX in out
     assert "cmdline.txt" in out
+
+
+def test_a_pin_is_read_through_pinctrl_where_raspi_gpio_is_absent(
+        probe, monkeypatch):
+    import subprocess
+    import types
+
+    def run(command, **kwargs):
+        if command[0] != "pinctrl":
+            raise FileNotFoundError(command[0])
+        return types.SimpleNamespace(
+            returncode=0, stdout=" 5: op -- -- | hi // GPIO5 = output\n")
+
+    fake = types.SimpleNamespace(run=run,
+                                 SubprocessError=subprocess.SubprocessError)
+    monkeypatch.setitem(probe["read_pin"].__globals__, "subprocess", fake)
+    monkeypatch.setitem(probe["read_pin"].__globals__, "debugfs_gpio",
+                        lambda _pin: None)
+    state = probe["read_pin"](5)
+    assert state["level"] == "1"
+    assert state["func"] == "OUTPUT"

@@ -197,8 +197,9 @@ dollar sensor must never block a software update at a site nobody can reach.
 
 ## Continuous integration
 
-Every push runs the suite on Python 3.9 and 3.11, the oldest and newest
-versions deployed, and loads every committed node file. Linux runners only.
+Every push runs the suite on Python 3.9, 3.11 and 3.13, one for each
+operating system release deployed, and loads every committed node file.
+Linux runners only.
 
 ## Development
 
