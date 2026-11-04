@@ -409,3 +409,69 @@ def test_a_pretend_relay_keeps_the_trigger():
     pretend = relay.Pretend(23, relay.ENERGIZE_TO_SHED, relay.LOW)
     pretend.apply(True)
     assert pretend._device.active_high is False
+
+
+# -- claiming an output at its starting level -------------------------------
+
+class FakeLgpio:
+    """Stands in for lgpio, which exists only on the machine, and records
+    every call made through it."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __getattr__(self, name):
+        if name.isupper():
+            return 0
+        def call(*args):
+            self.calls.append((name,) + args)
+            return 0
+        return call
+
+
+@pytest.fixture
+def lgpio(monkeypatch):
+    import sys
+    import types
+    fake = FakeLgpio()
+    module = types.ModuleType("lgpio")
+    module.__getattr__ = fake.__getattr__
+    monkeypatch.setitem(sys.modules, "lgpio", module)
+    monkeypatch.delitem(sys.modules, "gpiozero.pins.lgpio", raising=False)
+    return fake
+
+
+@pytest.mark.parametrize("state,level", [(True, 1), (False, 0)])
+def test_an_output_is_claimed_at_its_starting_level_in_one_call(lgpio, state,
+                                                                level):
+    """A low trigger board energizes its coil for as long as a pin claimed
+    at 0 waits to be written high. Claiming at the level leaves no wait."""
+    import types
+    _, pin_class = relay.lgpio_classes()
+    pin = object.__new__(pin_class)
+    pin._factory = types.SimpleNamespace(_handle=7)
+    pin._number = 23
+    pin._callback = None
+    pin.output_with_state(state)
+    assert lgpio.calls == [("gpio_claim_output", 7, 23, level)]
+
+
+def test_the_controller_drives_through_the_one_call_claim(lgpio, monkeypatch):
+    """With no factory set, as on the machine, open_output installs the
+    backend that claims at the starting level rather than the library's
+    own."""
+    from gpiozero import Device
+    built = []
+
+    class Factory:
+        def __init__(self):
+            built.append(self)
+
+    monkeypatch.setattr(Device, "pin_factory", None)
+    monkeypatch.setattr(relay, "lgpio_classes", lambda: (Factory, None))
+    try:
+        relay.open_output(23)
+    except relay.RelayError:
+        pass
+    assert len(built) == 1
+    assert Device.pin_factory is built[0]

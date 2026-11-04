@@ -143,6 +143,44 @@ def refuse_if_outputs_persist(what):
             "/boot/firmware/cmdline.txt and reboot" % (what, PERSIST_FIX))
 
 
+def claim_output_at(pin, state):
+    """Claim an lgpio pin as an output already at `state`, in one call.
+
+    The library's own claim takes two: the line is claimed as an output at
+    0, then written to its starting level. On a low trigger board that 0 is
+    a coil energized for as long as the gap between the two lasts, which a
+    busy machine can stretch past a relay's pull-in time. lgpio takes the
+    starting level in the claim itself, so there is no gap to stretch.
+    """
+    import lgpio
+    if getattr(pin, "_callback", None) is not None:
+        pin._callback.cancel()
+        pin._callback = None
+    lgpio.gpio_claim_output(pin.factory._handle, pin._number,
+                            1 if state else 0)
+
+
+def lgpio_classes():
+    """The lgpio factory and pin this module drives through.
+
+    Subclassed only to claim each output at its starting level. Built on
+    demand because importing the backend imports lgpio, which exists only
+    on the machine itself.
+    """
+    from gpiozero.pins.lgpio import LGPIOFactory, LGPIOPin
+
+    class Pin(LGPIOPin):
+        def output_with_state(self, state):
+            claim_output_at(self, state)
+
+    class Factory(LGPIOFactory):
+        def __init__(self, chip=None):
+            LGPIOFactory.__init__(self, chip)
+            self.pin_class = Pin
+
+    return Factory, Pin
+
+
 def open_output(pin, initial_value=False, active_high=True):
     """Claim one output pin through gpiozero.
 
@@ -156,10 +194,12 @@ def open_output(pin, initial_value=False, active_high=True):
     os.environ["GPIOZERO_PIN_FACTORY"] = PIN_FACTORY
     refuse_if_outputs_persist("GPIO%s" % pin)
     try:
-        from gpiozero import DigitalOutputDevice
+        from gpiozero import Device, DigitalOutputDevice
     except ImportError as exc:
         raise RelayError("load control needs gpiozero: %s" % exc)
     try:
+        if Device.pin_factory is None:
+            Device.pin_factory = lgpio_classes()[0]()
         return DigitalOutputDevice(pin, initial_value=initial_value,
                                    active_high=active_high)
     except Exception as exc:

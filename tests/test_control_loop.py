@@ -627,3 +627,55 @@ def test_a_start_before_the_first_temperature_never_energizes_a_cold_fan(
         world["mono"] = mono
         machine.once()
     assert pin.levels and True not in pin.levels
+
+
+# -- the board's trigger, from the node file to the pin ----------------------
+
+@pytest.fixture
+def mock_pins():
+    """gpiozero's mock factory, so a test reads the voltage on the pin."""
+    from gpiozero import Device
+    from gpiozero.pins.mock import MockFactory
+    previous = Device.pin_factory
+    Device.pin_factory = MockFactory()
+    yield Device.pin_factory
+    Device.pin_factory.reset()
+    Device.pin_factory = previous
+
+
+@pytest.mark.parametrize("trigger,shed_voltage", [("high", True),
+                                                  ("low", False)])
+def test_the_node_trigger_reaches_the_pin_through_the_loop_own_relays(
+        tmp_path, mock_pins, trigger, shed_voltage):
+    """Nothing injected between the node file and the pin: the loop builds
+    its own relays from the spec, as it does on the machine. The published
+    level is whether the coil is energized, whichever voltage did it."""
+    node = FakeNode({"cameras": CAMERAS})
+    node.control["relay_trigger"] = trigger
+    soc = {"value": 5.0}
+    published = {}
+    machine = loop.Loop(
+        node, LOCATION, ZONE,
+        now=lambda: datetime.datetime(2026, 6, 21, 12, tzinfo=ZONE),
+        monotonic=lambda: 0.0,
+        trust=lambda high_water=None: clock.Trust(True, "under test"),
+        readings=lambda: reading(soc=soc["value"]),
+        switches=lambda: {"shedding_enabled": True, "loads": {}},
+        state_path=str(tmp_path / "state.json"),
+        published_path=str(tmp_path / "published.json"),
+        high_water_path=str(tmp_path / "hw.json"),
+        publish=lambda _path, data: published.update(data),
+        boot=BOOT)
+    try:
+        machine.once()
+        assert mock_pins.pin(23).state is shed_voltage
+        assert published["loads"]["cameras"]["level"] == 1.0
+        assert published["loads"]["cameras"]["powered"] == 0.0
+
+        soc["value"] = 90.0
+        machine.once()
+        assert mock_pins.pin(23).state is (not shed_voltage)
+        assert published["loads"]["cameras"]["level"] == 0.0
+        assert published["loads"]["cameras"]["powered"] == 1.0
+    finally:
+        machine.close()

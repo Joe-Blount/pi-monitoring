@@ -490,7 +490,9 @@ def main():
 
     if args.boot_state_only:
         print("GPIO%d at boot: %s" % (args.pin, describe(read_pin(args.pin))))
-        print("For an energize-to-connect load this must read level=0.")
+        print("It must read func=INPUT: nothing is driving the pin. Whether")
+        print("the relay stays off depends on the board's trigger, so watch")
+        print("its LED: it must stay dark.")
         return 0
 
     print("GPIO probe on BCM pin %d" % args.pin)

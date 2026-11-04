@@ -192,11 +192,12 @@ number is the one that turned the load off. `shed_level` says how many tiers
 are currently latched; `0` means none and the load should be running unless
 something else is holding it off.
 
-Do not read `level` as whether the cameras have power. It is the raw voltage
-on the pin, not the load's state, and for a normally-closed branch the two
-are opposite: `level=0.0` next to `powered=1.0` means the relay is
-de-energized and the cameras are running, which is correct. Use `powered`
-for whether the load has power.
+Do not read `level` as whether the cameras have power. It is whether the
+relay's coil is energized, not the load's state, and for a normally-closed
+branch the two are opposite: `level=0.0` next to `powered=1.0` means the relay
+is de-energized and the cameras are running, which is correct. Use `powered`
+for whether the load has power. Nor is `level` the voltage on the pin: on a
+board that triggers low, an energized coil is a pin driven low.
 
 In the database the same fields carry the same names, on a point tagged
 `load=cameras_near`. See the table of published fields below.
@@ -317,7 +318,7 @@ the node file needs no panel edited.
 | Field | Meaning |
 |---|---|
 | `powered` | `1.0` if the load has power right now, `0.0` if not. Read this, not `level`, to know the load's actual state. |
-| `level` | The raw pin voltage: `1.0` energized, `0.0` not. Opposite of `powered` on a normally-closed load such as the cameras. |
+| `level` | Whether the relay's coil is energized: `1.0` energized, `0.0` not, whichever voltage on the pin does it. Opposite of `powered` on a normally-closed load such as the cameras. |
 | `shed_level` | How many tiers are currently latched. `0` is nothing latched. |
 | `reason_code` | Which kind of rule decided this pass, as a number. Table below. |
 | `reason` | The same decision in words, with the number it compared. |
