@@ -375,3 +375,61 @@ control:
     - {type: dc_branch, control_pin: 23}
 """), KNOWN)
     assert "must be a mapping" in str(exc.value)
+
+
+def test_a_load_cannot_take_a_pin_held_as_a_spare_relay_channel(tmp_path):
+    """A spare channel is wired to the relay board already. A load or a
+    sensor put on it would drive, or read, a relay nobody meant to touch."""
+    with pytest.raises(config.ConfigError) as exc:
+        config.load(write(tmp_path, """
+site: s
+node: n
+measurement: m
+control:
+  enabled: false
+  spare_pins: [26, 20]
+  loads:
+    cameras: {type: dc_branch, control_pin: 26}
+"""), KNOWN)
+    message = str(exc.value)
+    assert "GPIO26" in message and "spare" in message
+
+
+def test_a_sensor_cannot_take_a_pin_held_as_a_spare_relay_channel(tmp_path):
+    with pytest.raises(config.ConfigError) as exc:
+        config.load(write(tmp_path, """
+site: s
+node: n
+measurement: m
+devices:
+  - {name: rain, driver: rain_gauge, mode: resident, params: {pin: 20}}
+control:
+  enabled: false
+  spare_pins: [26, 20]
+"""), KNOWN)
+    assert "GPIO20" in str(exc.value)
+
+
+@pytest.mark.parametrize("spares", ["26", "[26, x]", "[26, 26.5]"])
+def test_spare_pins_must_be_a_list_of_whole_numbers(tmp_path, spares):
+    with pytest.raises(config.ConfigError):
+        config.load(write(tmp_path, """
+site: s
+node: n
+measurement: m
+control:
+  enabled: false
+  spare_pins: %s
+""" % spares), KNOWN)
+
+
+def test_spare_pins_alone_load(tmp_path):
+    node = config.load(write(tmp_path, """
+site: s
+node: n
+measurement: m
+control:
+  enabled: false
+  spare_pins: [26, 20]
+"""), KNOWN)
+    assert node.control["spare_pins"] == [26, 20]

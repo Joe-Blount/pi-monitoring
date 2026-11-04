@@ -63,6 +63,34 @@ def raspi_gpio(pin):
     }
 
 
+def parse_pinctrl(text, pin):
+    """Read one line of pinctrl output, such as " 5: op -- -- | hi // GPIO5"."""
+    match = re.search(r"^\s*%d:\s+(\w+)\s+([^|]*)\|\s*(hi|lo)\b" % pin, text,
+                      re.MULTILINE)
+    if not match:
+        return None
+    function, settings, level = match.groups()
+    pulls = [word for word in settings.split() if word in ("pu", "pd", "pn")]
+    return {
+        "level": "1" if level == "hi" else "0",
+        "func": {"ip": "INPUT", "op": "OUTPUT"}.get(function, function.upper()),
+        "pull": pulls[-1] if pulls else None,
+        "raw": match.group(0).strip(),
+    }
+
+
+def pinctrl_gpio(pin):
+    """Read a pin through pinctrl, which does not claim the line either."""
+    try:
+        out = subprocess.run(["pinctrl", "get", str(pin)],
+                             capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    return parse_pinctrl(out.stdout, pin)
+
+
 def debugfs_gpio(pin):
     """Read a pin from the kernel's debug file, which also does not claim it."""
     try:
@@ -86,7 +114,7 @@ def debugfs_gpio(pin):
 
 def read_pin(pin):
     """Report a pin's state without disturbing it."""
-    return raspi_gpio(pin) or debugfs_gpio(pin)
+    return raspi_gpio(pin) or pinctrl_gpio(pin) or debugfs_gpio(pin)
 
 
 def describe(state):
@@ -141,12 +169,24 @@ def spawn_holder(pin):
 
 # -- the checks --------------------------------------------------------------
 
+def gpiozero_version(module):
+    """Some packaged builds carry no __version__; the installed metadata does."""
+    version = getattr(module, "__version__", None)
+    if version:
+        return version
+    try:
+        from importlib.metadata import version as installed_version
+        return installed_version("gpiozero")
+    except Exception:
+        return "unknown"
+
+
 def report_environment():
     print("== environment")
     print("  python        : %s" % sys.version.split()[0])
     try:
         import gpiozero
-        print("  gpiozero      : %s" % gpiozero.__version__)
+        print("  gpiozero      : %s" % gpiozero_version(gpiozero))
     except ImportError:
         print("  gpiozero      : NOT INSTALLED. apt install python3-gpiozero")
         return False
@@ -167,8 +207,13 @@ def report_environment():
         print("  factory in use: could not determine (%s)" % exc)
 
     print("  raspi-gpio    : %s" % ("present" if raspi_gpio(2) else "absent"))
+    print("  pinctrl       : %s" % ("present" if pinctrl_gpio(2) else "absent"))
     print("  debugfs       : %s" % ("readable" if os.access(DEBUGFS, os.R_OK)
                                     else "not readable, run with sudo"))
+    from monitoring.control import relay
+    print("  freed outputs : %s" % (
+        "KEPT DRIVEN by the kernel. Add %s to cmdline.txt" % relay.PERSIST_FIX
+        if relay.outputs_persist() else "released"))
     return True
 
 
@@ -376,8 +421,8 @@ def verdict(results):
     killed = results.get("after_kill")
     if killed is None:
         print("  Could not read the pin after the kill, so the central question")
-        print("  is UNANSWERED. Install raspi-gpio, or run with sudo so the")
-        print("  kernel debug file is readable.")
+        print("  is UNANSWERED. Install raspi-gpio or pinctrl, or run with sudo")
+        print("  so the kernel debug file is readable.")
         return 2
 
     function = killed.get("func")
@@ -401,11 +446,18 @@ def verdict(results):
               % describe(killed))
         print("  Energize-to-connect does NOT hold on this machine. A crashed")
         print("  controller would leave the inverter and pump energized.")
-        print("  Fix before wiring anything: install python3-lgpio and set")
-        print("  GPIOZERO_PIN_FACTORY=lgpio in the controller's unit file,")
-        print("  then run this again. Note that needs gpiozero 2.x, so on")
-        print("  Raspberry Pi OS Bullseye the machine has to be upgraded")
-        print("  first; 1.6.2 has no lgpio factory and no such package.")
+        from monitoring.control import relay
+        if relay.outputs_persist():
+            print("  This kernel keeps a freed output driven. Fix before wiring")
+            print("  anything: add %s to the end of the" % relay.PERSIST_FIX)
+            print("  line in /boot/firmware/cmdline.txt, reboot, and run this")
+            print("  again.")
+        else:
+            print("  Fix before wiring anything: install python3-lgpio and set")
+            print("  GPIOZERO_PIN_FACTORY=lgpio in the controller's unit file,")
+            print("  then run this again. Note that needs gpiozero 2.x, so on")
+            print("  Raspberry Pi OS Bullseye the machine has to be upgraded")
+            print("  first; 1.6.2 has no lgpio factory and no such package.")
 
     shared = results.get("shared_input")
     if shared is True:

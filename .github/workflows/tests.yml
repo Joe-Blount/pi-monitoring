@@ -7,9 +7,9 @@
 # Linux runners only. They bill at the plain rate, where macOS bills at ten
 # times that and Windows at twice, and nothing here is platform specific.
 #
-# Two Python versions on purpose: 3.9 because that is what the oldest deployed
-# machine runs, and 3.11 because that is what the newest runs. A change that
-# only works on one of them is a change that breaks a site.
+# One Python version per deployed release: 3.9 for Debian 11, 3.11 for
+# Debian 12 and 3.13 for Debian 13. A change that only works on some of them
+# is a change that breaks a site.
 #
 # Each runs in the official Python image for its version rather than on a
 # Python installed onto the runner. The runner's image moves on its own
@@ -30,7 +30,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.9", "3.11"]
+        python: ["3.9", "3.11", "3.13"]
     container: python:${{ matrix.python }}
 
     steps:

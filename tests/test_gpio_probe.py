@@ -209,9 +209,12 @@ def test_a_pin_left_as_a_driving_output_is_not_called_a_pass(probe, capsys):
     assert "PASS" not in out
 
 
-def test_the_remedy_names_its_own_prerequisite(probe, capsys):
+def test_the_remedy_names_its_own_prerequisite(probe, tmp_path, monkeypatch,
+                                               capsys):
     """The older of the two deployed systems ships gpiozero 1.6.2, which has
     no lgpio factory, so the advice cannot be followed there as written."""
+    from monitoring.control import relay
+    monkeypatch.setattr(relay, "PERSIST_PARAMETER", str(tmp_path / "absent"))
     probe["verdict"]({"after_kill": {"level": "1", "func": "OUTPUT"}})
     out = capsys.readouterr().out
     assert "Bullseye" in out or "gpiozero 2" in out
@@ -258,3 +261,66 @@ def test_a_failed_probe_still_kills_the_process_holding_the_pin(probe, monkeypat
     with pytest.raises(RuntimeError):
         probe["run_checks"](26)
     assert killed, "the holder was left running with the pin driven high"
+
+
+def test_a_gpiozero_without_a_version_attribute_still_reports_its_environment(
+        probe, monkeypatch, capsys):
+    """Some packaged builds of gpiozero carry no __version__. The probe must
+    still go on to name the pin factory, because that is what it is for."""
+    import types
+
+    class Device:
+        @staticmethod
+        def ensure_pin_factory():
+            raise RuntimeError("no pins here")
+
+    module = types.ModuleType("gpiozero")
+    module.Device = Device
+    monkeypatch.setitem(sys.modules, "gpiozero", module)
+
+    assert probe["report_environment"]() is True
+    out = capsys.readouterr().out
+    assert "gpiozero      :" in out
+    assert "factory in use" in out
+
+
+@pytest.mark.parametrize("line,level,func", [
+    (" 5: op -- -- | hi // GPIO5 = output", "1", "OUTPUT"),
+    (" 5: op -- -- | lo // GPIO5 = output", "0", "OUTPUT"),
+    (" 5: ip    -- | hi // GPIO5 = input", "1", "INPUT"),
+    (" 5: ip    pd | lo // GPIO5 = input", "0", "INPUT"),
+])
+def test_pinctrl_output_is_read_as_a_pin_state(probe, line, level, func):
+    """Systems that ship pinctrl in place of raspi-gpio must still answer
+    the question the probe exists for."""
+    state = probe["parse_pinctrl"](line, 5)
+    assert state["level"] == level
+    assert state["func"] == func
+
+
+def test_pinctrl_names_a_pull_only_when_it_reports_one(probe):
+    assert probe["parse_pinctrl"](" 5: ip    pd | lo // GPIO5 = input", 5)["pull"] == "pd"
+    assert probe["parse_pinctrl"](" 5: ip    -- | lo // GPIO5 = input", 5)["pull"] is None
+
+
+def test_pinctrl_output_for_another_pin_is_not_read(probe):
+    assert probe["parse_pinctrl"](" 15: op -- -- | hi // GPIO15 = output", 5) is None
+
+
+def test_an_alternate_function_is_neither_input_nor_output(probe):
+    state = probe["parse_pinctrl"](" 14: a0    pn | hi // GPIO14 = TXD0", 14)
+    assert state["func"] not in ("INPUT", "OUTPUT")
+
+
+def test_a_failure_on_a_kernel_that_keeps_outputs_names_the_boot_setting(
+        probe, tmp_path, monkeypatch, capsys):
+    """On that kernel the backend advice cannot help: lgpio is already in use
+    and the line is still left driven."""
+    from monitoring.control import relay
+    path = tmp_path / "persist_gpio_outputs"
+    path.write_text("Y\n")
+    monkeypatch.setattr(relay, "PERSIST_PARAMETER", str(path))
+    probe["verdict"]({"after_kill": {"level": "1", "func": "OUTPUT"}})
+    out = capsys.readouterr().out
+    assert relay.PERSIST_FIX in out
+    assert "cmdline.txt" in out

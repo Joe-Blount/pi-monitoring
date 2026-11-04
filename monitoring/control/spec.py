@@ -66,7 +66,7 @@ CPU_FAN_KEYS = {"type", "enabled", "control_pin", "polarity", "source",
 #: since restarted at zero, so keeping them would hold a dwell for as long as
 #: the machine had previously been up. A path here could only move the writes
 #: onto the card in exchange for state that is thrown away on arrival.
-CONTROL_KEYS = {"enabled", "loads", "loop_interval"}
+CONTROL_KEYS = {"enabled", "loads", "loop_interval", "spare_pins"}
 
 #: Keys this module answers for itself, with the reason an operator needs.
 #:

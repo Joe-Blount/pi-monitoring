@@ -59,6 +59,14 @@ character device backend does; the sysfs one does not, and leaves a pin
 driven and busy so the next start cannot even claim it. The installer pins
 the backend for exactly this reason, and this module asks for it again rather
 than trusting the environment it finds.
+
+The backend is not the whole of it. A Raspberry Pi kernel can be built to
+keep an output driven after the line is freed, through a parameter of its
+pin controller, and the kernels shipped with Debian 13 turn it on. There the
+character device frees the claim and the pin goes on driving anyway. No pin
+is claimed while that parameter is on: a controller that will not start
+leaves every load at its wired fail-safe, which a dead one on such a kernel
+would not.
 """
 
 import os
@@ -80,8 +88,25 @@ POLARITIES = (ENERGIZE_TO_SHED, ENERGIZE_TO_CONNECT)
 PIN_FACTORY = "lgpio"
 
 
+#: The kernel's answer to whether a freed output stays driven, Y or N. Absent
+#: on kernels without the setting, which free an output as an input.
+PERSIST_PARAMETER = "/sys/module/pinctrl_bcm2835/parameters/persist_gpio_outputs"
+
+#: The boot parameter that turns it off.
+PERSIST_FIX = "pinctrl_bcm2835.persist_gpio_outputs=n"
+
+
 class RelayError(RuntimeError):
     """A pin that cannot be driven."""
+
+
+def outputs_persist():
+    """True when the kernel keeps an output driven after its owner dies."""
+    try:
+        with open(PERSIST_PARAMETER) as handle:
+            return handle.read().strip().upper().startswith("Y")
+    except OSError:
+        return False
 
 
 def open_output(pin, initial_value=False):
@@ -94,6 +119,12 @@ def open_output(pin, initial_value=False):
     branch, and then every later decision drives the opposite way.
     """
     os.environ["GPIOZERO_PIN_FACTORY"] = PIN_FACTORY
+    if outputs_persist():
+        raise RelayError(
+            "refusing to drive GPIO%s: this kernel keeps an output driven "
+            "after the process holding it dies, so a crashed controller would "
+            "leave its relays where they were. Add %s to the end of the line "
+            "in /boot/firmware/cmdline.txt and reboot" % (pin, PERSIST_FIX))
     try:
         from gpiozero import DigitalOutputDevice
     except ImportError as exc:

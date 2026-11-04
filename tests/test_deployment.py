@@ -1024,3 +1024,12 @@ def test_the_location_probe_refuses_a_half_edited_file(tmp_path):
     with pytest.raises(location.LocationError) as raised:
         location.read(str(half))
     assert "needs a longitude" in str(raised.value)
+
+
+def test_the_installer_warns_about_the_kernel_setting_the_controller_refuses():
+    """The controller refuses to drive a pin on a kernel that keeps a freed
+    output driven. The installer names the same setting and the same fix, so
+    the first sign of it is a warning that says what to do."""
+    from monitoring.control import relay
+    assert relay.PERSIST_PARAMETER in INSTALL_CODE
+    assert relay.PERSIST_FIX in INSTALL_CODE

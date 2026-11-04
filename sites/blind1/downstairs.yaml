@@ -150,6 +150,12 @@ control:
 
   loop_interval: 10s
 
+  # The two relay channels no load uses yet, wired to the board so a load
+  # added later needs no visit with a soldering iron. Held here so no sensor
+  # or load can take either pin without the file being refused. Both pins are
+  # pulled low at boot, as every relay pin here must be.
+  spare_pins: [26, 20]
+
   loads:
 
     # Three DC branches, each on its own relay and switched on its 12 V

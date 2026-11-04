@@ -123,6 +123,14 @@ def claimed_pins(devices, control, on_conflict=None, on_bad_pin=None):
         for key in ("pin", "data_pin", "control_pin", "readback_pin"):
             claim(params.get(key), "device %s" % device.name)
 
+    spares = control.get("spare_pins")
+    if spares is not None and not isinstance(spares, list):
+        if on_bad_pin:
+            on_bad_pin(spares, "control spare_pins")
+    else:
+        for pin in spares or ():
+            claim(pin, "a spare relay channel")
+
     for load_name, load in (control.get("loads") or {}).items():
         claim(load.get("control_pin"), "load %s" % load_name)
         readback = load.get("readback") or {}

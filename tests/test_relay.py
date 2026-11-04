@@ -294,3 +294,43 @@ def test_a_missing_gpiozero_says_so_rather_than_failing_obscurely(monkeypatch):
     with pytest.raises(relay.RelayError) as raised:
         relay.open_output(23)
     assert "gpiozero" in str(raised.value)
+
+
+# -- a kernel that keeps outputs driven -------------------------------------
+
+def persist(tmp_path, monkeypatch, value):
+    path = tmp_path / "persist_gpio_outputs"
+    if value is not None:
+        path.write_text(value + "\n")
+    monkeypatch.setattr(relay, "PERSIST_PARAMETER", str(path))
+
+
+def test_no_pin_is_claimed_while_the_kernel_keeps_outputs_after_death(
+        tmp_path, monkeypatch, pins):
+    """On such a kernel a killed controller leaves its relays where they
+    were, and an inverter or a pump stays energized. Refusing every claim
+    leaves each load at its wired fail-safe instead."""
+    persist(tmp_path, monkeypatch, "Y")
+    with pytest.raises(relay.RelayError) as raised:
+        relay.open_output(25)
+    message = str(raised.value)
+    assert "GPIO25" in message
+    assert relay.PERSIST_FIX in message
+    assert "cmdline.txt" in message
+    persist(tmp_path, monkeypatch, "N")
+    relay.open_output(25).close()
+
+
+@pytest.mark.parametrize("value", ["N", None])
+def test_a_kernel_that_releases_outputs_is_driven(tmp_path, monkeypatch, pins,
+                                                  value):
+    """Older kernels have no such setting at all, and that is not a refusal."""
+    persist(tmp_path, monkeypatch, value)
+    device = relay.open_output(25)
+    device.close()
+
+
+def test_the_fix_names_the_kernel_setting_it_turns_off():
+    assert relay.PERSIST_FIX == "pinctrl_bcm2835.persist_gpio_outputs=n"
+    assert relay.PERSIST_PARAMETER.endswith(
+        "pinctrl_bcm2835/parameters/persist_gpio_outputs")

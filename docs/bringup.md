@@ -256,7 +256,21 @@ Only for a node that switches loads. Everything else works without any of this.
 
 Before wiring a relay, measure what a pin actually does when software lets go.
 The fail-safe design depends on a killed process releasing the line, and that
-is a property of the installed GPIO library rather than of any relay.
+is a property of the installed GPIO library and the kernel rather than of any
+relay.
+
+Some Raspberry Pi kernels keep an output driven after the line is freed. The
+kernel that ships with Debian 13 does. Check it first:
+
+```
+cat /sys/module/pinctrl_bcm2835/parameters/persist_gpio_outputs
+```
+
+If it answers `Y`, add `pinctrl_bcm2835.persist_gpio_outputs=n` to the end of
+the single line in `/boot/firmware/cmdline.txt` and reboot. It must then answer
+`N`. If the file does not exist, the kernel has no such setting and frees an
+output as an input. The controller refuses to drive any pin while it answers
+`Y`, and the install script warns about it.
 
 ```
 sudo /opt/monitoring/bin/gpio-probe --pin <unused pin> --node /etc/monitoring/node.yaml

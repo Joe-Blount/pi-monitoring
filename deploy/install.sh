@@ -603,6 +603,19 @@ WANTS
     )
     CONTROL_WANTED="${CONTROL_WANTED:-unknown}"
 
+    # Some kernels keep an output driven after the process holding it dies,
+    # and then a crashed controller leaves every relay where it was. The
+    # controller refuses to claim a pin on such a kernel, so this is reported
+    # here, where it can be fixed, rather than first seen as a controller that
+    # will not start.
+    PERSIST=/sys/module/pinctrl_bcm2835/parameters/persist_gpio_outputs
+    if [[ -r "$PERSIST" ]] && [[ "$(cat "$PERSIST")" == Y* ]]; then
+        echo "    WARNING: this kernel keeps a freed GPIO output driven, so the" >&2
+        echo "    controller will refuse to drive any relay. Add" >&2
+        echo "    pinctrl_bcm2835.persist_gpio_outputs=n to the end of the line" >&2
+        echo "    in /boot/firmware/cmdline.txt and reboot." >&2
+    fi
+
     case "$CONTROL_WANTED" in
     yes)
         systemctl enable monitoring-control >/dev/null 2>&1 || true
