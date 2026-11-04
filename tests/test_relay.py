@@ -418,14 +418,33 @@ class FakeLgpio:
 
 
 @pytest.fixture
-def lgpio(monkeypatch):
+def fresh_backend():
+    """gpiozero's lgpio backend imported afresh for one test, and whatever
+    was there before put back after, so no later test meets a backend built
+    over a fake lgpio."""
+    import sys
+    import gpiozero.pins
+    name = "gpiozero.pins.lgpio"
+    missing = object()
+    module = sys.modules.pop(name, missing)
+    attribute = gpiozero.pins.__dict__.pop("lgpio", missing)
+    yield
+    sys.modules.pop(name, None)
+    gpiozero.pins.__dict__.pop("lgpio", None)
+    if module is not missing:
+        sys.modules[name] = module
+    if attribute is not missing:
+        gpiozero.pins.lgpio = attribute
+
+
+@pytest.fixture
+def lgpio(monkeypatch, fresh_backend):
     import sys
     import types
     fake = FakeLgpio()
     module = types.ModuleType("lgpio")
     module.__getattr__ = fake.__getattr__
     monkeypatch.setitem(sys.modules, "lgpio", module)
-    monkeypatch.delitem(sys.modules, "gpiozero.pins.lgpio", raising=False)
     monkeypatch.setattr(relay, "_LGPIO_CLASSES", None)
     return fake
 
@@ -514,7 +533,7 @@ class RecordingLgpio:
 
 
 @pytest.fixture
-def board(monkeypatch):
+def board(monkeypatch, fresh_backend):
     """The real gpiozero lgpio backend over a recording lgpio, on a fixed
     board revision, with the library's shared pin cache emptied first and
     put back after."""
@@ -526,7 +545,6 @@ def board(monkeypatch):
     module.__getattr__ = fake.__getattr__
     module.SET_PULL_NONE = RecordingLgpio.SET_PULL_NONE
     monkeypatch.setitem(sys.modules, "lgpio", module)
-    monkeypatch.delitem(sys.modules, "gpiozero.pins.lgpio", raising=False)
     from gpiozero.pins import local
     monkeypatch.setattr(local, "get_pi_revision", lambda: 0xa02082)
     monkeypatch.setattr(local.LocalPiFactory, "pins", {})
@@ -559,3 +577,4 @@ def test_a_pin_the_stock_backend_built_is_refused_by_the_controller(board):
     with pytest.raises(relay.RelayError) as raised:
         relay.open_output(24, active_high=False)
     assert "GPIO24" in str(raised.value)
+
