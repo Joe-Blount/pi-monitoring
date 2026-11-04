@@ -160,25 +160,64 @@ def claim_output_at(pin, state):
                             1 if state else 0)
 
 
+def own_pin(found, pin_class, name):
+    """Return `found` only if it claims at its starting level.
+
+    The library keeps one cache of pins for every factory of its kind in a
+    process, so a pin built earlier through the stock backend would be
+    handed back here and claim at 0. Refused rather than used.
+    """
+    if not isinstance(found, pin_class):
+        raise RelayError(
+            "GPIO%s is already held in this process through a backend that "
+            "claims an output at 0 before its starting level" % (name,))
+    return found
+
+
+_LGPIO_CLASSES = None
+
+
 def lgpio_classes():
     """The lgpio factory and pin this module drives through.
 
-    Subclassed only to claim each output at its starting level. Built on
-    demand because importing the backend imports lgpio, which exists only
-    on the machine itself.
+    Subclassed only to claim each output at its starting level. Built once,
+    on demand: importing the backend imports lgpio, which exists only on the
+    machine itself, and a second pair of classes would not recognize the
+    pins the first built.
     """
-    from gpiozero.pins.lgpio import LGPIOFactory, LGPIOPin
+    global _LGPIO_CLASSES
+    if _LGPIO_CLASSES is None:
+        from gpiozero.pins.lgpio import LGPIOFactory, LGPIOPin
 
-    class Pin(LGPIOPin):
-        def output_with_state(self, state):
-            claim_output_at(self, state)
+        class Pin(LGPIOPin):
+            def output_with_state(self, state):
+                claim_output_at(self, state)
 
-    class Factory(LGPIOFactory):
-        def __init__(self, chip=None):
-            LGPIOFactory.__init__(self, chip)
-            self.pin_class = Pin
+        class Factory(LGPIOFactory):
+            def __init__(self, chip=None):
+                LGPIOFactory.__init__(self, chip)
+                self.pin_class = Pin
 
-    return Factory, Pin
+            def pin(self, name):
+                return own_pin(LGPIOFactory.pin(self, name), Pin, name)
+
+        _LGPIO_CLASSES = (Factory, Pin)
+    return _LGPIO_CLASSES
+
+
+_FACTORY = None
+
+
+def controller_factory():
+    """The one pin factory every relay in this process is claimed through.
+
+    Passed to each device rather than installed as the library's default,
+    which anything else in the process could have set first.
+    """
+    global _FACTORY
+    if _FACTORY is None:
+        _FACTORY = lgpio_classes()[0]()
+    return _FACTORY
 
 
 def open_output(pin, initial_value=False, active_high=True):
@@ -194,14 +233,13 @@ def open_output(pin, initial_value=False, active_high=True):
     os.environ["GPIOZERO_PIN_FACTORY"] = PIN_FACTORY
     refuse_if_outputs_persist("GPIO%s" % pin)
     try:
-        from gpiozero import Device, DigitalOutputDevice
+        from gpiozero import DigitalOutputDevice
     except ImportError as exc:
         raise RelayError("load control needs gpiozero: %s" % exc)
     try:
-        if Device.pin_factory is None:
-            Device.pin_factory = lgpio_classes()[0]()
         return DigitalOutputDevice(pin, initial_value=initial_value,
-                                   active_high=active_high)
+                                   active_high=active_high,
+                                   pin_factory=controller_factory())
     except Exception as exc:
         raise RelayError("cannot drive GPIO%s: %s" % (pin, exc))
 

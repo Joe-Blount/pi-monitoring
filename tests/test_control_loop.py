@@ -632,15 +632,14 @@ def test_a_start_before_the_first_temperature_never_energizes_a_cold_fan(
 # -- the board's trigger, from the node file to the pin ----------------------
 
 @pytest.fixture
-def mock_pins():
-    """gpiozero's mock factory, so a test reads the voltage on the pin."""
-    from gpiozero import Device
+def mock_pins(monkeypatch):
+    """gpiozero's mock factory, so a test reads the voltage on the pin, put
+    where the controller takes its factory from."""
     from gpiozero.pins.mock import MockFactory
-    previous = Device.pin_factory
-    Device.pin_factory = MockFactory()
-    yield Device.pin_factory
-    Device.pin_factory.reset()
-    Device.pin_factory = previous
+    factory = MockFactory()
+    monkeypatch.setattr(relay, "controller_factory", lambda: factory)
+    yield factory
+    factory.reset()
 
 
 @pytest.mark.parametrize("trigger,shed_voltage", [("high", True),

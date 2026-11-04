@@ -23,18 +23,15 @@ from monitoring.control import relay
 
 
 @pytest.fixture
-def pins():
-    """gpiozero's mock factory, so a test can read the pin's voltage."""
-    import os
-    os.environ["GPIOZERO_PIN_FACTORY"] = "mock"
-    from gpiozero import Device
+def pins(monkeypatch):
+    """gpiozero's mock factory, so a test can read the pin's voltage, put
+    where the controller takes its factory from."""
     from gpiozero.pins.mock import MockFactory
 
-    previous = Device.pin_factory
-    Device.pin_factory = MockFactory()
-    yield Device.pin_factory
-    Device.pin_factory.reset()
-    Device.pin_factory = previous
+    factory = MockFactory()
+    monkeypatch.setattr(relay, "controller_factory", lambda: factory)
+    yield factory
+    factory.reset()
 
 
 # -- the arithmetic ---------------------------------------------------------
@@ -438,6 +435,7 @@ def lgpio(monkeypatch):
     module.__getattr__ = fake.__getattr__
     monkeypatch.setitem(sys.modules, "lgpio", module)
     monkeypatch.delitem(sys.modules, "gpiozero.pins.lgpio", raising=False)
+    monkeypatch.setattr(relay, "_LGPIO_CLASSES", None)
     return fake
 
 
@@ -456,22 +454,36 @@ def test_an_output_is_claimed_at_its_starting_level_in_one_call(lgpio, state,
     assert lgpio.calls == [("gpio_claim_output", 7, 23, level)]
 
 
-def test_the_controller_drives_through_the_one_call_claim(lgpio, monkeypatch):
-    """With no factory set, as on the machine, open_output installs the
-    backend that claims at the starting level rather than the library's
-    own."""
-    from gpiozero import Device
-    built = []
+def test_every_claim_goes_through_the_controller_factory(monkeypatch):
+    """Passed to the device, not left to the library's default, which
+    anything else in the process could have set first."""
+    import sys
+    import types
+    made = []
+    module = types.ModuleType("gpiozero")
+    module.DigitalOutputDevice = lambda pin, **kwargs: made.append(kwargs)
+    monkeypatch.setitem(sys.modules, "gpiozero", module)
+    factory = object()
+    monkeypatch.setattr(relay, "controller_factory", lambda: factory)
+    relay.open_output(23)
+    assert made[0]["pin_factory"] is factory
 
-    class Factory:
-        def __init__(self):
-            built.append(self)
 
-    monkeypatch.setattr(Device, "pin_factory", None)
-    monkeypatch.setattr(relay, "lgpio_classes", lambda: (Factory, None))
-    try:
-        relay.open_output(23)
-    except relay.RelayError:
+def test_a_pin_built_through_another_backend_is_refused():
+    class Ours:
         pass
-    assert len(built) == 1
-    assert Device.pin_factory is built[0]
+
+    class Stock:
+        pass
+
+    with pytest.raises(relay.RelayError) as raised:
+        relay.own_pin(Stock(), Ours, 23)
+    assert "GPIO23" in str(raised.value)
+    found = Ours()
+    assert relay.own_pin(found, Ours, 23) is found
+
+
+def test_the_factory_classes_are_built_once(lgpio):
+    """A second pair would not recognize the pins the first built, and would
+    refuse every one of them."""
+    assert relay.lgpio_classes() is relay.lgpio_classes()
