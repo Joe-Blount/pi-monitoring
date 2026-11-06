@@ -1,0 +1,20 @@
+# One check for a factory-reset Wavlink. See monitoring/wavlink_recover.py.
+#
+# Separate from the load controller on purpose. A repair takes the radio away
+# from the normal network for minutes, and the controller's loop must keep
+# running through that, on a node where control may be off altogether.
+
+[Unit]
+Description=Check for a factory-reset Wavlink and restore its settings
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+# Root, because changing NetworkManager connections needs it.
+ExecStart=/opt/monitoring/bin/wavlink-recover check
+StateDirectory=wavlink-recover
+StateDirectoryMode=0700
+# Longer than one repair's own limits add up to, so systemd only ever stops a
+# repair that has truly hung.
+TimeoutStartSec=15min

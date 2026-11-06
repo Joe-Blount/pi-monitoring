@@ -656,6 +656,22 @@ WANTS
     esac
 fi
 
+echo "==> wavlink repair"
+# Only a node given the configuration file repairs anything: it names one
+# particular unit and holds that unit's password, so most nodes never have it.
+install -m 0644 "$REPO/deploy/monitoring-wavlink-recover.service" \
+    /etc/systemd/system/monitoring-wavlink-recover.service
+install -m 0644 "$REPO/deploy/monitoring-wavlink-recover.timer" \
+    /etc/systemd/system/monitoring-wavlink-recover.timer
+systemctl daemon-reload
+if [[ -f /etc/monitoring/wavlink-recover.yaml ]]; then
+    systemctl enable --now monitoring-wavlink-recover.timer >/dev/null 2>&1 || true
+    echo "    timer on: a check runs every five minutes"
+else
+    systemctl disable --now monitoring-wavlink-recover.timer >/dev/null 2>&1 || true
+    echo "    timer off: this node has no /etc/monitoring/wavlink-recover.yaml"
+fi
+
 echo "==> restarting telegraf"
 systemctl restart telegraf
 sleep 3

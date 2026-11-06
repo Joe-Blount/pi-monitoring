@@ -1,0 +1,12 @@
+# Calendar rather than relative to the last run, so a check that fails or a
+# clock that jumps never stops the next one from being scheduled.
+
+[Unit]
+Description=Check for a factory-reset Wavlink every five minutes
+
+[Timer]
+OnCalendar=*:0/5
+Unit=monitoring-wavlink-recover.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,27 @@
+# Copy to /etc/monitoring/wavlink-recover.yaml, mode 600. It holds a password,
+# and the settings file it names holds the Wi-Fi keys. Neither belongs in git.
+#
+# The timer only runs on a machine that has this file.
+
+interface: wlan0
+
+# The unit to repair, as it looks after a reset. The address decides which unit
+# may be repaired, so any other Wavlink in range is left alone.
+factory_ssid: WAVLINK-N
+factory_bssid: "00:00:00:00:00:00"
+
+# The network it provides when healthy, and this machine's saved profile for it.
+normal_ssid: example
+normal_profile: example
+
+# The router, reached through the repaired unit to prove the uplink works.
+gateway: 192.168.1.1
+
+# The password to set on the unit, and a settings export taken from this same
+# unit while it worked.
+admin_password: example
+settings_file: /etc/monitoring/wavlink-settings.cfg
+
+# Limits on repairs.
+max_attempts_per_day: 3
+minutes_between_attempts: 30

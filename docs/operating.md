@@ -268,6 +268,29 @@ ls -l /etc/monitoring/influx.env
 Expect `root:telegraf`, mode `640`. Anything else and telegraf starts,
 logs one permission line, and sends nothing.
 
+## When the blind's Wavlink has lost its settings
+
+The blind's Wavlink can return to factory settings when its power fails. It then
+broadcasts WAVLINK-N instead of blind1, and everything behind it drops off the
+network. The downstairs Pi checks for this every five minutes and repairs it by
+uploading a saved copy of the settings.
+
+It acts only when blind1 is absent and WAVLINK-N is present on that unit's radio
+address, at two checks in a row. It makes at most three attempts a day, at least
+30 minutes apart.
+
+```
+sudo /opt/monitoring/bin/wavlink-recover status          # what it has tried
+sudo /opt/monitoring/bin/wavlink-recover check --dry-run # what it would do
+sudo /opt/monitoring/bin/wavlink-recover reset-attempts  # allow more attempts
+journalctl -u monitoring-wavlink-recover -n 50
+```
+
+The configuration is /etc/monitoring/wavlink-recover.yaml, and the settings file
+it names came from this unit. Both are root-only and neither is in this
+repository. Take a fresh export after any change to the Wavlink. Never upgrade
+this unit's firmware: it runs a custom build.
+
 ## What to do when a Pi will not boot
 
 Check power first: a brownout that drops a Pi mid-write is a far more common

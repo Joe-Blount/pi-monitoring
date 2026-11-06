@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+"""Check for a factory-reset Wavlink and restore its saved settings.
+
+    wavlink-recover check             what the timer runs
+    wavlink-recover check --dry-run   say what a check would do, change nothing
+    wavlink-recover status            the attempt record
+    wavlink-recover reset-attempts    clear the record, for someone on site
+"""
+
+import argparse
+import datetime
+import os
+import sys
+
+sys.path.insert(
+    0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+
+from monitoring import wavlink_recover as wr  # noqa: E402
+
+
+def show_status():
+    state = wr.load_state()
+    print("sightings in a row: %d" % state["sightings"])
+    for attempt in state["attempts"]:
+        stamp = datetime.datetime.fromtimestamp(attempt["at"])
+        print("%s  %s" % (stamp.isoformat(timespec="seconds"),
+                          attempt["result"]))
+    if not state["attempts"]:
+        print("no attempts recorded")
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("command",
+                        choices=["check", "status", "reset-attempts"])
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--config", default=wr.CONFIG_PATH)
+    args = parser.parse_args()
+    if args.command == "status":
+        return show_status()
+    try:
+        with wr.Lock():
+            if args.command == "reset-attempts":
+                wr.save_state({"sightings": 0, "attempts": []})
+                print("attempt record cleared")
+                return 0
+            config = wr.load_config(args.config)
+            return wr.check(config, dry_run=args.dry_run)
+    except (wr.RepairFailed, wr.ConfigError, ValueError) as e:
+        print("wavlink-recover: %s" % e, file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
