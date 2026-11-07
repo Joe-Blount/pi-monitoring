@@ -930,18 +930,23 @@ def test_the_camera_windows_stay_inside_the_tier_above_them_all_year():
         "refuses" % (worst[1], worst[2], worst[3]))
 
 
-def test_the_downstairs_control_block_is_refused_until_the_pack_moves():
-    """The device comments ask for the pack to be enabled here and removed
-    upstairs on the same visit, never separately. This makes that coupling a
-    refusal rather than an instruction: the ladder reads the pack's BMS, the
-    spec refuses a source nothing will write, so enabling control without
-    enabling the pack fails at start with the reason instead of running a
-    controller that latches nothing and sheds nothing.
-    """
+def test_each_bluetooth_device_at_a_site_has_one_reader():
+    """The packs and the shunt allow one connection at a time, so two nodes
+    polling one address would take turns failing."""
+    readers = {}
+    for path in sorted((REPO / "sites" / "blind1").glob("*.yaml")):
+        node = load(path)
+        for device in node.devices:
+            address = (device.params or {}).get("address")
+            if device.enabled and address:
+                readers.setdefault(address, []).append(path.stem)
+    assert readers
+    assert all(len(nodes) == 1 for nodes in readers.values()), readers
+
+
+def test_the_downstairs_control_block_has_every_source_it_reads():
     node = load(REPO / "sites" / "blind1" / "downstairs.yaml")
-    with pytest.raises(control_spec.SpecError) as raised:
-        control_spec.load_control(node)
-    assert "declared and disabled" in str(raised.value)
+    control_spec.load_control(node)
 
 
 #: The Pi header's physical pin for each GPIO the downstairs harness uses.

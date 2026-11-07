@@ -69,12 +69,10 @@ devices:
       # extension to span 8 to 9 feet, which is a known source of
       # intermittent enumeration failures.
 
-  # Disabled while the upstairs node polls this pack instead. These allow one
-  # connection at a time, so two readers would take turns failing. Enable this
-  # and remove the upstairs entry on the same visit, never separately.
+  # Polled from this node only. These allow one connection at a time, so a
+  # second reader on another node would make both take turns failing.
   - name: bms
     driver: jbd
-    enabled: false
     mode: poll
     tags: {location: battery}
     params:
@@ -87,13 +85,10 @@ devices:
       timeout: 40s
       settle: 2s                      # quiet gap that marks the end of a reply
 
-  # Disabled while the upstairs node polls the shunt instead. It allows one
-  # connection at a time, so two readers would take turns failing. Enable
-  # this and remove the upstairs entry on the same visit, never separately.
+  # Polled from this node only, for the same reason as the pack.
   - name: shunt
     driver: qinglan
     mode: poll
-    enabled: false
     tags: {location: battery}
     params:
       address: "C8:47:80:52:16:A9"

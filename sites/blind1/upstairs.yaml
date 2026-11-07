@@ -82,55 +82,6 @@ devices:
     interval: 30s
     tags: {location: pi}
 
-  # The Chins pack, read from up here.
-  #
-  # It belongs downstairs with the rest of the power equipment, and the
-  # downstairs node file declares it for when that machine exists. Until then
-  # it would report nothing at all, so it is polled from here: this Pi reached
-  # it cleanly through a floor, and data in the database today beats data in a
-  # plan.
-  #
-  # The driver declares itself slow, so the collector with the three minute
-  # interval and the two minute timeout reads it rather than the fast one.
-  # These packs allow one connection at a time, so every read locks the owner
-  # out of the application for its duration.
-  - name: bms
-    driver: jbd
-    mode: poll
-    tags: {location: battery}
-    params:
-      address: "A5:C2:37:4C:80:F7"    # chins320
-      # A total budget for the whole exchange -- scanning, connecting,
-      # every command and the disconnect -- not only the connect step.
-      # A real read of this device takes about nine seconds, and the
-      # node's slow devices together must fit the collector's 120
-      # second timeout, counting five seconds of grace each.
-      timeout: 40s
-      settle: 2s
-
-  # The shunt measures the whole bank, where the bms above sees one pack of
-  # the three. Polled from this node because it is the node in range: the
-  # shunt answers here at about -69 dBm.
-  - name: shunt
-    driver: qinglan
-    mode: poll
-    tags: {location: battery}
-    params:
-      address: "C8:47:80:52:16:A9"
-      # Part of every request. A request carrying the wrong one is ignored
-      # in silence, which is what made this device look dead.
-      device_address: 1
-      # A total budget for scanning, connecting and reading, not a per-step
-      # timeout. The driver allows a further five seconds past it before
-      # abandoning a read outright, so the real worst case here is thirty
-      # seconds. The slow devices on this node share one process and one 120
-      # second telegraf timeout, and telegraf discards the whole output when
-      # it kills the process, so a shunt that overran would also throw away
-      # the battery reading taken before it. This shunt answers in well under
-      # a second once connected.
-      timeout: 25s
-      settle: 2s
-
 # The PCF8591 analog-to-digital converter on GPIO2 and GPIO3 is deliberately
 # absent. It exists only to measure battery voltage, which the charge
 # controller reports more accurately on the downstairs node, and the two
