@@ -560,10 +560,6 @@ _RUN_RECORD_SECONDS = 26 * 3600.0
 
 _DAY_SECONDS = 86400.0
 
-#: The longest gap between passes that still counts as the same run. Past this
-#: the controller was not running, so the relay had dropped and nothing heated.
-_RUN_GAP_SECONDS = 300.0
-
 #: How far a forecast's sunrise may sit from the one being planned for. The two
 #: are computed differently, and they differ by minutes on the right morning and
 #: by a day on the wrong one.
@@ -583,17 +579,18 @@ def _heating_runs(state, mono_now):
     a stretch is whatever was commanded, for whatever reason, including an
     operator's force. A restart in the middle of one ends it where the last pass
     saw it, and running time picks up again from this pass: stopping the
-    controller releases the relay, and that gap heated nothing.
+    controller releases the relay, and that gap heated nothing. `restarted` is
+    how the loop says so, because a gap between passes cannot tell a restart from
+    a long loop interval with the relay held on throughout.
     """
     runs = [list(run) for run in state.get("runs", [])
             if run[1] > mono_now - _RUN_RECORD_SECONDS]
     since = state.get("since")
     if state.get("commanded") is True and isinstance(since, (int, float)):
-        if state.get("run_open") and runs:
-            if mono_now - runs[-1][1] <= _RUN_GAP_SECONDS:
-                runs[-1][1] = mono_now
-            else:
-                runs.append([mono_now, mono_now])
+        if state.get("restarted"):
+            runs.append([mono_now, mono_now])
+        elif runs and runs[-1][0] >= since:
+            runs[-1][1] = mono_now
         else:
             runs.append([since, mono_now])
     return runs
@@ -763,7 +760,7 @@ def heating_decision(name, spec, readings, now, mono_now, suns, clock_trusted,
     new_state.pop("cap_stop", None)
     runs = _heating_runs(state, mono_now)
     new_state["runs"] = runs
-    new_state["run_open"] = state.get("commanded") is True
+    new_state.pop("restarted", None)
     fresh = [_reading(readings, source, spec["stale_after"])
              for source in spec["sources"]]
     temperatures = [value for value in fresh if value is not None]

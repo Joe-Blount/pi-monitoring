@@ -857,3 +857,20 @@ def test_a_controller_down_for_hours_does_not_use_up_the_heater_allowance(
     restarted, pin, _ = garage_heating_loop(tmp_path, world)
     restarted.once()
     assert pin.levels == [True]
+
+
+def test_a_restart_right_after_the_heat_came_on_does_not_count_the_outage(
+        tmp_path):
+    world = {"temp": 35.0, "volts": 100.0, "soc": 60.0, "mono": 0.0,
+             "now": datetime.datetime(2026, 12, 21, 9, tzinfo=ZONE)}
+    machine, first_pin, _ = garage_heating_loop(tmp_path, world)
+    machine.once()
+    world["mono"] = 900.0
+    machine.once()
+    assert first_pin.levels[-1] is True
+
+    world["mono"] += 7 * 3600
+    world["now"] = datetime.datetime(2026, 12, 21, 16, tzinfo=ZONE)
+    restarted, pin, _ = garage_heating_loop(tmp_path, world)
+    restarted.once()
+    assert pin.levels == [True]

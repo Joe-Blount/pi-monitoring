@@ -2069,9 +2069,29 @@ def test_time_the_controller_was_down_does_not_count_against_the_cap():
     spec = dict(HEATER, max_run_per_day=3600.0, heat_dwell=0.0)
     decision, state = heater(spec=spec, mono=0.0)
     decision, state = heater(spec=spec, state=state, mono=60.0)
-    decision, state = heater(spec=spec, state=state, mono=3000.0)
+    decision, state = heater(spec=spec, state=dict(state, restarted=True),
+                             mono=3000.0)
     assert decision.connected
     assert state["runs"] == [[0.0, 60.0], [3000.0, 3000.0]]
+    assert "restarted" not in state
+
+
+def test_a_long_loop_interval_counts_the_whole_run_against_the_cap():
+    spec = dict(HEATER, max_run_per_day=3600.0, heat_dwell=0.0)
+    decision, state = heater(spec=spec, mono=0.0)
+    assert decision.connected
+    decision, state = heater(spec=spec, state=state, mono=1800.0)
+    assert decision.connected
+    decision, _ = heater(spec=spec, state=state, mono=3600.0)
+    assert not decision.connected
+
+
+def test_a_restart_after_a_new_run_keeps_counting_from_the_restart():
+    spec = dict(HEATER, max_run_per_day=3600.0, heat_dwell=0.0)
+    _, state = heater(spec=spec, mono=0.0)
+    _, state = heater(spec=spec, state=dict(state, restarted=True), mono=1000.0)
+    _, state = heater(spec=spec, state=state, mono=1500.0)
+    assert state["runs"][-1] == [1000.0, 1500.0]
 
 
 def test_a_forecast_about_a_different_morning_stops_preheat():

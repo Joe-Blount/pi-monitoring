@@ -83,6 +83,11 @@ class Loop:
 
         self.state = files.read_state(self._state_path,
                                       this_boot=self._boot)
+        # This process has driven nothing, and the last one's pins were released
+        # when it ended, so nothing commanded on before this moment is running.
+        for held in self.state.values():
+            if isinstance(held, dict) and held.get("commanded") is True:
+                held["restarted"] = True
         self.started = self._monotonic()
         self.passes = 0
         #: The level this process has driven on each pin. Not the stored
