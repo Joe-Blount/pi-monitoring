@@ -32,6 +32,7 @@ import yaml
 
 CONFIG_PATH = "/etc/monitoring/wavlink-recover.yaml"
 STATE_PATH = "/var/lib/wavlink-recover/state.json"
+BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id"
 
 REQUIRED = ("interface", "factory_ssid", "factory_bssid", "normal_ssid",
             "normal_profile", "admin_password", "settings_file", "gateway")
@@ -122,6 +123,11 @@ def load_state(path=STATE_PATH):
     return state
 
 
+def current_boot():
+    with open(BOOT_ID_PATH) as f:
+        return f.read().strip()
+
+
 def save_state(state, path=STATE_PATH):
     directory = os.path.dirname(path)
     os.makedirs(directory, mode=0o700, exist_ok=True)
@@ -131,6 +137,13 @@ def save_state(state, path=STATE_PATH):
         f.flush()
         os.fsync(f.fileno())
     os.replace(temp, path)
+    # The rename is not durable until the directory is. Without this, a power
+    # cut can hand back attempts the limit has already used.
+    descriptor = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 # -- deciding ----------------------------------------------------------------
@@ -168,16 +181,26 @@ def is_factory_state(pairs, config):
 
 
 def attempts_in_last_day(state, now):
-    """Attempts still counting against the limit. One stamped ahead of the
-    clock still counts: a Pi with no network and no battery clock can boot
-    with a time behind the one it recorded, and that must not refill the
-    allowance."""
+    """Attempts still counting against the limit. A Pi with no network and no
+    battery clock can boot with a time behind the one it recorded. An attempt
+    stamped ahead of the clock is moved back to the clock, so it still counts
+    and still expires: left as it was, it would hold off every repair until
+    the clock caught up, and a broken network is what keeps the clock behind."""
+    for attempt in state["attempts"]:
+        attempt["at"] = min(attempt["at"], now)
     return [a for a in state["attempts"] if now - a["at"] < DAY]
 
 
-def decide(pairs, state, config, now):
+def decide(pairs, state, config, now, boot=None):
     """Say what this check should do. Updates the sighting count in state.
-    Returns (action, reason); action is idle, wait, limited or repair."""
+    Returns (action, reason); action is idle, wait, limited or repair.
+
+    Sightings only add up within one boot. The unit and the Pi share a battery,
+    so a sighting from before a power cut says nothing about the unit as it
+    starts up."""
+    if state.get("boot") != boot:
+        state["sightings"] = 0
+        state["boot"] = boot
     if not is_factory_state(pairs, config):
         state["sightings"] = 0
         return "idle", "no factory-reset unit in range"
@@ -206,6 +229,8 @@ def run_command(args, input_text=None, timeout=60):
                               text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return 28, ""
+    except FileNotFoundError:
+        return 127, ""
     return done.returncode, done.stdout
 
 
@@ -237,6 +262,13 @@ def join_factory(config, run):
         raise RepairFailed("could not join the factory network")
 
 
+def remove_leftover_profile(run):
+    """A check killed outright cannot clean up after itself, and the temporary
+    profile would hold the radio on the factory network. Removing an absent
+    profile is a harmless error."""
+    run(["nmcli", "connection", "delete", TEMP_PROFILE])
+
+
 def leave_factory(run):
     run(["nmcli", "connection", "down", TEMP_PROFILE])
     run(["nmcli", "connection", "delete", TEMP_PROFILE])
@@ -253,6 +285,7 @@ class WebSession:
         self.run = run
         self.host = config["web_name"]
         self.base = "http://" + self.host
+        self.setup_page = "sysinit.shtml"
 
     def _curl(self, seconds, referer):
         return ["curl", "-s", "-m", str(seconds),
@@ -281,6 +314,7 @@ class WebSession:
         if target is None:
             return None
         if "sysinit" in target.group(1):
+            self.setup_page = target.group(1).rsplit("/", 1)[-1]
             return "sysinit"
         if "main.shtml" in target.group(1):
             return "main"
@@ -292,7 +326,7 @@ class WebSession:
                 "&newpass=%s" % (self.config["region"], zone,
                                   urllib.parse.quote(password, safe="")))
         code, _ = self.run(
-            self._curl(20, "sysinit.shtml") + [
+            self._curl(20, self.setup_page) + [
                 "--data", "@-", self.base + "/cgi-bin/login.cgi"],
             input_text=body, timeout=25)
         if code != 0:
@@ -334,17 +368,12 @@ def log_in_to_unit(session, config, sleep):
 
 def wait_for_return(config, run, sleep, clock):
     """After the upload, wait for the normal network, join it, and prove the
-    uplink by reaching the router through it."""
+    uplink by reaching the router through it. Joining by name needs no scan
+    first, and a scan NetworkManager is holding off would only cost time."""
     limit = config["seconds_to_return"]
     deadline = clock() + limit
     while clock() < deadline:
         sleep(20)
-        try:
-            pairs = scan(config, run)
-        except RepairFailed:
-            continue
-        if config["normal_ssid"] not in {ssid for ssid, _ in pairs}:
-            continue
         code, _ = run(["nmcli", "--wait", "45", "connection", "up",
                        config["normal_profile"]], timeout=60)
         if code != 0:
@@ -354,8 +383,7 @@ def wait_for_return(config, run, sleep, clock):
         if code == 0:
             return
     raise RepairFailed(
-        "the normal network and the router were not both back after %ds"
-        % limit)
+        "the normal network and the router were not both back in time")
 
 
 def repair(config, run=run_command, sleep=time.sleep, clock=time.monotonic):
@@ -369,30 +397,40 @@ def repair(config, run=run_command, sleep=time.sleep, clock=time.monotonic):
             session = WebSession(config, directory, run)
             log_in_to_unit(session, config, sleep)
             session.upload(config["settings_file"])
+            # Stay on the unit's network while it takes the file in. It carried
+            # on working for about a minute after the request ended.
+            sleep(30)
         finally:
             leave_factory(run)
     wait_for_return(config, run, sleep, clock)
 
 
 def check(config, state_path=STATE_PATH, dry_run=False, run=run_command,
-          sleep=time.sleep, now=time.time, clock=time.monotonic, say=print):
+          sleep=time.sleep, now=time.time, clock=time.monotonic, say=print,
+          boot=None):
     """One timed check. Returns the process exit code."""
     check_settings(config)
     state = load_state(state_path)
+    before = json.dumps(state, sort_keys=True)
+    if not dry_run:
+        remove_leftover_profile(run)
     pairs = scan(config, run)
-    action, reason = decide(pairs, state, config, now())
+    action, reason = decide(pairs, state, config, now(), boot)
     say("%s: %s" % (action, reason))
     if dry_run:
         return 0
     if action != "repair":
-        save_state(state, state_path)
+        # Unchanged state is not rewritten: this runs every five minutes, for
+        # years, on an SD card.
+        if json.dumps(state, sort_keys=True) != before:
+            save_state(state, state_path)
         return 0
     attempt = {"at": now(), "result": "started"}
     state["attempts"].append(attempt)
     save_state(state, state_path)
     try:
         repair(config, run, sleep, clock)
-    except RepairFailed as e:
+    except (RepairFailed, OSError) as e:
         attempt["result"] = "failed: %s" % e
         say(attempt["result"])
         save_state(state, state_path)

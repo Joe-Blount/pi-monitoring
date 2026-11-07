@@ -6,7 +6,10 @@
 interface: wlan0
 
 # The unit to repair, as it looks after a reset. The address decides which unit
-# may be repaired, so any other Wavlink in range is left alone.
+# may be repaired, so any other Wavlink in range is left alone. Use the radio
+# address that a Wi-Fi scan shows beside the factory network, not the unit's LAN
+# address. They differ by a digit or two, and a dry run on a healthy unit cannot
+# show a wrong one: confirm it in a scan while the unit is in factory state.
 factory_ssid: WAVLINK-N
 factory_bssid: "00:00:00:00:00:00"
 

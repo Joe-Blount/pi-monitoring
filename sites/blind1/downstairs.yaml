@@ -1,8 +1,5 @@
 # Deer blind, downstairs Pi: power devices and load control.
 #
-# NOT BUILT YET. This machine does not exist. The file is here so the schema
-# can be reviewed and so the design has somewhere concrete to live.
-#
 # The Pi, its relays and the controller are proven on a bench rig in their
 # box before the box goes to the blind: the three camera branches and the CPU
 # fan are driven by the controller there, and the irrigation relays are

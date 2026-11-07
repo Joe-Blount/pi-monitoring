@@ -286,6 +286,14 @@ sudo /opt/monitoring/bin/wavlink-recover reset-attempts  # allow more attempts
 journalctl -u monitoring-wavlink-recover -n 50
 ```
 
+Before working on the Wavlink by hand, stop the timer, or a check can start a
+repair while you are in the middle of it. Start it again when you finish.
+
+```
+sudo systemctl stop monitoring-wavlink-recover.timer
+sudo systemctl start monitoring-wavlink-recover.timer
+```
+
 The configuration is /etc/monitoring/wavlink-recover.yaml, and the settings file
 it names came from this unit. Both are root-only and neither is in this
 repository. Take a fresh export after any change to the Wavlink. Never upgrade
@@ -326,9 +334,7 @@ never be the reason a site stays dark.
 Of these, the two camera groups, the recorder and the two CPU fans are load
 types the controller drives. Irrigation and the vent fan are declared and deliberately held back,
 disabled in the node file. Battery heating is declared for its relay and
-wiring, but is not yet a load type this controller drives. `blind1 /
-downstairs` itself is not built yet; its pin assignments are the plan for
-when it is.
+wiring, but is not yet a load type this controller drives.
 
 ## Published fields, per load
 

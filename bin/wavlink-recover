@@ -10,6 +10,7 @@
 import argparse
 import datetime
 import os
+import signal
 import sys
 
 sys.path.insert(
@@ -30,7 +31,14 @@ def show_status():
     return 0
 
 
+def stop_requested(signum, frame):
+    """A stop from systemd becomes an ordinary failed repair, so the attempt is
+    recorded as failed and the temporary profile is removed."""
+    raise wr.RepairFailed("stopped by signal %d" % signum)
+
+
 def main():
+    signal.signal(signal.SIGTERM, stop_requested)
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("command",
                         choices=["check", "status", "reset-attempts"])
@@ -46,7 +54,8 @@ def main():
                 print("attempt record cleared")
                 return 0
             config = wr.load_config(args.config)
-            return wr.check(config, dry_run=args.dry_run)
+            return wr.check(config, dry_run=args.dry_run,
+                            boot=wr.current_boot())
     except (wr.RepairFailed, wr.ConfigError, ValueError) as e:
         print("wavlink-recover: %s" % e, file=sys.stderr)
         return 1

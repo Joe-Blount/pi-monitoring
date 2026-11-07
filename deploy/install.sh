@@ -664,7 +664,11 @@ install -m 0644 "$REPO/deploy/monitoring-wavlink-recover.service" \
 install -m 0644 "$REPO/deploy/monitoring-wavlink-recover.timer" \
     /etc/systemd/system/monitoring-wavlink-recover.timer
 systemctl daemon-reload
-if [[ -f /etc/monitoring/wavlink-recover.yaml ]]; then
+if [[ -f /etc/monitoring/wavlink-recover.yaml ]] && ! command -v nmcli >/dev/null; then
+    systemctl disable --now monitoring-wavlink-recover.timer >/dev/null 2>&1 || true
+    echo "    timer off: /etc/monitoring/wavlink-recover.yaml exists, but this" >&2
+    echo "    node has no NetworkManager to do a repair with" >&2
+elif [[ -f /etc/monitoring/wavlink-recover.yaml ]]; then
     systemctl enable --now monitoring-wavlink-recover.timer >/dev/null 2>&1 || true
     echo "    timer on: a check runs every five minutes"
 else

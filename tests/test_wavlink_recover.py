@@ -2,7 +2,9 @@
 matters most is when it refuses to act: the wrong unit, too little evidence,
 too many attempts, or a settings file that would not restore the unit's job."""
 
+import hashlib
 import json
+import os
 import pathlib
 import runpy
 import sys
@@ -146,6 +148,22 @@ def test_a_clock_that_went_backwards_does_not_refill_the_allowance(config):
     state = seen([NOW + HOUR, NOW + 2 * HOUR, NOW + 3 * HOUR])
     action, _ = wr.decide(RESET, state, config, NOW)
     assert action == "limited"
+
+
+def test_a_clock_days_behind_does_not_hold_off_repairs_for_days(config):
+    state = seen([NOW + 7 * 24 * HOUR])
+    action, _ = wr.decide(RESET, state, config, NOW)
+    assert action == "limited"
+    action, _ = wr.decide(RESET, state, config, NOW + HOUR)
+    assert action == "repair"
+
+
+def test_a_sighting_from_before_a_reboot_does_not_count(config):
+    state = {"sightings": 1, "attempts": [], "boot": "earlier"}
+    action, _ = wr.decide(RESET, state, config, NOW, boot="later")
+    assert action == "wait"
+    action, _ = wr.decide(RESET, state, config, NOW, boot="later")
+    assert action == "repair"
 
 
 # -- the record --------------------------------------------------------------
@@ -314,10 +332,73 @@ def test_a_repair_is_not_done_until_the_router_answers(config):
         do_repair(config, Machine(ping_code=1))
 
 
-def test_a_repair_waits_for_the_normal_network_to_appear(config):
-    machine = Machine(scans=["WAVLINK-N:AA\\:BB\n", "", "normal:AA\\:BB\n"])
+def test_a_repair_keeps_trying_the_normal_network_until_it_comes_up(config):
+    class Slow(Machine):
+        tries = 0
+
+        def __call__(self, args, input_text=None, timeout=60):
+            if "normal-profile" in args:
+                Slow.tries += 1
+                return (0 if Slow.tries == 3 else 10), ""
+            return super().__call__(args, input_text, timeout)
+
+    machine = Slow()
     do_repair(config, machine)
-    assert machine.ran("normal-profile")
+    assert Slow.tries == 3
+    assert machine.ran("ping")
+
+
+# -- the requests the firmware is strict about -------------------------------
+
+def header_values(args):
+    return [args[i + 1] for i, a in enumerate(args) if a == "-H"]
+
+
+def session_for(config, machine, directory):
+    return wr.WebSession(config, str(directory), machine)
+
+
+def test_the_login_request_matches_what_the_unit_accepts(config, tmp_path):
+    machine = Machine(login_pages=["main"])
+    session_for(config, machine, tmp_path).login("pw")
+    args, body = machine.commands[0], machine.inputs[0]
+    assert args[-1] == "http://wifi.wavlink.com/cgi-bin/login.cgi"
+    assert "wifi.wavlink.com:80:192.168.10.1" in args
+    assert header_values(args) == ["Referer: http://wifi.wavlink.com/",
+                                   "Origin: http://wifi.wavlink.com"]
+    fields = [pair.split("=")[0] for pair in body.split("&")]
+    assert fields == ["newUI", "page", "username", "langChange", "password",
+                      "ipaddr", "homepage", "login_page", "hostname", "key",
+                      "lang_select"]
+    values = dict(pair.split("=", 1) for pair in body.split("&"))
+    key = values["key"]
+    assert values["password"] == hashlib.md5((key + "pw").encode()).hexdigest()
+    assert values["login_page"] == "login.shtml%3F" + key
+    assert values["hostname"] == "wifi.wavlink.com"
+    assert values["username"] == "admin"
+
+
+def test_first_time_setup_matches_what_the_unit_accepts(config, tmp_path):
+    machine = Machine(login_pages=["sysinit"])
+    session = session_for(config, machine, tmp_path)
+    assert session.login("admin") == "sysinit"
+    session.first_time_setup("pw")
+    args, body = machine.commands[1], machine.inputs[1]
+    assert body == ("page=sysinit&lang_select=0&wl_reddomain=US"
+                    "&time_zone=UTC%2B06%3A00&newpass=pw")
+    assert "Referer: http://wifi.wavlink.com/sysinit.shtml?M1" in header_values(args)
+
+
+def test_the_upload_request_matches_what_the_unit_accepts(config, tmp_path):
+    machine = Machine()
+    session_for(config, machine, tmp_path).upload(config["settings_file"])
+    args = machine.commands[0]
+    assert args[-1] == "http://wifi.wavlink.com/cgi-bin/upload_settings.cgi"
+    assert header_values(args) == ["Referer: http://wifi.wavlink.com/reset.shtml",
+                                   "Origin: http://wifi.wavlink.com"]
+    form = args[args.index("-F") + 1]
+    assert form.startswith("files=@")
+    assert form.endswith("/RT2880_Settings.dat;type=application/octet-stream")
 
 
 # -- a check from start to finish --------------------------------------------
@@ -332,6 +413,51 @@ def do_check(config, state_path, machine, **kw):
                     sleep=clock.sleep, now=lambda: NOW, clock=clock,
                     say=said.append, **kw)
     return code, said
+
+
+def test_a_check_removes_a_profile_left_by_a_killed_one(config, tmp_path):
+    machine = Machine(scans=[""])
+    do_check(config, tmp_path / "state.json", machine)
+    assert machine.commands[0] == ["nmcli", "connection", "delete", wr.TEMP_PROFILE]
+
+
+def test_an_idle_check_does_not_rewrite_an_unchanged_record(config, tmp_path):
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps({"sightings": 0, "attempts": []}))
+    os.utime(state_path, (1000, 1000))
+    do_check(config, state_path, Machine(scans=[""]))
+    assert state_path.stat().st_mtime == 1000
+
+
+def test_a_sighting_is_written_down(config, tmp_path):
+    state_path = tmp_path / "state.json"
+    do_check(config, state_path, Machine(scans=[RESET_SCAN]))
+    assert json.loads(state_path.read_text())["sightings"] == 1
+
+
+def test_a_stop_request_while_repairing_is_recorded_as_a_failure(config, tmp_path):
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps({"sightings": 1, "attempts": []}))
+
+    class Stopped(Machine):
+        def __call__(self, args, input_text=None, timeout=60):
+            if "up" in args and wr.TEMP_PROFILE in args:
+                self.commands.append(args)
+                raise wr.RepairFailed("stopped by signal 15")
+            return super().__call__(args, input_text, timeout)
+
+    machine = Stopped(scans=[RESET_SCAN])
+    code, _ = do_check(config, state_path, machine)
+    assert code == 1
+    assert "signal 15" in json.loads(state_path.read_text())["attempts"][0]["result"]
+    assert machine.commands[-1][:3] == ["nmcli", "connection", "delete"]
+
+
+def test_a_missing_command_reads_as_a_failed_scan(config):
+    def run(args, input_text=None, timeout=60):
+        return wr.run_command(["/nonexistent/command"])
+    with pytest.raises(wr.RepairFailed, match="127"):
+        wr.scan(config, run)
 
 
 def test_a_dry_run_changes_nothing(config, tmp_path):
@@ -410,3 +536,13 @@ def test_the_installer_only_turns_the_timer_on_with_a_config_present():
     assert "/etc/monitoring/wavlink-recover.yaml" in text
     assert "enable --now monitoring-wavlink-recover.timer" in text
     assert "disable --now monitoring-wavlink-recover.timer" in text
+
+
+def test_the_installer_refuses_the_timer_without_networkmanager():
+    text = (REPO / "deploy" / "install.sh").read_text()
+    assert "command -v nmcli" in text
+
+
+def test_the_service_outlasts_the_longest_repair():
+    text = (REPO / "deploy" / "monitoring-wavlink-recover.service").read_text()
+    assert "TimeoutStartSec=20min" in text

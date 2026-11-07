@@ -455,7 +455,13 @@ def test_the_guide_names_the_real_service_unit():
                 named.add(word.split(".service")[0])
 
     assert named, "the guide gives no systemctl command for this service"
-    unknown = named - {name, "telegraf"}
+    real = {name, "telegraf"}
+    for path in (REPO / "deploy").iterdir():
+        if path.suffix == ".timer":
+            real.add(path.name)
+        elif path.suffix == ".service":
+            real.add(path.stem)
+    unknown = named - real
     assert not unknown, (
-        "the guide names unit(s) %s; the only one that exists is %s"
-        % (sorted(unknown), name))
+        "the guide names unit(s) %s; the ones that exist are %s"
+        % (sorted(unknown), sorted(real)))
