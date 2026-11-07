@@ -751,12 +751,11 @@ def test_a_cpu_fan_fails_off():
 
 
 def test_the_upstairs_control_block_is_accepted_as_it_stands():
-    """Nothing forced. The vent fan is specified and not driven, and the CPU
-    fan reads a device the node polls, so the block can run once control is
-    switched on."""
+    """Nothing forced. Both fans read devices the node polls, so the block can
+    run once control is switched on."""
     loads = control_spec.load_control(
         load(REPO / "sites" / "blind1" / "upstairs.yaml"))
-    assert sorted(loads) == ["cpu_fan"]
+    assert sorted(loads) == ["cpu_fan", "vent_fan"]
 
 
 #: What the far cameras and the recorder were agreed to do, beside the near

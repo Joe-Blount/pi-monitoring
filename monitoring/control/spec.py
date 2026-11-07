@@ -23,14 +23,13 @@ from . import relay
 #: Load types a controller will drive. Anything else declared is refused at
 #: load time rather than skipped at run time, because a load the file says is
 #: enabled and nothing drives is indistinguishable from one that works.
-DRIVEN_TYPES = ("dc_branch", "cpu_fan")
+DRIVEN_TYPES = ("dc_branch", "cpu_fan", "vent_fan")
 
 #: Declared, specified, and deliberately not driven yet. An enabled load of
 #: one of these types is refused. The irrigation sequence waits on thresholds
 #: that are placeholders pending measurement, and it is the only load here
-#: that can flood a field. The vent fan waits on a decision that compares two
-#: sensors, which nothing here makes yet.
-DEFERRED_TYPES = ("sequenced_ac", "vent_fan")
+#: that can flood a field.
+DEFERRED_TYPES = ("sequenced_ac",)
 
 SCHEDULE_TYPES = ("clock", "solar", "never")
 
@@ -52,6 +51,16 @@ LOAD_KEYS = {"type", "enabled", "control_pin", "polarity",
 CPU_FAN_KEYS = {"type", "enabled", "control_pin", "polarity", "source",
                 "stale_after", "run_above_f", "stop_below_f", "min_run",
                 "min_off"}
+
+#: Keys a vent fan may carry. It compares two sensors and waits out a dwell in
+#: each direction, so it shares only the relay and the timers with the others.
+VENT_FAN_KEYS = {"type", "enabled", "control_pin", "polarity", "on_stale_data",
+                 "inside", "outside", "stale_after", "run_if_all",
+                 "stop_if_any", "run_dwell", "stop_dwell", "min_run",
+                 "min_off", "readback"}
+VENT_RUN_KEYS = {"inside_above_f", "outside_cooler_by_f"}
+VENT_STOP_KEYS = {"inside_below_f", "outside_cooler_by_less_than_f",
+                  "outside_below_f"}
 
 #: Keys the control block itself may carry. Owned by the loop rather than by
 #: a load, and listed so a misspelled loop_interval is refused rather than
@@ -405,6 +414,66 @@ def _fan(where, raw, devices):
     }
 
 
+def _vent_fan(where, raw, devices):
+    """A vent fan's two sensors, its two conditions and its dwells.
+
+    Each condition's bounds must leave a gap, or the fan chatters on a number
+    the air can sit at for hours.
+    """
+    for key in ("inside", "outside", "stale_after", "run_if_all",
+                "stop_if_any", "run_dwell", "stop_dwell"):
+        if key not in raw:
+            _fail(where, "needs %s" % key)
+    if raw.get("on_stale_data", "deny") != "deny":
+        _fail(where, "on_stale_data must be deny: with no temperature there "
+                     "is nothing to say the air outside is any cooler")
+    readback = raw.get("readback") or {}
+    if readback.get("source", "none") != "none":
+        _fail(where, "readback is not acted on, so its source must be none")
+    if raw["inside"] == raw["outside"]:
+        _fail(where, "inside and outside must be different sensors, or the "
+                     "air can never read cooler")
+    for key, allowed in (("run_if_all", VENT_RUN_KEYS),
+                         ("stop_if_any", VENT_STOP_KEYS)):
+        if not isinstance(raw[key], dict):
+            _fail(where, "%s must be a mapping" % key)
+        _only(where + " " + key, raw[key], allowed)
+    run, stop = raw["run_if_all"], raw["stop_if_any"]
+    for block, key in ((run, "inside_above_f"), (run, "outside_cooler_by_f"),
+                       (stop, "inside_below_f"),
+                       (stop, "outside_cooler_by_less_than_f")):
+        if key not in block:
+            _fail(where, "needs %s" % key)
+    inside_run = _number(where, run["inside_above_f"], "inside_above_f")
+    inside_stop = _number(where, stop["inside_below_f"], "inside_below_f")
+    cooler_run = _number(where, run["outside_cooler_by_f"],
+                         "outside_cooler_by_f")
+    cooler_stop = _number(where, stop["outside_cooler_by_less_than_f"],
+                          "outside_cooler_by_less_than_f")
+    if inside_run <= inside_stop:
+        _fail(where, "inside_above_f (%g) must be above inside_below_f (%g)"
+                     % (inside_run, inside_stop))
+    if cooler_run <= cooler_stop:
+        _fail(where, "outside_cooler_by_f (%g) must be above "
+                     "outside_cooler_by_less_than_f (%g)"
+                     % (cooler_run, cooler_stop))
+    floor = stop.get("outside_below_f")
+    return {
+        "inside": _source(where + " inside", raw["inside"], devices),
+        "outside": _source(where + " outside", raw["outside"], devices),
+        "stale_after": _duration(where, raw["stale_after"], "stale_after",
+                                 allow_zero=False),
+        "inside_above_f": inside_run,
+        "inside_below_f": inside_stop,
+        "outside_cooler_by_f": cooler_run,
+        "outside_cooler_by_less_than_f": cooler_stop,
+        "outside_below_f": (None if floor is None
+                            else _number(where, floor, "outside_below_f")),
+        "run_dwell": _duration(where, raw["run_dwell"], "run_dwell"),
+        "stop_dwell": _duration(where, raw["stop_dwell"], "stop_dwell"),
+    }
+
+
 def load_spec(name, raw, devices):
     """Parse one load. Returns the spec a decision can act on."""
     where = "load %s" % name
@@ -429,7 +498,8 @@ def load_spec(name, raw, devices):
         _fail(where, "type %r is not a type this controller drives; known: %s"
                      % (kind, ", ".join(DRIVEN_TYPES + DEFERRED_TYPES)))
 
-    _only(where, raw, CPU_FAN_KEYS if kind == "cpu_fan" else LOAD_KEYS)
+    _only(where, raw, {"cpu_fan": CPU_FAN_KEYS,
+                       "vent_fan": VENT_FAN_KEYS}.get(kind, LOAD_KEYS))
     if not _enabled(where, raw.get("enabled", True)):
         return None
 
@@ -453,6 +523,9 @@ def load_spec(name, raw, devices):
     }
     if kind == "cpu_fan":
         out.update(_fan(where, raw, devices))
+        return out
+    if kind == "vent_fan":
+        out.update(_vent_fan(where, raw, devices))
         return out
 
     if "shed_ladder" not in raw:

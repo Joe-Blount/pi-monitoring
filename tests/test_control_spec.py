@@ -529,10 +529,10 @@ def test_a_load_type_nothing_drives_is_refused():
         type="battery_heating")
 
 
-def test_a_vent_fan_is_specified_and_not_driven():
-    assert spec.load_spec("vent_fan", {"type": "vent_fan", "enabled": False,
+def test_a_deferred_type_is_specified_and_not_driven():
+    assert spec.load_spec("pump", {"type": "sequenced_ac", "enabled": False,
                                        "inside": {}}, {"box"}) is None
-    assert "enabled: false" in refused({"type": "vent_fan"})
+    assert "enabled: false" in refused({"type": "sequenced_ac"})
 
 
 # -- a CPU fan --------------------------------------------------------------
@@ -887,3 +887,92 @@ def test_a_block_that_drives_a_load_must_say_how_its_board_triggers(trigger):
 def test_a_block_with_nothing_to_drive_needs_no_trigger():
     node = FakeNode({"spare": dict(CAMERAS, enabled=False)}, trigger=None)
     assert spec.load_control(node) == {}
+
+
+# -- the vent fan ------------------------------------------------------------
+
+VENT = {
+    "type": "vent_fan",
+    "control_pin": 26,
+    "polarity": "energize_to_connect",
+    "on_stale_data": "deny",
+    "inside": {"device": "box", "field": "temp"},
+    "outside": {"device": "outdoor_temp", "field": "temp"},
+    "stale_after": "10m",
+    "run_if_all": {"inside_above_f": 80.0, "outside_cooler_by_f": 10.0},
+    "stop_if_any": {"inside_below_f": 77.0,
+                    "outside_cooler_by_less_than_f": 6.0,
+                    "outside_below_f": None},
+    "run_dwell": "2m",
+    "stop_dwell": "5m",
+    "min_run": "5m",
+    "min_off": "5m",
+    "readback": {"source": "none", "pin": None},
+}
+VENT_DEVICES = {"box", "outdoor_temp"}
+
+
+def vent(**changes):
+    merged = dict(VENT, **changes)
+    return spec.load_spec("vent_fan", merged, VENT_DEVICES)
+
+
+def vent_refused(**changes):
+    with pytest.raises(spec.SpecError) as e:
+        vent(**changes)
+    return str(e.value)
+
+
+def test_a_vent_fan_parses_to_what_its_decision_reads():
+    parsed = vent()
+    assert parsed["inside_above_f"] == 80.0
+    assert parsed["outside_cooler_by_less_than_f"] == 6.0
+    assert parsed["outside_below_f"] is None
+    assert parsed["run_dwell"] == 120.0
+    assert parsed["stop_dwell"] == 300.0
+    assert parsed["min_run"] == 300.0
+
+
+def test_a_disabled_vent_fan_is_not_driven():
+    assert vent(enabled=False) is None
+
+
+@pytest.mark.parametrize("key", ["inside", "outside", "stale_after",
+                                 "run_if_all", "stop_if_any", "run_dwell",
+                                 "stop_dwell"])
+def test_a_vent_fan_missing_a_required_key_is_refused(key):
+    merged = {k: v for k, v in VENT.items() if k != key}
+    with pytest.raises(spec.SpecError, match=key):
+        spec.load_spec("vent_fan", merged, VENT_DEVICES)
+
+
+def test_a_vent_fan_with_an_unknown_key_is_refused():
+    with pytest.raises(spec.SpecError):
+        vent(colour="red")
+
+
+def test_a_vent_fan_on_a_device_nothing_writes_is_refused():
+    with pytest.raises(spec.SpecError):
+        spec.load_spec("vent_fan", VENT, {"box"})
+
+
+def test_a_vent_fan_reading_one_sensor_twice_is_refused():
+    assert "different sensors" in vent_refused(outside=VENT["inside"])
+
+
+def test_a_vent_fan_that_would_run_on_stale_data_is_refused():
+    assert "must be deny" in vent_refused(on_stale_data="fallback")
+
+
+def test_a_vent_fan_inside_bounds_must_leave_a_gap():
+    assert "inside_above_f" in vent_refused(
+        run_if_all={"inside_above_f": 77.0, "outside_cooler_by_f": 10.0})
+
+
+def test_a_vent_fan_cooler_bounds_must_leave_a_gap():
+    assert "outside_cooler_by_f" in vent_refused(
+        run_if_all={"inside_above_f": 80.0, "outside_cooler_by_f": 6.0})
+
+
+def test_a_vent_fan_with_a_readback_nothing_acts_on_is_refused():
+    assert "readback" in vent_refused(readback={"source": "load"})

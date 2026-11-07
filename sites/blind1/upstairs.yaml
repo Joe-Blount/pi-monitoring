@@ -1,4 +1,4 @@
-# Deer blind, upstairs Pi: sensors only, no control.
+# Deer blind, upstairs Pi: sensors and two fans.
 #
 # Raspberry Pi Zero 2 W, Debian 12. Pin assignments match what is already
 # wired; this file documents the existing installation rather than proposing
@@ -162,9 +162,8 @@ devices:
 # and the outside sensor are all here. A decision must not depend on the
 # network, so a controller reads its own machine's sensors and nothing else.
 #
-# Enable once the relay is wired. Until then the fan simply runs
-# continuously with nothing to enable: this flag disabled matches that
-# unmanaged state rather than changing it.
+# The relay is wired, and turning on control below is what puts the fan under
+# this block's rules. With control off the relay stays released and the fan off.
 control:
   enabled: false
   loop_interval: 30s
@@ -181,10 +180,7 @@ control:
     vent_fan:
       type: vent_fan
 
-      # Specified and not driven yet: its decision compares two sensors,
-      # which the controller does not make. Kept whole so the work is not
-      # lost.
-      enabled: false
+      enabled: true
       control_pin: 26               # physical 37
 
       # Energize to run, so a dead Pi leaves the fan off.

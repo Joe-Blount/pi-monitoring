@@ -477,6 +477,72 @@ def fan_decision(name, spec, readings, state):
     return Decision(name, running, 0, THERMAL, reason, value), new_state
 
 
+def vent_fan_decision(name, spec, readings, mono_now, state):
+    """Decide one vent fan. Returns (Decision, new state).
+
+    Runs when the inside is warm and the outside is cooler by enough to help,
+    and stops when either stops being true. Between its conditions it does
+    whatever it last decided. Each change waits out a dwell, with its condition
+    holding throughout, so one odd reading or a gust does not start the fan.
+
+    With either temperature missing it stops: nothing can say the outside air
+    is cooler, and a warm blind for an afternoon costs little. A fan that has
+    never had both readings stays off with its pin untouched, as a CPU fan does.
+    """
+    inside = _reading(readings, spec["inside"], spec["stale_after"])
+    outside = _reading(readings, spec["outside"], spec["stale_after"])
+    new_state = dict(state)
+    if inside is None or outside is None:
+        missing = spec["inside" if inside is None else "outside"]["device"]
+        new_state.pop("change_since", None)
+        new_state.pop("change_to", None)
+        return (Decision(name, False, 0, NO_READING,
+                         "no fresh reading from %s, so the fan stays off"
+                         % missing, None),
+                new_state)
+    new_state["informed"] = True
+    cooler_by = inside - outside
+    floor = spec["outside_below_f"]
+    # What the timers last let through, not what this function last asked for.
+    # A wish held back by a minimum off time has not happened, so the condition
+    # must still be true when the timer lets it go.
+    running = bool(state.get("commanded", False))
+    summary = "inside %.1f, outside %.1f" % (inside, outside)
+    if (inside <= spec["inside_below_f"]
+            or cooler_by <= spec["outside_cooler_by_less_than_f"]
+            or (floor is not None and outside <= floor)):
+        wanted, dwell = False, spec["stop_dwell"]
+    elif (inside >= spec["inside_above_f"]
+          and cooler_by >= spec["outside_cooler_by_f"]):
+        wanted, dwell = True, spec["run_dwell"]
+    else:
+        wanted, dwell = running, 0.0
+    if wanted == running:
+        new_state.pop("change_since", None)
+        new_state.pop("change_to", None)
+        word = "on" if running else "off"
+        return (Decision(name, running, 0, THERMAL,
+                         "%s, so the fan stays %s" % (summary, word), inside),
+                new_state)
+    since = state.get("change_since")
+    if (state.get("change_to") is not wanted
+            or not isinstance(since, (int, float)) or isinstance(since, bool)):
+        since = mono_now
+    new_state["change_since"] = since
+    new_state["change_to"] = wanted
+    if mono_now - since < dwell:
+        word = "on" if wanted else "off"
+        return (Decision(name, running, 0, THERMAL,
+                         "%s, waiting out the dwell to turn %s" % (summary,
+                                                                   word),
+                         inside),
+                new_state)
+    word = "on" if wanted else "off"
+    return (Decision(name, wanted, 0, THERMAL,
+                     "%s, so the fan turns %s" % (summary, word), inside),
+            new_state)
+
+
 # -- the switches an operator holds -----------------------------------------
 
 def _override(name, switches, now, clock_trusted):
@@ -626,7 +692,7 @@ LADDER_TYPES = ("dc_branch",)
 #: A declared type in neither list is refused rather than ignored, because a
 #: load nobody drives and nobody mentions is indistinguishable from one that
 #: is working.
-FAN_TYPES = ("cpu_fan",)
+FAN_TYPES = ("cpu_fan", "vent_fan")
 
 
 def decide(local_now, mono_now, clock_trusted, readings, switches,
@@ -663,7 +729,12 @@ def decide(local_now, mono_now, clock_trusted, readings, switches,
                 decision, operator = _apply_switches(
                     decision, name, switches, local_now, clock_trusted)
         elif spec["type"] in FAN_TYPES:
-            decision, load_state = fan_decision(name, spec, readings, prior)
+            if spec["type"] == "vent_fan":
+                decision, load_state = vent_fan_decision(
+                    name, spec, readings, mono_now, prior)
+            else:
+                decision, load_state = fan_decision(name, spec, readings,
+                                                    prior)
             # An override, and not the shedding switch. Shedding is about
             # the battery, and switching it off must not run a fan.
             decision, operator = _apply_override(

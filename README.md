@@ -261,9 +261,10 @@ block including the charge setpoints is unmapped. Each driver's docstring
 separates what was confirmed against an independent reading from what is
 inferred, which is worth reading before trusting a field.
 
-Control: written and tested for two load types. One is a DC branch shed on
-the battery's state of charge with a floor beneath it. The other is a fan
-aimed at the Pi, run on the chip temperature with a band between on and off.
+Control: written and tested for three load types. One is a DC branch shed on
+the battery's state of charge with a floor beneath it. Another is a fan aimed
+at the Pi, run on the chip temperature with a band between on and off. The
+third is a vent fan, run when the inside is warm and the outside air is cooler.
 The controller is installed at both sites, disabled. The other load types are
 specified in the node files and refused by the controller until a decision
 for them is written. The pump sequence is

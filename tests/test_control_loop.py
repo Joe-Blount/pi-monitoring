@@ -6,9 +6,11 @@ hardware.
 """
 
 import datetime
+import pathlib
 import zoneinfo
 
 import pytest
+import yaml
 
 from monitoring.control import clock, files, loop, relay
 from monitoring.control.spec import SpecError
@@ -678,3 +680,38 @@ def test_the_node_trigger_reaches_the_pin_through_the_loop_own_relays(
         assert published["loads"]["cameras"]["powered"] == 1.0
     finally:
         machine.close()
+
+
+def test_the_vent_fan_pin_follows_both_temperatures_through_its_dwells(tmp_path):
+    raw = yaml.safe_load(
+        (pathlib.Path(__file__).resolve().parent.parent / "sites" / "blind1"
+         / "upstairs.yaml").read_text())["control"]["loads"]["vent_fan"]
+    world = {"inside": 85.0, "outside": 60.0, "mono": 0.0}
+    pin = relay.Pretend(26, relay.ENERGIZE_TO_CONNECT, relay.HIGH)
+    machine = loop.Loop(
+        FakeNode({"vent_fan": raw}, devices=("box", "outdoor_temp")),
+        LOCATION, ZONE,
+        relays={"vent_fan": pin},
+        now=lambda: datetime.datetime(2026, 6, 21, 12, tzinfo=ZONE),
+        monotonic=lambda: world["mono"],
+        trust=lambda high_water=None: clock.Trust(True, "under test"),
+        readings=lambda: {
+            "box": {"fields": {"temp": world["inside"]}, "age_seconds": 1.0},
+            "outdoor_temp": {"fields": {"temp": world["outside"]},
+                             "age_seconds": 1.0}},
+        switches=lambda: {"shedding_enabled": True, "loads": {}},
+        state_path=str(tmp_path / "state.json"),
+        published_path=str(tmp_path / "published.json"),
+        high_water_path=str(tmp_path / "hw.json"),
+        publish=lambda _path, _data: None, boot=BOOT)
+    machine.once()
+    world["mono"] = 120.0
+    machine.once()      # past the run dwell, held by the minimum off time
+    world["mono"] = 300.0
+    machine.once()
+    world["inside"] = 70.0
+    world["mono"] = 700.0
+    machine.once()      # the stop dwell starts
+    world["mono"] = 1000.0
+    machine.once()
+    assert pin.levels == [False, False, True, True, False]

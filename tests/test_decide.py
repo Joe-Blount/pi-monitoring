@@ -1695,3 +1695,165 @@ def test_a_fan_pin_driven_before_its_first_recorded_reading_is_timed():
     decision, _ = fan(170.0, spec=timed, state=state, mono=20.0)
     assert not decision.connected
     assert decision.reason_code == decide.HELD_BY_TIMER
+
+
+# -- the vent fan ------------------------------------------------------------
+
+VENT = {"type": "vent_fan", "min_run": 0.0, "min_off": 0.0,
+        "inside": {"device": "box", "field": "temp"},
+        "outside": {"device": "outdoor_temp", "field": "temp"},
+        "stale_after": 600.0,
+        "inside_above_f": 80.0, "inside_below_f": 77.0,
+        "outside_cooler_by_f": 10.0, "outside_cooler_by_less_than_f": 6.0,
+        "outside_below_f": None, "run_dwell": 120.0, "stop_dwell": 300.0}
+
+
+def vent(inside=None, outside=None, state=None, mono=0.0, spec=None,
+         switches=None, age=1.0):
+    readings = {
+        "box": {"fields": {} if inside is None else {"temp": inside},
+                "age_seconds": age},
+        "outdoor_temp": {"fields": {} if outside is None else {"temp": outside},
+                         "age_seconds": age},
+    }
+    decisions, new_state = decide.decide(
+        at(12), mono, True, readings,
+        switches or {"shedding_enabled": True, "loads": {}},
+        {"vent_fan": spec or VENT}, state or {}, SUNS)
+    return decisions["vent_fan"], new_state
+
+
+def vent_running():
+    """A vent fan past its dwell and running."""
+    _, state = vent(85.0, 60.0, mono=0.0)
+    decision, state = vent(85.0, 60.0, state=state, mono=120.0)
+    assert decision.connected
+    return state
+
+
+def test_a_warm_blind_with_cooler_air_outside_waits_out_the_dwell_then_runs():
+    decision, state = vent(85.0, 70.0, mono=0.0)
+    assert not decision.connected
+    assert decision.reason_code == decide.THERMAL
+    decision, state = vent(85.0, 70.0, state=state, mono=119.0)
+    assert not decision.connected
+    decision, _ = vent(85.0, 70.0, state=state, mono=120.0)
+    assert decision.connected
+    assert decision.decided_on == 85.0
+
+
+def test_outside_air_that_is_not_cooler_never_runs_the_fan():
+    _, state = vent(85.0, 84.0, mono=0.0)
+    decision, _ = vent(85.0, 84.0, state=state, mono=10000.0)
+    assert not decision.connected
+
+
+def test_a_cool_blind_never_runs_the_fan():
+    _, state = vent(75.0, 40.0, mono=0.0)
+    decision, _ = vent(75.0, 40.0, state=state, mono=10000.0)
+    assert not decision.connected
+
+
+def test_a_condition_that_lapses_restarts_the_run_dwell():
+    _, state = vent(85.0, 70.0, mono=0.0)
+    _, state = vent(78.0, 70.0, state=state, mono=60.0)
+    _, state = vent(85.0, 70.0, state=state, mono=120.0)
+    decision, _ = vent(85.0, 70.0, state=state, mono=180.0)
+    assert not decision.connected
+    decision, _ = vent(85.0, 70.0, state=state, mono=240.0)
+    assert decision.connected
+
+
+@pytest.mark.parametrize("inside,outside", [
+    (77.0, 60.0),    # the blind has cooled
+    (85.0, 79.0),    # the outside air no longer helps
+])
+def test_a_running_fan_stops_after_its_dwell_when_either_condition_fails(
+        inside, outside):
+    state = vent_running()
+    decision, state = vent(inside, outside, state=state, mono=1000.0)
+    assert decision.connected
+    decision, state = vent(inside, outside, state=state, mono=1299.0)
+    assert decision.connected
+    decision, _ = vent(inside, outside, state=state, mono=1300.0)
+    assert not decision.connected
+
+
+def test_between_its_conditions_a_running_fan_keeps_running():
+    state = vent_running()
+    decision, _ = vent(78.0, 70.0, state=state, mono=100000.0)
+    assert decision.connected
+
+
+def test_between_its_conditions_a_stopped_fan_stays_stopped():
+    _, state = vent(78.0, 70.0, mono=0.0)
+    decision, _ = vent(78.0, 70.0, state=state, mono=100000.0)
+    assert not decision.connected
+
+
+def test_a_set_outside_floor_stops_the_fan():
+    spec = dict(VENT, outside_below_f=50.0)
+    _, state = vent(85.0, 60.0, spec=spec, mono=0.0)
+    _, state = vent(85.0, 60.0, state=state, spec=spec, mono=120.0)
+    _, state = vent(85.0, 50.0, state=state, spec=spec, mono=200.0)
+    decision, _ = vent(85.0, 50.0, state=state, spec=spec, mono=500.0)
+    assert not decision.connected
+
+
+def test_with_no_floor_cold_air_outside_does_not_stop_the_fan():
+    state = vent_running()
+    decision, _ = vent(85.0, 10.0, state=state, mono=100000.0)
+    assert decision.connected
+
+
+@pytest.mark.parametrize("inside,outside", [(None, 60.0), (85.0, None),
+                                            (None, None)])
+def test_a_missing_temperature_stops_a_running_fan(inside, outside):
+    state = vent_running()
+    decision, _ = vent(inside, outside, state=state, mono=1000.0)
+    assert not decision.connected
+    assert decision.reason_code == decide.NO_READING
+    assert decision.decided_on is None
+
+
+def test_a_stale_temperature_stops_a_running_fan():
+    state = vent_running()
+    decision, _ = vent(85.0, 60.0, state=state, mono=1000.0, age=601.0)
+    assert not decision.connected
+
+
+def test_a_fan_with_no_readings_yet_starts_no_timer():
+    _, state = vent(mono=0.0)
+    assert "ran_since" not in state and "off_since" not in state
+    assert not state.get("applied")
+
+
+def test_the_minimum_run_holds_a_fan_on_when_its_dwell_has_passed():
+    spec = dict(VENT, min_run=600.0, run_dwell=0.0, stop_dwell=0.0)
+    _, state = vent(85.0, 60.0, spec=spec, mono=0.0)
+    decision, state = vent(70.0, 60.0, state=state, spec=spec, mono=100.0)
+    assert decision.connected
+    decision, _ = vent(70.0, 60.0, state=state, spec=spec, mono=601.0)
+    assert not decision.connected
+
+
+def test_an_override_runs_a_vent_fan_on_a_cool_day():
+    decision, _ = vent(70.0, 60.0, switches={
+        "shedding_enabled": True,
+        "loads": {"vent_fan": {"force": "on", "expires_epoch": LATER}}})
+    assert decision.connected
+
+
+def test_turning_shedding_off_does_not_run_a_vent_fan():
+    decision, _ = vent(70.0, 60.0,
+                       switches={"shedding_enabled": False, "loads": {}})
+    assert not decision.connected
+
+
+def test_a_wish_to_run_held_by_the_minimum_off_lapses_with_its_condition():
+    spec = dict(VENT, min_off=300.0)
+    _, state = vent(85.0, 60.0, spec=spec, mono=0.0)
+    decision, state = vent(85.0, 60.0, state=state, spec=spec, mono=120.0)
+    assert not decision.connected
+    decision, _ = vent(70.0, 60.0, state=state, spec=spec, mono=400.0)
+    assert not decision.connected
