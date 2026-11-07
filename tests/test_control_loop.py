@@ -715,3 +715,121 @@ def test_the_vent_fan_pin_follows_both_temperatures_through_its_dwells(tmp_path)
     world["mono"] = 1000.0
     machine.once()
     assert pin.levels == [False, False, True, True, False]
+
+
+def garage_heating_loop(tmp_path, world):
+    """The heating block as the node file ships it, through the real loop."""
+    raw = yaml.safe_load(
+        (pathlib.Path(__file__).resolve().parent.parent / "sites" / "garage"
+         / "garage.yaml").read_text())["control"]["loads"]["battery_heating"]
+    raw = dict(raw, enabled=True)
+    pin = relay.Pretend(24, relay.ENERGIZE_TO_CONNECT, relay.HIGH)
+
+    def pack(temp):
+        return {"fields": {"temp_1": temp, "temp_2": temp,
+                           "state_of_charge_pct": world["soc"]},
+                "age_seconds": 1.0}
+
+    def readings():
+        if world.get("nothing"):
+            return {}
+        out = {"pack1": pack(world["temp"]), "pack2": pack(world["temp"]),
+               "inverter": {"fields": {"pv_volts": world["volts"]},
+                            "age_seconds": 1.0}}
+        if world.get("wm2") is not None:
+            out["forecast"] = {"fields": {"shortwave_wm2": world["wm2"]},
+                               "age_seconds": 1.0}
+        return out
+
+    published = {}
+    machine = loop.Loop(
+        FakeNode({"battery_heating": raw},
+                 devices=("pack1", "pack2", "inverter", "forecast")),
+        LOCATION, ZONE,
+        relays={"battery_heating": pin},
+        now=lambda: world["now"],
+        monotonic=lambda: world["mono"],
+        trust=lambda high_water=None: clock.Trust(world.get("trusted", True),
+                                                  "under test"),
+        readings=readings,
+        switches=lambda: {"shedding_enabled": True, "loads": {}},
+        state_path=str(tmp_path / "state.json"),
+        published_path=str(tmp_path / "published.json"),
+        high_water_path=str(tmp_path / "hw.json"),
+        publish=lambda _path, data: published.update(data), boot=BOOT)
+    return machine, pin, published
+
+
+def test_the_heater_pin_stays_untouched_until_a_reading_informs_a_decision(
+        tmp_path):
+    world = {"temp": 35.0, "volts": 100.0, "soc": 60.0, "mono": 0.0,
+             "nothing": True,
+             "now": datetime.datetime(2026, 12, 21, 12, tzinfo=ZONE)}
+    machine, pin, _ = garage_heating_loop(tmp_path, world)
+    machine.once()
+    assert pin.levels == []
+    world["nothing"] = False
+    machine.once()
+    assert pin.levels == [False]
+
+
+def test_the_heater_pin_follows_the_sun_through_dwell_and_off_time(tmp_path):
+    world = {"temp": 35.0, "volts": 100.0, "soc": 60.0, "mono": 0.0,
+             "now": datetime.datetime(2026, 12, 21, 12, tzinfo=ZONE)}
+    machine, pin, published = garage_heating_loop(tmp_path, world)
+    machine.once()              # the dwell starts
+    world["mono"] = 300.0
+    machine.once()              # past the dwell, held by the minimum off time
+    world["mono"] = 900.0
+    machine.once()
+    assert published["loads"]["battery_heating"]["powered"] == 1.0
+    world["temp"] = 55.0
+    world["mono"] = 1000.0
+    machine.once()              # the stop dwell starts
+    world["mono"] = 1300.0
+    machine.once()
+    assert pin.levels == [False, False, True, True, False]
+    assert published["loads"]["battery_heating"]["reason_code"] == 8.0
+
+
+def test_the_heater_preheats_before_sunrise_through_the_real_sun_times(tmp_path):
+    """The loop computes sunrise from the location, so this reads the sun times
+    the same way the service does rather than a table in a test."""
+    world = {"temp": 35.0, "volts": 17.0, "soc": 60.0, "wm2": 300.0, "mono": 0.0,
+             "now": datetime.datetime(2026, 12, 21, 6, 30, tzinfo=ZONE)}
+    machine, pin, published = garage_heating_loop(tmp_path, world)
+    machine.once()
+    world["mono"] = 900.0
+    machine.once()
+    assert pin.levels == [False, True]
+    assert "preheat" in published["loads"]["battery_heating"]["reason"]
+
+
+def test_the_heater_does_not_preheat_through_the_loop_on_an_untrusted_clock(
+        tmp_path):
+    world = {"temp": 35.0, "volts": 17.0, "soc": 60.0, "wm2": 300.0, "mono": 0.0,
+             "trusted": False,
+             "now": datetime.datetime(2026, 12, 21, 6, 30, tzinfo=ZONE)}
+    machine, pin, published = garage_heating_loop(tmp_path, world)
+    machine.once()
+    world["mono"] = 900.0
+    machine.once()
+    assert pin.levels == [False, False]
+    assert "clock" in published["loads"]["battery_heating"]["reason"]
+
+
+def test_the_heater_daily_count_survives_a_restart_within_a_boot(tmp_path):
+    world = {"temp": 35.0, "volts": 100.0, "soc": 60.0, "mono": 0.0,
+             "now": datetime.datetime(2026, 12, 21, 12, tzinfo=ZONE)}
+    machine, _, _ = garage_heating_loop(tmp_path, world)
+    machine.once()
+    world["mono"] = 900.0
+    machine.once()
+    world["mono"] = 900.0 + 5.9 * 3600
+    machine.once()
+    world["mono"] += 7 * 60
+
+    restarted, pin, published = garage_heating_loop(tmp_path, world)
+    restarted.once()
+    assert pin.levels == [False]
+    assert "max_run_per_day" in published["loads"]["battery_heating"]["reason"]

@@ -477,6 +477,23 @@ def fan_decision(name, spec, readings, state):
     return Decision(name, running, 0, THERMAL, reason, value), new_state
 
 
+def _forget_dwell(new_state):
+    """Nothing is waiting to change, so the next wish starts its dwell afresh."""
+    new_state.pop("change_since", None)
+    new_state.pop("change_to", None)
+
+
+def _dwell_is_over(state, new_state, wanted, dwell, mono_now):
+    """Whether a change has been wanted, unbroken, for as long as its dwell."""
+    since = state.get("change_since")
+    if (state.get("change_to") is not wanted
+            or not isinstance(since, (int, float)) or isinstance(since, bool)):
+        since = mono_now
+    new_state["change_since"] = since
+    new_state["change_to"] = wanted
+    return mono_now - since >= dwell
+
+
 def vent_fan_decision(name, spec, readings, mono_now, state):
     """Decide one vent fan. Returns (Decision, new state).
 
@@ -494,8 +511,7 @@ def vent_fan_decision(name, spec, readings, mono_now, state):
     new_state = dict(state)
     if inside is None or outside is None:
         missing = spec["inside" if inside is None else "outside"]["device"]
-        new_state.pop("change_since", None)
-        new_state.pop("change_to", None)
+        _forget_dwell(new_state)
         return (Decision(name, False, 0, NO_READING,
                          "no fresh reading from %s, so the fan stays off"
                          % missing, None),
@@ -518,19 +534,12 @@ def vent_fan_decision(name, spec, readings, mono_now, state):
     else:
         wanted, dwell = running, 0.0
     if wanted == running:
-        new_state.pop("change_since", None)
-        new_state.pop("change_to", None)
+        _forget_dwell(new_state)
         word = "on" if running else "off"
         return (Decision(name, running, 0, THERMAL,
                          "%s, so the fan stays %s" % (summary, word), inside),
                 new_state)
-    since = state.get("change_since")
-    if (state.get("change_to") is not wanted
-            or not isinstance(since, (int, float)) or isinstance(since, bool)):
-        since = mono_now
-    new_state["change_since"] = since
-    new_state["change_to"] = wanted
-    if mono_now - since < dwell:
+    if not _dwell_is_over(state, new_state, wanted, dwell, mono_now):
         word = "on" if wanted else "off"
         return (Decision(name, running, 0, THERMAL,
                          "%s, waiting out the dwell to turn %s" % (summary,
@@ -541,6 +550,237 @@ def vent_fan_decision(name, spec, readings, mono_now, state):
     return (Decision(name, wanted, 0, THERMAL,
                      "%s, so the fan turns %s" % (summary, word), inside),
             new_state)
+
+
+# -- battery heating ---------------------------------------------------------
+
+#: How long a stretch of running time is kept: past the longest local day, which
+#: has 25 hours in it when the clocks go back.
+_RUN_RECORD_SECONDS = 26 * 3600.0
+
+_DAY_SECONDS = 86400.0
+
+
+def _heating_runs(state, mono_now):
+    """Each stretch of running time as [start, end], up to this moment.
+
+    On the monotonic clock, so a wall clock stepping by hours moves none of
+    them. Kept as stretches rather than a total, because one store then answers
+    both questions the cap asks: how much since local midnight, and how much in
+    the last 24 hours when there is no trustworthy midnight. It also means a
+    clock that comes good partway through a day counts what already ran.
+
+    The start of a stretch is the moment the timers recorded for the change, so
+    a stretch is whatever was commanded, for whatever reason, including an
+    operator's force.
+    """
+    runs = [list(run) for run in state.get("runs", [])
+            if run[1] > mono_now - _RUN_RECORD_SECONDS]
+    since = state.get("since")
+    if state.get("commanded") is True and isinstance(since, (int, float)):
+        if runs and runs[-1][0] == since:
+            runs[-1][1] = mono_now
+        else:
+            runs.append([since, mono_now])
+    return runs
+
+
+def _heating_limit(spec, runs, now, mono_now, clock_trusted, running):
+    """What stops the heat from running this pass, in words, or None."""
+    if clock_trusted:
+        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        began = mono_now - (now.timestamp() - midnight.timestamp())
+        span = "this local day"
+    else:
+        began = mono_now - _DAY_SECONDS
+        span = "the last 24 hours, with no trustworthy date"
+    used = sum(max(0.0, end - max(start, began)) for start, end in runs)
+    if used >= spec["max_run_per_day"]:
+        return "max_run_per_day of %.0f minutes is used up over %s" % (
+            spec["max_run_per_day"] / 60.0, span)
+    if not running and runs:
+        waiting = spec["cooldown"] - (mono_now - runs[-1][1])
+        if waiting > 0:
+            return "%.0fs of cooldown remain" % waiting
+    return None
+
+
+def _preheat_refusal(spec, readings, now, suns, clock_trusted):
+    """Which gate stops a preheat, in words, or None when they all pass.
+
+    Each gate covers its own way of spending charge on a morning that does not
+    pay it back. The sun times cannot be placed on an untrusted clock. Low or
+    unknown charge is what the sun was meant to fix. With no belief in the
+    forecast, the bank is spent on the chance of sun, so missing means no.
+    """
+    preheat = spec.get("preheat")
+    if not preheat:
+        return "no preheat is set up"
+    if not clock_trusted:
+        return "no preheat without a trustworthy clock"
+    if not any(day["sunrise"] - preheat["lead"] <= now < day["sunrise"]
+               for day in suns):
+        return "outside the preheat window"
+    lowest = None
+    for source in preheat["soc_sources"]:
+        value = _reading(readings, source, preheat["soc_stale_after"])
+        if value is None:
+            return "no preheat without a fresh charge reading from %s" % (
+                source["device"],)
+        lowest = value if lowest is None else min(lowest, value)
+    if lowest <= preheat["soc_above_pct"]:
+        return "no preheat with the lowest charge %.1f not above %.1f" % (
+            lowest, preheat["soc_above_pct"])
+    wm2 = _reading(readings, preheat["forecast_source"],
+                   preheat["forecast_stale_after"])
+    if wm2 is None:
+        return "no preheat without a fresh forecast"
+    if wm2 <= preheat["forecast_above_wm2"]:
+        return "no preheat with a forecast of %.0f W/m2 not above %.0f" % (
+            wm2, preheat["forecast_above_wm2"])
+    return None
+
+
+def _heating_wish(spec, coldest, volts, running, readings, now, suns,
+                  clock_trusted):
+    """What the temperature and the gates ask for, given a temperature to trust.
+
+    Returns whether to heat, the reason code and the reason.
+    """
+    low, high = spec["coldest_below_f"], spec["coldest_above_f"]
+    if coldest >= high:
+        return (False, THERMAL,
+                "coldest %.1f at or above %.1f, so no heat" % (coldest, high))
+    if coldest > low and not running:
+        return (False, THERMAL, "coldest %.1f between %.1f and %.1f, so the "
+                                "heat stays off" % (coldest, low, high))
+    summary = ("coldest %.1f at or below %.1f" % (coldest, low) if coldest <= low
+               else "coldest %.1f between %.1f and %.1f, so the heat stays on"
+               % (coldest, low, high))
+    production = spec["production"]
+    field = production["source"]["field"]
+    if volts is not None and volts > production["above_volts"]:
+        return (True, THERMAL, "%s, %s=%.1f above %g" % (
+            summary, field, volts, production["above_volts"]))
+    refusal = _preheat_refusal(spec, readings, now, suns, clock_trusted)
+    if refusal is None:
+        return True, THERMAL, "%s, preheating before sunrise" % summary
+    if volts is None:
+        return (False, NO_READING,
+                "%s, but no fresh %s, and %s" % (summary, field, refusal))
+    return (False, THERMAL, "%s, but %s=%.1f not above %g, and %s" % (
+        summary, field, volts, production["above_volts"], refusal))
+
+
+def _heating_fallback(spec, temperatures, volts):
+    """What to do with no temperature to trust.
+
+    Returns whether to heat and the reason, or None for the heater's answer when
+    there is nothing at all to wait on.
+    """
+    if temperatures:
+        why = "sensors disagree by %.1f F, more than %.1f" % (
+            max(temperatures) - min(temperatures), spec["max_disagreement_f"])
+    else:
+        why = "no fresh temperature"
+    production = spec["production"]
+    field = production["source"]["field"]
+    if spec["on_stale_data"] == "deny":
+        return None, "%s, and on_stale_data says not to heat without one" % why
+    if volts is None:
+        return None, "%s and no fresh %s, so the heat is off" % (why, field)
+    if volts > production["above_volts"]:
+        return True, "%s, so heating on production alone, %s=%.1f" % (
+            why, field, volts)
+    return False, "%s, and %s=%.1f not above %g" % (
+        why, field, volts, production["above_volts"])
+
+
+def heating_decision(name, spec, readings, now, mono_now, suns, clock_trusted,
+                     state):
+    """Decide one battery heater. Returns (Decision, next state).
+
+    The rules, in the order they apply:
+
+    A hard stop, on any fresh sensor at the limit, which nothing else in here
+    or above here gets past. `hard_stop` in the state says so, because the
+    timers and an operator's force are decided around this function and a
+    reason code is a poor thing to key an exemption on.
+
+    The coldest fresh sensor against two bounds, in the band between which the
+    heater carries on with what was last commanded. What was commanded, not
+    what was asked for: a wish a timer is holding back has not happened. To
+    heat, it also needs production, or else every gate of a preheat.
+
+    With no temperature to trust, which is every sensor stale or two of them too
+    far apart, it heats on production alone. That is the dumb heater this
+    replaces, the snap-disc cutout bounds it, and refusing would let a flaky
+    radio cost a winter of charging. A hard stop still applies to any sensor that
+    is reading. With no production reading either, there is no case for heat.
+
+    Heat with no draw behind it is normal, because the tape carries a thermostat
+    of its own, so nothing here asks whether the heater is drawing anything.
+
+    A cap on running time and a cooldown stop any of these from starting, and
+    the cap ends a run without waiting for a dwell. Both are measured from state
+    that a reboot loses, which at worst costs one more day's allowance.
+    """
+    new_state = dict(state)
+    new_state.pop("hard_stop", None)
+    runs = _heating_runs(state, mono_now)
+    new_state["runs"] = runs
+    fresh = [_reading(readings, source, spec["stale_after"])
+             for source in spec["sources"]]
+    temperatures = [value for value in fresh if value is not None]
+    running = state.get("commanded") is True
+
+    if temperatures and max(temperatures) >= spec["any_sensor_above_f"]:
+        hottest = max(temperatures)
+        _forget_dwell(new_state)
+        new_state["hard_stop"] = True
+        new_state["informed"] = True
+        return (Decision(name, False, 0, THERMAL,
+                         "a sensor at %.1f is at or above the %.1f hard stop"
+                         % (hottest, spec["any_sensor_above_f"]), hottest),
+                new_state)
+
+    production = spec["production"]
+    volts = _reading(readings, production["source"], production["stale_after"])
+    if (temperatures and max(temperatures) - min(temperatures)
+            <= spec["max_disagreement_f"]):
+        decided_on = min(temperatures)
+        wanted, code, reason = _heating_wish(
+            spec, decided_on, volts, running, readings, now, suns, clock_trusted)
+    else:
+        decided_on = volts
+        code = NO_READING
+        wanted, reason = _heating_fallback(spec, temperatures, volts)
+    if decided_on is not None:
+        new_state["informed"] = True
+
+    if wanted is None:
+        # Nothing to go on, so no dwell for a condition to hold throughout.
+        _forget_dwell(new_state)
+        return Decision(name, False, 0, code, reason, decided_on), new_state
+
+    if wanted:
+        limit = _heating_limit(spec, runs, now, mono_now, clock_trusted, running)
+        if limit:
+            _forget_dwell(new_state)
+            return (Decision(name, False, 0, HELD_BY_TIMER,
+                             "%s; %s" % (reason, limit), decided_on),
+                    new_state)
+
+    if wanted == running:
+        _forget_dwell(new_state)
+        return Decision(name, running, 0, code, reason, decided_on), new_state
+    dwell = spec["heat_dwell"] if wanted else spec["stop_dwell"]
+    if not _dwell_is_over(state, new_state, wanted, dwell, mono_now):
+        return (Decision(name, running, 0, code,
+                         "%s; waiting out the dwell to turn %s" % (
+                             reason, "on" if wanted else "off"), decided_on),
+                new_state)
+    return Decision(name, wanted, 0, code, reason, decided_on), new_state
 
 
 # -- the switches an operator holds -----------------------------------------
@@ -619,7 +859,7 @@ def _apply_switches(decision, name, switches, now, clock_trusted):
 
 # -- the timers -------------------------------------------------------------
 
-def _hold(decision, spec, mono_now, state, operator=False):
+def _hold(decision, spec, mono_now, state, operator=False, urgent=False):
     """Apply the minimum run and minimum off times.
 
     A recorder should not be cycled repeatedly, so a change of mind inside
@@ -646,6 +886,9 @@ def _hold(decision, spec, mono_now, state, operator=False):
     weeks, so an exemption there is unbounded cycling nobody is watching.
     The decision still says so, with the seconds remaining, rather than
     appearing to ignore the switch.
+
+    `urgent` is a heater's hard stop, which like the floor gets past both timers
+    and is not a thing to keep a heater running for.
     """
     floor = decision.reason_code == FLOOR
     commanded = state.get("commanded")
@@ -654,7 +897,7 @@ def _hold(decision, spec, mono_now, state, operator=False):
 
     held_down_by_the_floor = (commanded is False
                               and state.get("commanded_by_floor", False))
-    untimed = floor or (operator and not held_down_by_the_floor)
+    untimed = floor or urgent or (operator and not held_down_by_the_floor)
 
     if untimed or commanded is None or not isinstance(since, (int, float)):
         new_state["commanded"] = decision.connected
@@ -689,10 +932,14 @@ LADDER_TYPES = ("dc_branch",)
 
 #: Load types decided on one temperature between two bounds.
 #:
-#: A declared type in neither list is refused rather than ignored, because a
-#: load nobody drives and nobody mentions is indistinguishable from one that
-#: is working.
 FAN_TYPES = ("cpu_fan", "vent_fan")
+
+#: Load types decided on several temperatures and the sun.
+#:
+#: A declared type in none of these lists is refused rather than ignored,
+#: because a load nobody drives and nobody mentions is indistinguishable from
+#: one that is working.
+HEATING_TYPES = ("battery_heating",)
 
 
 def decide(local_now, mono_now, clock_trusted, readings, switches,
@@ -719,12 +966,12 @@ def decide(local_now, mono_now, clock_trusted, readings, switches,
     for name in sorted(specs):
         spec = specs[name]
         prior = state.get(name) or {}
+        operator = urgent = False
 
         if spec["type"] in LADDER_TYPES:
             decision, load_state = ladder_decision(
                 name, spec, readings, local_now, mono_now, suns,
                 clock_trusted, prior)
-            operator = False
             if decision.reason_code != FLOOR:
                 decision, operator = _apply_switches(
                     decision, name, switches, local_now, clock_trusted)
@@ -739,15 +986,31 @@ def decide(local_now, mono_now, clock_trusted, readings, switches,
             # the battery, and switching it off must not run a fan.
             decision, operator = _apply_override(
                 decision, name, switches, local_now, clock_trusted)
+        elif spec["type"] in HEATING_TYPES:
+            decision, load_state = heating_decision(
+                name, spec, readings, local_now, mono_now, suns, clock_trusted,
+                prior)
+            urgent = load_state.get("hard_stop", False)
+            if not urgent:
+                # An override, and not the shedding switch, as for a fan.
+                decision, operator = _apply_override(
+                    decision, name, switches, local_now, clock_trusted)
+            elif _override(name, switches, local_now, clock_trusted) == "on":
+                # A hard stop a person can defeat is not one, and the snap-disc
+                # is not the only thing that should be left. They still get told
+                # why their switch appears to do nothing.
+                decision = decision._replace(
+                    reason="%s; an operator's force on does not get past it"
+                           % decision.reason)
         else:
             decision = Decision(
                 name, False, 0, REFUSED,
                 "load type %r is declared but this controller does not drive "
                 "it" % spec["type"], None)
             load_state = dict(prior)
-            operator = False
 
-        if (spec["type"] in FAN_TYPES and not load_state.get("informed")
+        if (spec["type"] in FAN_TYPES + HEATING_TYPES
+                and not load_state.get("informed")
                 and not load_state.get("applied")):
             # Nothing reaches the pin before a reading informs a decision,
             # so a timer started here would time a drive that never went
@@ -758,7 +1021,7 @@ def decide(local_now, mono_now, clock_trusted, readings, switches,
             continue
 
         decision, load_state = _hold(decision, spec, mono_now, load_state,
-                                     operator)
+                                     operator, urgent)
         decisions[name] = decision
         new_state[name] = load_state
 

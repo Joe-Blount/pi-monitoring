@@ -315,9 +315,12 @@ class OpenMeteoDriver(Driver):
         self._record(at, value=value)
         return {FIELD: value}
 
+    def read_once(self):
+        """One fetch outside the record, as a read would publish it."""
+        return {FIELD: self._ask(self.url())}
+
     def check(self):
         """Call the service once, outside the record. A person is watching, and
         a check that used up the hour would hold back the first real reading."""
-        value = self._ask(self.url())
         return "forecast service answering, %.0f W/m2 after the next sunrise" % (
-            value,)
+            self.read_once()[FIELD],)

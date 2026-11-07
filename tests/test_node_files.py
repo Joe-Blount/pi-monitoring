@@ -8,6 +8,7 @@ Catching that here means it fails on a laptop in milliseconds rather than at a
 site that takes a drive to reach.
 """
 
+import datetime
 import pathlib
 import re
 
@@ -228,7 +229,9 @@ def known_driver_fields():
     from monitoring.drivers.dht import DhtDriver
     from monitoring.drivers.host import HostDriver
     from monitoring.drivers.rain_gauge import RainCounter
-    from monitoring.drivers import abc_bms, eg4_modbus, jbd, pi30, vedirect
+    from monitoring.drivers import abc_bms, eg4_modbus, jbd, open_meteo, pi30
+    from monitoring.drivers import vedirect
+    from tests import open_meteo_fixtures as forecast
     from tests import vedirect_fixtures as fx
     from tests import abc_bms_fixtures as bms
     from tests import eg4_modbus_fixtures as eg4
@@ -255,6 +258,11 @@ def known_driver_fields():
         # From a register block captured off the inverter, so a
         # control block naming a field it does not emit fails here.
         "eg4_modbus": eg4_modbus.parse(eg4.PV_ON_RECHARGING),
+        "open_meteo": open_meteo.OpenMeteoDriver("f", {
+            "locate": lambda: forecast.PLACE,
+            "fetch": lambda _url, _timeout: forecast.body(),
+            "now": lambda zone: datetime.datetime(2026, 11, 6, tzinfo=zone)},
+            {}).read_once(),
     }
 
 
@@ -606,9 +614,9 @@ def enabled_everywhere(path):
 def test_every_control_block_has_keys_the_loop_still_reads(path):
     """The block-level keys, for every file in the repository.
 
-    The other tests here reach into one named file, and the files for the
-    garage and the example specify load types this controller does not drive,
-    so they cannot be validated whole. Their own keys can be, and that is
+    The other tests here reach into one named file, and the example and the
+    downstairs node specify a load type this controller does not drive, so
+    they cannot be validated whole. Their own keys can be, and that is
     where the quiet failure lives: the validator is otherwise reached only
     when a controller starts, a controller starts only where control is
     enabled, so a key the validator refuses can sit in a file with control
@@ -758,6 +766,96 @@ def test_the_upstairs_control_block_is_accepted_as_it_stands():
     assert sorted(loads) == ["cpu_fan", "vent_fan"]
 
 
+def garage_heating(**control):
+    """The garage node with its one load switched on, as far as the file can
+    be without being edited. `control` is what the file cannot yet say."""
+    node = load(REPO / "sites" / "garage" / "garage.yaml")
+    node.control["loads"]["battery_heating"]["enabled"] = True
+    node.control.update(control)
+    return node
+
+
+def test_the_garage_control_block_is_accepted_as_it_stands_and_drives_nothing():
+    """Nothing forced. The relay is not wired, so the load is off and no relay
+    trigger is needed yet."""
+    node = load(REPO / "sites" / "garage" / "garage.yaml")
+    assert control_spec.load_control(node) == {}
+    assert "relay_trigger" not in node.control
+
+
+def test_the_garage_heating_block_parses_once_enabled_with_its_devices():
+    """The trigger here stands in for the board's, which nothing knows yet."""
+    node = garage_heating(relay_trigger="high")
+    for device in node.devices:
+        device.enabled = True
+    heater = control_spec.load_control(node)["battery_heating"]
+
+    assert heater["control_pin"] == 24
+    assert heater["polarity"] == "energize_to_connect"
+    assert heater["on_stale_data"] == "fallback"
+    assert sorted((s["device"], s["field"]) for s in heater["sources"]) == [
+        ("pack1", "temp_1"), ("pack1", "temp_2"),
+        ("pack2", "temp_1"), ("pack2", "temp_2")]
+    assert (heater["coldest_below_f"], heater["coldest_above_f"],
+            heater["any_sensor_above_f"]) == (41.0, 50.0, 104.0)
+    assert heater["production"]["source"] == {"device": "inverter",
+                                              "field": "pv_volts"}
+    assert heater["production"]["above_volts"] == 80.0
+    assert (heater["max_run_per_day"], heater["cooldown"]) == (21600.0, 900.0)
+
+    preheat = heater["preheat"]
+    assert preheat["lead"].total_seconds() == 7200.0
+    assert [s["device"] for s in preheat["soc_sources"]] == ["pack1", "pack2"]
+    assert preheat["soc_above_pct"] == 40.0
+    assert preheat["forecast_source"] == {"device": "forecast",
+                                          "field": "shortwave_wm2"}
+    assert preheat["forecast_above_wm2"] == 150.0
+    assert preheat["forecast_stale_after"] == 64800.0
+
+
+def test_the_garage_heating_block_is_refused_without_a_relay_trigger():
+    node = garage_heating()
+    for device in node.devices:
+        device.enabled = True
+    with pytest.raises(control_spec.SpecError, match="relay_trigger"):
+        control_spec.load_control(node)
+
+
+def test_the_garage_heating_block_is_refused_while_the_forecast_is_disabled():
+    """As the file stands, enabling the load alone says which device is off
+    rather than running a preheat that could never pass its gate."""
+    with pytest.raises(control_spec.SpecError) as raised:
+        control_spec.load_control(garage_heating(relay_trigger="high"))
+    assert "forecast" in str(raised.value)
+
+
+def test_the_garage_forecast_device_is_declared_and_disabled():
+    node = load(REPO / "sites" / "garage" / "garage.yaml")
+    forecast = node.find("forecast")
+    assert forecast.driver == "open_meteo"
+    assert forecast.enabled is False
+
+
+def test_the_example_heating_block_parses_once_enabled_with_its_devices():
+    """The example documents every option, so it has to be a block the
+    controller would accept."""
+    node = load(REPO / "sites" / "example" / "node.yaml")
+    for device in node.devices:
+        device.enabled = True
+    raw = node.control["loads"]["battery_heating"]
+    heater = control_spec.load_spec(
+        "battery_heating", dict(raw, enabled=True),
+        {device.name for device in node.devices})
+    assert heater["preheat"]["forecast_above_wm2"] == 150.0
+
+
+def test_no_node_file_carries_a_position_for_the_forecast():
+    """Building the driver refuses one, but that only happens on the machine."""
+    for path in NODE_FILES:
+        for device in load(path).devices:
+            assert not {"latitude", "longitude"} & set(device.params), path
+
+
 #: What the far cameras and the recorder were agreed to do, beside the near
 #: cameras' ladder above: the pin, and each tier's threshold and schedule
 #: type. The far cameras keep the near ones' windows at higher thresholds.
@@ -801,7 +899,6 @@ def test_the_camera_windows_stay_inside_the_tier_above_them_all_year():
     before it stops. An edit widening either one by a quarter of an hour
     would start clipping, and this says so before somebody wonders why.
     """
-    import datetime
     import zoneinfo
 
     from monitoring.control import sun

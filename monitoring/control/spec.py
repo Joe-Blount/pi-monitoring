@@ -23,7 +23,7 @@ from . import relay
 #: Load types a controller will drive. Anything else declared is refused at
 #: load time rather than skipped at run time, because a load the file says is
 #: enabled and nothing drives is indistinguishable from one that works.
-DRIVEN_TYPES = ("dc_branch", "cpu_fan", "vent_fan")
+DRIVEN_TYPES = ("dc_branch", "cpu_fan", "vent_fan", "battery_heating")
 
 #: Declared, specified, and deliberately not driven yet. An enabled load of
 #: one of these types is refused. The irrigation sequence waits on thresholds
@@ -61,6 +61,29 @@ VENT_FAN_KEYS = {"type", "enabled", "control_pin", "polarity", "on_stale_data",
 VENT_RUN_KEYS = {"inside_above_f", "outside_cooler_by_f"}
 VENT_STOP_KEYS = {"inside_below_f", "outside_cooler_by_less_than_f",
                   "outside_below_f"}
+
+#: Keys a battery heater may carry. Its blocks are the ones the node files have
+#: always specified, plus an optional preheat before sunrise.
+HEATER_KEYS = {"type", "enabled", "control_pin", "polarity", "on_stale_data",
+               "temperature", "heat_if_all", "stop_if_any", "heat_dwell",
+               "stop_dwell", "min_run", "min_off", "require_production",
+               "limits", "preheat", "readback"}
+HEATER_TEMPERATURE_KEYS = {"sources", "fallback_sources", "max_disagreement_f",
+                           "stale_after"}
+HEATER_START_KEYS = {"coldest_below_f"}
+HEATER_STOP_KEYS = {"coldest_above_f", "any_sensor_above_f"}
+HEATER_PRODUCTION_KEYS = {"enabled", "source", "above_volts", "stale_after"}
+HEATER_LIMIT_KEYS = {"max_run_per_day", "cooldown"}
+PREHEAT_KEYS = {"enabled", "lead", "soc", "soc_above_pct", "forecast"}
+PREHEAT_SOC_KEYS = {"sources", "stale_after"}
+PREHEAT_FORECAST_KEYS = {"source", "above_wm2", "stale_after"}
+
+#: Answers a heater may give for a temperature it cannot read. No default, since
+#: they suit different hardware and the file has to say which it has.
+HEATER_ON_STALE = ("fallback", "deny")
+
+#: Seconds in a day, for the limits measured against one.
+DAY_SECONDS = 86400.0
 
 #: Keys the control block itself may carry. Owned by the loop rather than by
 #: a load, and listed so a misspelled loop_interval is refused rather than
@@ -474,6 +497,170 @@ def _vent_fan(where, raw, devices):
     }
 
 
+def _block(where, raw, key, allowed):
+    """One required nested mapping, with its keys checked."""
+    if key not in raw:
+        _fail(where, "needs %s" % key)
+    if not isinstance(raw[key], dict):
+        _fail(where, "%s must be a mapping" % key)
+    _only("%s %s" % (where, key), raw[key], allowed)
+    return raw[key]
+
+
+def _required(where, block, *keys):
+    for key in keys:
+        if key not in block:
+            _fail(where, "needs %s" % key)
+
+
+def _sources(where, raw, devices):
+    """A non-empty list of sources, from a block's `sources` key."""
+    sources = raw.get("sources")
+    if not isinstance(sources, list) or not sources:
+        _fail(where, "needs at least one entry in sources")
+    return [_source("%s source %d" % (where, index), entry, devices)
+            for index, entry in enumerate(sources)]
+
+
+def _preheat(where, raw, devices):
+    """The preheat before sunrise, or None when there is none.
+
+    Switched off, it needs nothing else and names nothing, so it can be turned
+    off in the file without the forecast device having to exist.
+    """
+    if "preheat" not in raw:
+        return None
+    block = _block(where, raw, "preheat", PREHEAT_KEYS)
+    at = where + " preheat"
+    if not _enabled(at, block.get("enabled", True)):
+        return None
+    _required(at, block, "lead", "soc", "soc_above_pct", "forecast")
+    soc = _block(at, block, "soc", PREHEAT_SOC_KEYS)
+    forecast = _block(at, block, "forecast", PREHEAT_FORECAST_KEYS)
+    _required(at + " soc", soc, "sources", "stale_after")
+    _required(at + " forecast", forecast, "source", "above_wm2", "stale_after")
+
+    floor = _number(at, block["soc_above_pct"], "soc_above_pct")
+    if not 0 <= floor < 100:
+        _fail(at, "soc_above_pct must be a percentage below 100, found %r"
+                  % (block["soc_above_pct"],))
+    above = _number(at, forecast["above_wm2"], "above_wm2")
+    if above < 0:
+        _fail(at, "above_wm2 cannot be negative, found %g" % above)
+
+    lead = _duration(at, block["lead"], "lead", allow_zero=False)
+    aged = _duration(at, forecast["stale_after"], "forecast stale_after",
+                     allow_zero=False)
+    # The reading says nothing about which sunrise it describes. Kept under a
+    # day together, the oldest forecast believed at the start of the lead was
+    # still taken after the sunrise before this one, so this is the one it is
+    # about.
+    if lead + aged >= DAY_SECONDS:
+        _fail(at, "the forecast's stale_after plus the lead must stay under a "
+                  "day, or a forecast about an earlier sunrise could pass for "
+                  "this one")
+    return {
+        # A timedelta, because it is taken from a sunrise, as a solar window's
+        # offset is.
+        "lead": datetime.timedelta(seconds=lead),
+        "soc_sources": _sources(at + " soc", soc, devices),
+        "soc_stale_after": _duration(at, soc["stale_after"], "soc stale_after",
+                                     allow_zero=False),
+        "soc_above_pct": floor,
+        "forecast_source": _source(at + " forecast source", forecast["source"],
+                                   devices),
+        "forecast_above_wm2": above,
+        "forecast_stale_after": aged,
+    }
+
+
+def _battery_heater(where, raw, devices):
+    """A battery heater's sensors, bounds, gates, limits and preheat.
+
+    Three things are refused here because a heater quietly doing the other thing
+    is the failure they would hide: a production gate switched off, which would
+    run it all night; a fallback source, which nothing reads; and a readback,
+    because heat tape with its own thermostat draws nothing for much of the time
+    it is commanded, so a heater drawing nothing is not evidence of a fault.
+    """
+    if "on_stale_data" not in raw:
+        _fail(where, "needs on_stale_data: one of %s" % ", ".join(HEATER_ON_STALE))
+    if raw["on_stale_data"] not in HEATER_ON_STALE:
+        _fail(where, "on_stale_data must be one of %s, found %r"
+                     % (", ".join(HEATER_ON_STALE), raw["on_stale_data"]))
+    readback = raw.get("readback") or {}
+    if not isinstance(readback, dict) or readback.get("source", "none") != "none":
+        _fail(where, "readback is not acted on, so its source must be none")
+
+    temperature = _block(where, raw, "temperature", HEATER_TEMPERATURE_KEYS)
+    start = _block(where, raw, "heat_if_all", HEATER_START_KEYS)
+    stop = _block(where, raw, "stop_if_any", HEATER_STOP_KEYS)
+    production = _block(where, raw, "require_production",
+                        HEATER_PRODUCTION_KEYS)
+    limits = _block(where, raw, "limits", HEATER_LIMIT_KEYS)
+    _required(where, raw, "heat_dwell", "stop_dwell")
+    _required(where + " temperature", temperature, "sources",
+              "max_disagreement_f", "stale_after")
+    _required(where, start, "coldest_below_f")
+    _required(where, stop, "coldest_above_f", "any_sensor_above_f")
+    _required(where + " require_production", production, "source",
+              "above_volts", "stale_after")
+    _required(where + " limits", limits, "max_run_per_day", "cooldown")
+
+    if temperature.get("fallback_sources"):
+        _fail(where, "fallback_sources must be empty: nothing reads them, and "
+                     "with no temperature this heats on production alone")
+    if not _enabled(where + " require_production",
+                    production.get("enabled", True)):
+        _fail(where, "require_production cannot be switched off: with nothing "
+                     "to say the sun is up, the heater would run all night")
+
+    low = _number(where, start["coldest_below_f"], "coldest_below_f")
+    high = _number(where, stop["coldest_above_f"], "coldest_above_f")
+    hard = _number(where, stop["any_sensor_above_f"], "any_sensor_above_f")
+    if high <= low:
+        _fail(where, "coldest_above_f (%g) must be above coldest_below_f (%g), "
+                     "or the heater chatters at one temperature" % (high, low))
+    if hard <= high:
+        _fail(where, "any_sensor_above_f (%g) must be above coldest_above_f "
+                     "(%g), or the hard stop is the working stop" % (hard, high))
+    disagreement = _number(where, temperature["max_disagreement_f"],
+                           "max_disagreement_f")
+    if disagreement <= 0:
+        _fail(where, "max_disagreement_f must be positive, or two good sensors "
+                     "always count as disagreeing")
+
+    cap = _duration(where, limits["max_run_per_day"], "max_run_per_day",
+                    allow_zero=False)
+    if cap > DAY_SECONDS:
+        _fail(where, "max_run_per_day cannot be more than a day, or it never "
+                     "limits anything")
+    return {
+        "on_stale_data": raw["on_stale_data"],
+        "sources": _sources(where + " temperature", temperature, devices),
+        "stale_after": _duration(where, temperature["stale_after"],
+                                 "stale_after", allow_zero=False),
+        "max_disagreement_f": disagreement,
+        "coldest_below_f": low,
+        "coldest_above_f": high,
+        "any_sensor_above_f": hard,
+        "heat_dwell": _duration(where, raw["heat_dwell"], "heat_dwell"),
+        "stop_dwell": _duration(where, raw["stop_dwell"], "stop_dwell"),
+        "production": {
+            "source": _source(where + " require_production source",
+                              production["source"], devices),
+            "above_volts": _number(where, production["above_volts"],
+                                   "above_volts"),
+            "stale_after": _duration(where, production["stale_after"],
+                                     "production stale_after",
+                                     allow_zero=False),
+        },
+        "max_run_per_day": cap,
+        "cooldown": _duration(where, limits["cooldown"], "cooldown"),
+        "preheat": _preheat(where, raw, devices),
+    }
+
+
 def load_spec(name, raw, devices):
     """Parse one load. Returns the spec a decision can act on."""
     where = "load %s" % name
@@ -499,7 +686,8 @@ def load_spec(name, raw, devices):
                      % (kind, ", ".join(DRIVEN_TYPES + DEFERRED_TYPES)))
 
     _only(where, raw, {"cpu_fan": CPU_FAN_KEYS,
-                       "vent_fan": VENT_FAN_KEYS}.get(kind, LOAD_KEYS))
+                       "vent_fan": VENT_FAN_KEYS,
+                       "battery_heating": HEATER_KEYS}.get(kind, LOAD_KEYS))
     if not _enabled(where, raw.get("enabled", True)):
         return None
 
@@ -526,6 +714,9 @@ def load_spec(name, raw, devices):
         return out
     if kind == "vent_fan":
         out.update(_vent_fan(where, raw, devices))
+        return out
+    if kind == "battery_heating":
+        out.update(_battery_heater(where, raw, devices))
         return out
 
     if "shed_ladder" not in raw:

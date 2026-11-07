@@ -537,8 +537,11 @@ control:
       #
       # So refusing is the wrong default here. Refusing would mean a flaky
       # radio costs a whole winter of charging, which is worse than today.
-      #   fallback  try the fallback sources, then heat on production alone
+      #   fallback  heat on production alone
       #   deny      refuse. Correct only with no over-temperature cutout.
+      #
+      # Sensors further apart than max_disagreement_f count as no temperature.
+      # With no production reading either, the heater is off on both answers.
       on_stale_data: fallback
 
       temperature:
@@ -565,13 +568,11 @@ control:
           - {device: pack2, field: temp_1}
           - {device: pack2, field: temp_2}
 
-        # Used only when every source above is stale. Ambient is not pack
-        # temperature, but a cold room means cold packs, and it is a far better
-        # guess than heating regardless of the weather.
-        fallback_sources:
-          - {device: box, field: temp}
+        # Must be empty. It is here so the file says that nothing stands
+        # between a stale pack and heating on production alone.
+        fallback_sources: []
 
-        max_disagreement_f: 15      # warn, do not act, when they diverge
+        max_disagreement_f: 15      # further apart than this, trust neither
         stale_after: 10m
 
       # Wide deadband on purpose. The loop is slow: heat tape warms a case,
@@ -581,7 +582,9 @@ control:
         coldest_below_f: 41.0       # 5 C, so about 5 degrees above freezing
       stop_if_any:
         coldest_above_f: 50.0       # 10 C, comfortably charging
-        any_sensor_above_f: 104.0   # 40 C. A hard stop, not a target.
+        # A hard stop, not a target. Off at once on any fresh sensor, past
+        # every timer and past an operator's force on.
+        any_sensor_above_f: 104.0   # 40 C.
       heat_dwell: 5m
       stop_dwell: 5m
       min_off: 15m
@@ -610,13 +613,41 @@ control:
                                     # open-circuit rating. Measure and adjust.
         stale_after: 10m
 
+      # Optional. Heat ahead of sunrise with no production, on a morning worth
+      # it, so the first sun reaches the cells rather than being refused. Every
+      # gate has to pass: the clock trusted, inside the lead, every charge
+      # reading fresh with the lowest above soc_above_pct, the forecast fresh
+      # and above its threshold, and fresh agreeing temperatures. Absent, or
+      # enabled: false, means no preheat.
+      #
+      # The lead plus the forecast's stale_after must stay under a day, or a
+      # forecast about yesterday's sunrise could pass for this morning's.
+      preheat:
+        enabled: true
+        lead: 2h
+        soc:
+          sources:
+            - {device: pack1, field: state_of_charge_pct}
+            - {device: pack2, field: state_of_charge_pct}
+          stale_after: 10m
+        soc_above_pct: 40
+        forecast:
+          source: {device: forecast, field: shortwave_wm2}
+          above_wm2: 150
+          stale_after: 18h
+
+      # Both count every kind of heating. The cap is per local day, or per
+      # rolling 24 hours while the clock cannot be trusted. The cooldown is off
+      # time after a run ends. They live in the loop's state on tmpfs, so a
+      # reboot forgets them.
       limits:
         max_run_per_day: 6h
         cooldown: 15m
 
       readback:
-        # A heater that is commanded on and draws nothing has failed, and in
-        # winter that failure is silent until the charging never starts.
+        # Nothing reads this back, so the source must be none. Heat tape with a
+        # thermostat of its own draws nothing for much of the time it is
+        # commanded, so a missing draw would say nothing about a fault.
         source: none
         pin: null
 
