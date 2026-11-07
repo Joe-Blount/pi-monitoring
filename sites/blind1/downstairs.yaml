@@ -151,20 +151,15 @@ devices:
     driver: control
     mode: poll
     interval: 30s
-    enabled: false
     params: {path: /run/monitoring/control.json}
     tags: {location: control}
 
 
 control:
-  # Stays false until the bench rig passes, and it could not start before
-  # then anyway: the ladder below reads the pack's own BMS, that device is
-  # disabled here while the upstairs node polls it, and the control spec
-  # refuses a source nothing will write a reading for. So the coupling the
-  # device comments ask for by hand is enforced by code. Enabling control
-  # without enabling the pack fails at start with the reason, rather than
-  # running a controller that latches nothing and sheds nothing.
-  enabled: false
+  # The ladder below reads the pack's own BMS, and the control spec refuses a
+  # source nothing will write a reading for, so control cannot start on a node
+  # that does not poll the pack.
+  enabled: true
 
   loop_interval: 10s
 
