@@ -8,6 +8,8 @@ Keeping it that narrow is what makes the drivers testable on a laptop with no
 hardware, no network and no credentials.
 """
 
+import contextlib
+
 
 class DriverError(Exception):
     """A device that could not be read.
@@ -198,3 +200,22 @@ def run_abandonable(label, budget, work, grace=None):
     if "error" in box:
         raise box["error"]
     return box["result"]
+
+
+@contextlib.asynccontextmanager
+async def connected(client):
+    """Hold a Bluetooth connection for the length of a block.
+
+    A failure while disconnecting is ignored. By then the block has every
+    reply it waited for, and on some versions of the system bus library the
+    disconnect call loses its own reply and raises, which would throw away a
+    complete read. A failure inside the block still propagates.
+    """
+    await client.__aenter__()
+    try:
+        yield client
+    finally:
+        try:
+            await client.__aexit__(None, None, None)
+        except Exception:                         # noqa: BLE001
+            pass

@@ -66,7 +66,7 @@ device exists to keep.
 import sys
 
 from ..duration import seconds as _seconds
-from .base import Driver, DriverError, required, run_abandonable
+from .base import Driver, DriverError, connected, required, run_abandonable
 
 SERVICE_UUID = "0000ffe0-0000-1000-8000-00805f9b34fb"
 #: Written to and subscribed on. This device uses one characteristic for
@@ -519,7 +519,7 @@ class _BleakTransport:
             arrived.set()
 
         try:
-            async with self._client() as client:
+            async with connected(self._client()) as client:
                 await client.start_notify(IO_UUID, on_notify)
                 for command in commands:
                     await client.write_gatt_char(

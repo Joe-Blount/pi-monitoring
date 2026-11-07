@@ -45,7 +45,7 @@ import struct
 import sys
 
 from ..duration import seconds as _seconds
-from .base import Driver, DriverError, required, run_abandonable
+from .base import Driver, DriverError, connected, required, run_abandonable
 
 SERVICE_UUID = "0000ff00-0000-1000-8000-00805f9b34fb"
 WRITE_UUID = "0000ff02-0000-1000-8000-00805f9b34fb"
@@ -389,7 +389,7 @@ class _BleakTransport:
 
         unanswered = []
         try:
-            async with self._client() as client:
+            async with connected(self._client()) as client:
                 await client.start_notify(NOTIFY_UUID, on_notify)
                 for register in registers:
                     before = set(messages)

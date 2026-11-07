@@ -52,7 +52,7 @@ import struct
 import sys
 
 from ..duration import seconds as _seconds
-from .base import Driver, DriverError, required, run_abandonable
+from .base import Driver, DriverError, connected, required, run_abandonable
 
 SERVICE_UUID = "0000ffe0-0000-1000-8000-00805f9b34fb"
 NOTIFY_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb"
@@ -555,7 +555,7 @@ class _BleakTransport:
             arrived.set()
 
         try:
-            async with self._client() as client:
+            async with connected(self._client()) as client:
                 await client.start_notify(NOTIFY_UUID, on_notify)
                 for code, _ in wanted:
                     # What arrived before this command, so the reply to this
