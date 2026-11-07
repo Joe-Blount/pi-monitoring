@@ -427,7 +427,7 @@ control:
           source: load                # a standing idle draw while commanded
                                       # off means the panel switch was left on
           pin: null
-          expect_amps: {min: 0.8, max: 3.0}
+          expect_amps: {min: 0.3, max: 3.0}   # measured idle about 0.8 A
 
       pump:
         control_pin: 22               # physical 15
@@ -436,7 +436,11 @@ control:
         readback:
           source: load
           pin: null
-          expect_amps: {min: 90, max: 180}   # placeholder until characterized
+          # Measured at the shunt as the rise in battery discharge over the
+          # current just before the pump starts, with the inverter already
+          # on: about 44.7 A pumping water and 16.1 A running dry. Below the
+          # minimum means a dry pump or a lost prime.
+          expect_amps: {min: 30, max: 60}
 
       schedule: []                    # none yet; manual requests only at first
       request_file: /var/lib/monitoring/blind1-irrigation-request.json
