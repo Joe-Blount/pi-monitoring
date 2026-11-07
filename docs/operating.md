@@ -286,11 +286,12 @@ sudo /opt/monitoring/bin/wavlink-recover reset-attempts  # allow more attempts
 journalctl -u monitoring-wavlink-recover -n 50
 ```
 
-Before working on the Wavlink by hand, stop the timer, or a check can start a
-repair while you are in the middle of it. Start it again when you finish.
+Before working on the Wavlink by hand, stop both the timer and any check already
+running, or a repair can run while you are in the middle of it. Stopping a repair
+this way records it as one failed attempt. Start the timer again when you finish.
 
 ```
-sudo systemctl stop monitoring-wavlink-recover.timer
+sudo systemctl stop monitoring-wavlink-recover.timer monitoring-wavlink-recover.service
 sudo systemctl start monitoring-wavlink-recover.timer
 ```
 
