@@ -391,13 +391,20 @@ class _BleakTransport:
         try:
             async with connected(self._client()) as client:
                 await client.start_notify(NOTIFY_UUID, on_notify)
-                for register in registers:
+                async def ask(register):
                     before = set(messages)
                     await client.write_gatt_char(
                         WRITE_UUID, command(register), response=False)
                     await self._wait_for_quiet(arrived)
-                    if not set(messages) - before:
+                    return bool(set(messages) - before)
+
+                for register in registers:
+                    if not await ask(register):
                         unanswered.append(register)
+                # The first request after connecting is the one a pack most
+                # often lets go by, so an unanswered register is asked again.
+                unanswered = [register for register in unanswered
+                              if not await ask(register)]
                 await client.stop_notify(NOTIFY_UUID)
         except DriverError:
             raise
