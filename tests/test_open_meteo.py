@@ -102,11 +102,11 @@ def test_the_default_timeout_fits_the_slow_collector_beside_two_packs():
 
 def test_the_field_is_the_mean_radiation_over_the_hours_after_the_next_sunrise(
         world):
-    assert world.driver().read() == {"shortwave_wm2": 250.0}
+    assert world.driver().read() ["shortwave_wm2"] == 250.0
 
 
 def test_the_number_of_hours_comes_from_the_params(world):
-    assert world.driver(hours=2).read() == {"shortwave_wm2": 150.0}
+    assert world.driver(hours=2).read() ["shortwave_wm2"] == 150.0
 
 
 @pytest.mark.parametrize("hours", [0, -1, 2.5, True, "four", 25])
@@ -117,12 +117,12 @@ def test_a_number_of_hours_that_makes_no_sense_is_refused(world, hours):
 
 def test_after_the_first_sunrise_the_second_day_is_the_one_read(world):
     world.now = datetime.datetime(2026, 11, 7, 6, 59, tzinfo=fx.ZONE)
-    assert world.driver().read() == {"shortwave_wm2": 25.0}
+    assert world.driver().read() ["shortwave_wm2"] == 25.0
 
 
 def test_before_a_sunrise_on_the_same_day_that_sunrise_is_the_one_read(world):
     world.now = datetime.datetime(2026, 11, 7, 6, 57, tzinfo=fx.ZONE)
-    assert world.driver().read() == {"shortwave_wm2": 250.0}
+    assert world.driver().read() ["shortwave_wm2"] == 250.0
 
 
 def test_an_hour_counts_only_when_most_of_it_falls_after_sunrise(world):
@@ -143,8 +143,9 @@ def test_an_hour_counts_only_when_most_of_it_falls_after_sunrise(world):
 def test_only_the_one_field_is_published_and_nothing_from_the_answer_beside_it(
         world):
     out = world.driver().read()
-    assert list(out) == ["shortwave_wm2"]
+    assert sorted(out) == ["shortwave_wm2", "sunrise_epoch"]
     assert isinstance(out["shortwave_wm2"], float)
+    assert isinstance(out["sunrise_epoch"], float)
 
 
 @pytest.mark.parametrize("damage", [
@@ -278,7 +279,7 @@ def test_a_location_failure_does_not_use_up_the_hour(world):
         raise ValueError("no such file")
     with pytest.raises(DriverError):
         world.driver(locate=locate).read()
-    assert world.driver().read() == {"shortwave_wm2": 250.0}
+    assert world.driver().read() ["shortwave_wm2"] == 250.0
 
 
 def test_a_driver_with_no_location_supplied_fails_only_when_it_reads(world):
@@ -344,12 +345,12 @@ def test_a_failed_fetch_also_waits_the_hour_and_keeps_saying_why(tmp_path):
     with pytest.raises(DriverError) as second:
         world.driver().read()
     assert len(service.urls) == 1
-    assert "no route" in str(first.value)
-    assert "no route" in str(second.value)
+    assert "cannot reach" in str(first.value)
+    assert str(first.value) == str(second.value)
 
     service.reply = fx.body()
     world.mono += HOUR
-    assert world.driver().read() == {"shortwave_wm2": 250.0}
+    assert world.driver().read() ["shortwave_wm2"] == 250.0
 
 
 def test_nothing_is_fetched_when_the_attempt_cannot_be_recorded(tmp_path):
@@ -378,7 +379,7 @@ def test_an_attempt_is_on_record_before_the_service_is_called(world):
 def test_a_record_that_cannot_be_believed_means_fetching(world, contents):
     with open(world.state_file, "w") as handle:
         handle.write(contents)
-    assert world.driver().read() == {"shortwave_wm2": 250.0}
+    assert world.driver().read() ["shortwave_wm2"] == 250.0
     assert len(world.service.urls) == 1
 
 
@@ -467,3 +468,13 @@ def test_a_missing_location_file_publishes_a_failure_and_does_not_crash_collecti
     result = runner.read_device(node, node.devices[0], now_ns=1)
     assert not result.ok
     assert "location" in result.error
+
+
+def test_a_network_error_quoting_the_url_never_reaches_the_message(tmp_path):
+    secret = "latitude=12.3&longitude=-45.6"
+    world = World(tmp_path, Service(urllib.error.URLError(
+        "cannot open https://api.open-meteo.com/v1/forecast?" + secret)))
+    with pytest.raises(DriverError) as raised:
+        world.driver().read()
+    assert "12.3" not in str(raised.value)
+    assert "open-meteo.com" not in str(raised.value)

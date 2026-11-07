@@ -560,6 +560,15 @@ _RUN_RECORD_SECONDS = 26 * 3600.0
 
 _DAY_SECONDS = 86400.0
 
+#: The longest gap between passes that still counts as the same run. Past this
+#: the controller was not running, so the relay had dropped and nothing heated.
+_RUN_GAP_SECONDS = 300.0
+
+#: How far a forecast's sunrise may sit from the one being planned for. The two
+#: are computed differently, and they differ by minutes on the right morning and
+#: by a day on the wrong one.
+_FORECAST_SUNRISE_TOLERANCE = 3600.0
+
 
 def _heating_runs(state, mono_now):
     """Each stretch of running time as [start, end], up to this moment.
@@ -572,21 +581,26 @@ def _heating_runs(state, mono_now):
 
     The start of a stretch is the moment the timers recorded for the change, so
     a stretch is whatever was commanded, for whatever reason, including an
-    operator's force.
+    operator's force. A restart in the middle of one ends it where the last pass
+    saw it, and running time picks up again from this pass: stopping the
+    controller releases the relay, and that gap heated nothing.
     """
     runs = [list(run) for run in state.get("runs", [])
             if run[1] > mono_now - _RUN_RECORD_SECONDS]
     since = state.get("since")
     if state.get("commanded") is True and isinstance(since, (int, float)):
-        if runs and runs[-1][0] == since:
-            runs[-1][1] = mono_now
+        if state.get("run_open") and runs:
+            if mono_now - runs[-1][1] <= _RUN_GAP_SECONDS:
+                runs[-1][1] = mono_now
+            else:
+                runs.append([mono_now, mono_now])
         else:
             runs.append([since, mono_now])
     return runs
 
 
-def _heating_limit(spec, runs, now, mono_now, clock_trusted, running):
-    """What stops the heat from running this pass, in words, or None."""
+def _heating_cap(spec, runs, now, mono_now, clock_trusted):
+    """Words saying the day's running time is used up, or None."""
     if clock_trusted:
         midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
         began = mono_now - (now.timestamp() - midnight.timestamp())
@@ -598,6 +612,14 @@ def _heating_limit(spec, runs, now, mono_now, clock_trusted, running):
     if used >= spec["max_run_per_day"]:
         return "max_run_per_day of %.0f minutes is used up over %s" % (
             spec["max_run_per_day"] / 60.0, span)
+    return None
+
+
+def _heating_limit(spec, runs, now, mono_now, clock_trusted, running):
+    """What stops the heat from running this pass, in words, or None."""
+    cap = _heating_cap(spec, runs, now, mono_now, clock_trusted)
+    if cap:
+        return cap
     if not running and runs:
         waiting = spec["cooldown"] - (mono_now - runs[-1][1])
         if waiting > 0:
@@ -618,8 +640,9 @@ def _preheat_refusal(spec, readings, now, suns, clock_trusted):
         return "no preheat is set up"
     if not clock_trusted:
         return "no preheat without a trustworthy clock"
-    if not any(day["sunrise"] - preheat["lead"] <= now < day["sunrise"]
-               for day in suns):
+    planned = [day["sunrise"] for day in suns
+               if day["sunrise"] - preheat["lead"] <= now < day["sunrise"]]
+    if not planned:
         return "outside the preheat window"
     lowest = None
     for source in preheat["soc_sources"]:
@@ -635,6 +658,13 @@ def _preheat_refusal(spec, readings, now, suns, clock_trusted):
                    preheat["forecast_stale_after"])
     if wm2 is None:
         return "no preheat without a fresh forecast"
+    about = _reading(readings,
+                     {"device": preheat["forecast_source"]["device"],
+                      "field": "sunrise_epoch"},
+                     preheat["forecast_stale_after"])
+    if about is None or (abs(about - planned[0].timestamp())
+                         > _FORECAST_SUNRISE_TOLERANCE):
+        return "no preheat on a forecast about a different morning"
     if wm2 <= preheat["forecast_above_wm2"]:
         return "no preheat with a forecast of %.0f W/m2 not above %.0f" % (
             wm2, preheat["forecast_above_wm2"])
@@ -705,7 +735,10 @@ def heating_decision(name, spec, readings, now, mono_now, suns, clock_trusted,
     A hard stop, on any fresh sensor at the limit, which nothing else in here
     or above here gets past. `hard_stop` in the state says so, because the
     timers and an operator's force are decided around this function and a
-    reason code is a poor thing to key an exemption on.
+    reason code is a poor thing to key an exemption on. It holds until the
+    sensor that tripped it reads below the limit. A sensor that goes quiet while
+    hot has not said it cooled, and without the hold it would simply drop out
+    and let the fallback heat again. A reboot clears the hold.
 
     The coldest fresh sensor against two bounds, in the band between which the
     heater carries on with what was last commanded. What was commanded, not
@@ -722,27 +755,42 @@ def heating_decision(name, spec, readings, now, mono_now, suns, clock_trusted,
     of its own, so nothing here asks whether the heater is drawing anything.
 
     A cap on running time and a cooldown stop any of these from starting, and
-    the cap ends a run without waiting for a dwell. Both are measured from state
+    the cap ends a run at once, past the dwell and the minimum run. Both are measured from state
     that a reboot loses, which at worst costs one more day's allowance.
     """
     new_state = dict(state)
     new_state.pop("hard_stop", None)
+    new_state.pop("cap_stop", None)
     runs = _heating_runs(state, mono_now)
     new_state["runs"] = runs
+    new_state["run_open"] = state.get("commanded") is True
     fresh = [_reading(readings, source, spec["stale_after"])
              for source in spec["sources"]]
     temperatures = [value for value in fresh if value is not None]
     running = state.get("commanded") is True
 
-    if temperatures and max(temperatures) >= spec["any_sensor_above_f"]:
-        hottest = max(temperatures)
+    limit = spec["any_sensor_above_f"]
+    tripped = set(state.get("hot_sensors", []))
+    for source, value in zip(spec["sources"], fresh):
+        label = "%s.%s" % (source["device"], source["field"])
+        if value is not None:
+            if value >= limit:
+                tripped.add(label)
+            else:
+                tripped.discard(label)
+    new_state["hot_sensors"] = sorted(tripped)
+    if tripped:
         _forget_dwell(new_state)
         new_state["hard_stop"] = True
         new_state["informed"] = True
-        return (Decision(name, False, 0, THERMAL,
-                         "a sensor at %.1f is at or above the %.1f hard stop"
-                         % (hottest, spec["any_sensor_above_f"]), hottest),
-                new_state)
+        hottest = max(temperatures) if temperatures else None
+        if hottest is not None and hottest >= limit:
+            reason = "a sensor at %.1f is at or above the %.1f hard stop" % (
+                hottest, limit)
+        else:
+            reason = ("%s reached the %.1f hard stop and has not read below it "
+                      "since" % (", ".join(sorted(tripped)), limit))
+        return Decision(name, False, 0, THERMAL, reason, hottest), new_state
 
     production = spec["production"]
     volts = _reading(readings, production["source"], production["stale_after"])
@@ -757,6 +805,15 @@ def heating_decision(name, spec, readings, now, mono_now, suns, clock_trusted,
         wanted, reason = _heating_fallback(spec, temperatures, volts)
     if decided_on is not None:
         new_state["informed"] = True
+
+    if running:
+        cap = _heating_cap(spec, runs, now, mono_now, clock_trusted)
+        if cap:
+            _forget_dwell(new_state)
+            new_state["cap_stop"] = True
+            return (Decision(name, False, 0, HELD_BY_TIMER,
+                             "%s; %s" % (reason, cap), decided_on),
+                    new_state)
 
     if wanted is None:
         # Nothing to go on, so no dwell for a condition to hold throughout.
@@ -887,7 +944,7 @@ def _hold(decision, spec, mono_now, state, operator=False, urgent=False):
     The decision still says so, with the seconds remaining, rather than
     appearing to ignore the switch.
 
-    `urgent` is a heater's hard stop, which like the floor gets past both timers
+    `urgent` is a heater's hard stop or daily cap, which like the floor gets past both timers
     and is not a thing to keep a heater running for.
     """
     floor = decision.reason_code == FLOOR
@@ -990,8 +1047,9 @@ def decide(local_now, mono_now, clock_trusted, readings, switches,
             decision, load_state = heating_decision(
                 name, spec, readings, local_now, mono_now, suns, clock_trusted,
                 prior)
-            urgent = load_state.get("hard_stop", False)
-            if not urgent:
+            hard_stop = load_state.get("hard_stop", False)
+            urgent = hard_stop or load_state.get("cap_stop", False)
+            if not hard_stop:
                 # An override, and not the shedding switch, as for a fan.
                 decision, operator = _apply_override(
                     decision, name, switches, local_now, clock_trusted)

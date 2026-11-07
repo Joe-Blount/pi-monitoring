@@ -235,7 +235,10 @@ control:
         coldest_above_f: 50.0         # 10 C
         # Off at once on any fresh sensor, past every timer and past an
         # operator's force on. Nothing below gets to overrule it.
-        any_sensor_above_f: 104.0     # 40 C hard stop
+        # Far above where the heat stops, and low enough to catch a fault early.
+        # Nothing here needs the packs warmer, and packs warmed by a hot day
+        # cost nothing: the heat would be off anyway.
+        any_sensor_above_f: 70.0      # hard stop, held until it reads below
       heat_dwell: 5m
       stop_dwell: 5m
       min_off: 15m

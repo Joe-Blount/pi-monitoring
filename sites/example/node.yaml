@@ -584,7 +584,7 @@ control:
         coldest_above_f: 50.0       # 10 C, comfortably charging
         # A hard stop, not a target. Off at once on any fresh sensor, past
         # every timer and past an operator's force on.
-        any_sensor_above_f: 104.0   # 40 C.
+        any_sensor_above_f: 70.0    # held until that sensor reads below it.
       heat_dwell: 5m
       stop_dwell: 5m
       min_off: 15m

@@ -313,7 +313,9 @@ The heater is decided by these rules, in this order. The `reason` field says
 which one applied and, when it stayed off, which gate stopped it.
 
 1. **Hard stop.** Any fresh sensor at or above `any_sensor_above_f` turns it off
-   at once, past every timer. A `control override` to on does not get past this.
+   at once, past every timer. It holds until that sensor reads below the limit,
+   so a sensor that goes quiet while hot keeps the heat off until a reboot. A
+   `control override` to on does not get past this.
 2. **Ordinary heat.** The coldest fresh sensor at or below `coldest_below_f`, with
    panel voltage fresh and above `above_volts`. It stops at or above
    `coldest_above_f`, or when production is lost. Between the two bounds it does

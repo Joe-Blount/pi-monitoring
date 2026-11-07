@@ -1921,10 +1921,22 @@ def heat_world(temps=(35.0, 35.0, 35.0, 35.0), volts=100.0, soc=(60.0, 60.0),
     }
 
 
+def about_the_next_morning(world, when, suns):
+    """A forecast that says which morning it is about, unless a test says."""
+    fields = (world.get("forecast") or {}).get("fields") or {}
+    if "shortwave_wm2" in fields and "sunrise_epoch" not in fields:
+        ahead = [day["sunrise"] for day in suns if day["sunrise"] > when]
+        if ahead:
+            fields["sunrise_epoch"] = min(ahead).timestamp()
+    return world
+
+
 def heater(world=None, state=None, mono=0.0, when=NOON, trusted=True,
            switches=None, spec=None, suns=None):
+    world = about_the_next_morning(heat_world() if world is None else world,
+                                   when, SUNS if suns is None else suns)
     decisions, new_state = decide.decide(
-        when, mono, trusted, heat_world() if world is None else world,
+        when, mono, trusted, world,
         switches or SWITCHES_CLEAR, {"heat": spec or HEATER},
         {"heat": state} if state else {},
         SUNS if suns is None else suns)
@@ -2000,6 +2012,84 @@ def test_a_force_on_takes_effect_again_once_the_hard_stop_clears():
                          switches=forced("on"))
     assert decision.connected
     assert decision.reason_code == decide.OVERRIDE
+
+
+def test_the_hard_stop_holds_after_the_hot_sensor_goes_quiet():
+    _, state = heater(heat_world(temps=(35.0, 35.0, 110.0, 35.0)))
+    assert state["hot_sensors"] == ["pack2.temp_1"]
+    quiet = heat_world(temps=(35.0, 35.0, None, 35.0))
+    decision, state = heater(quiet, state=state, mono=100000.0)
+    assert not decision.connected
+    assert "pack2.temp_1" in decision.reason
+    assert state["hard_stop"]
+
+
+def test_the_hard_stop_holds_with_every_sensor_gone_and_the_sun_up():
+    _, state = heater(heat_world(temps=(35.0, 35.0, 110.0, 35.0)))
+    decision, _ = heater(heat_world(temps=UNREADABLE), state=state,
+                         mono=100000.0)
+    assert not decision.connected
+
+
+def test_the_hard_stop_lets_go_once_the_hot_sensor_reads_below_the_limit():
+    _, state = heater(heat_world(temps=(35.0, 35.0, 110.0, 35.0)))
+    _, state = heater(heat_world(), state=state, mono=100.0)
+    assert state["hot_sensors"] == []
+    assert not state.get("hard_stop")
+
+
+def test_another_sensor_reading_cool_does_not_release_the_hard_stop():
+    _, state = heater(heat_world(temps=(35.0, 35.0, 110.0, 35.0)))
+    decision, state = heater(heat_world(temps=(35.0, 35.0, None, 35.0)),
+                             state=state, mono=100.0)
+    assert state["hot_sensors"] == ["pack2.temp_1"]
+
+
+def test_an_operator_cannot_force_past_a_held_hard_stop():
+    _, state = heater(heat_world(temps=(35.0, 35.0, 110.0, 35.0)))
+    decision, _ = heater(heat_world(temps=(35.0, 35.0, None, 35.0)),
+                         state=state, mono=100.0, switches=forced("on"))
+    assert not decision.connected
+
+
+def test_the_daily_cap_ends_a_run_past_the_stop_dwell_and_minimum_run():
+    spec = dict(HEATER, min_run=7200.0, max_run_per_day=3600.0, heat_dwell=0.0)
+    decision, state = heater(spec=spec, mono=0.0)
+    assert decision.connected
+    for mono in range(60, 3600, 60):
+        decision, state = heater(spec=spec, state=state, mono=float(mono))
+        assert decision.connected
+    decision, state = heater(heat_world(volts=DARK), spec=spec, state=state,
+                             mono=3600.0)
+    assert not decision.connected
+    assert decision.reason_code == decide.HELD_BY_TIMER
+
+
+def test_time_the_controller_was_down_does_not_count_against_the_cap():
+    spec = dict(HEATER, max_run_per_day=3600.0, heat_dwell=0.0)
+    decision, state = heater(spec=spec, mono=0.0)
+    decision, state = heater(spec=spec, state=state, mono=60.0)
+    decision, state = heater(spec=spec, state=state, mono=3000.0)
+    assert decision.connected
+    assert state["runs"] == [[0.0, 60.0], [3000.0, 3000.0]]
+
+
+def test_a_forecast_about_a_different_morning_stops_preheat():
+    world = heat_world(volts=DARK)
+    world["forecast"]["fields"]["sunrise_epoch"] = (
+        SUNS[1]["sunrise"].timestamp() - 86400.0)
+    decision, state = heater(world, when=SUNS[1]["sunrise"]
+                             - datetime.timedelta(minutes=30), mono=0.0)
+    assert not decision.connected
+    assert "different morning" in decision.reason
+
+
+def test_a_forecast_that_does_not_say_which_morning_stops_preheat():
+    world = heat_world(volts=DARK)
+    world["forecast"]["fields"]["sunrise_epoch"] = None
+    decision, _ = heater(world, when=SUNS[1]["sunrise"]
+                         - datetime.timedelta(minutes=30), mono=0.0)
+    assert not decision.connected
 
 
 def test_a_stale_sensor_cannot_trip_the_hard_stop():

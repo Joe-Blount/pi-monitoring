@@ -12,7 +12,7 @@ import zoneinfo
 import pytest
 import yaml
 
-from monitoring.control import clock, files, loop, relay
+from monitoring.control import clock, files, loop, relay, sun
 from monitoring.control.spec import SpecError
 
 ZONE = zoneinfo.ZoneInfo("America/Chicago")
@@ -737,7 +737,10 @@ def garage_heating_loop(tmp_path, world):
                "inverter": {"fields": {"pv_volts": world["volts"]},
                             "age_seconds": 1.0}}
         if world.get("wm2") is not None:
-            out["forecast"] = {"fields": {"shortwave_wm2": world["wm2"]},
+            rise = sun.events(world["now"].date(), LOCATION["latitude"],
+                              LOCATION["longitude"], ZONE)[0]
+            out["forecast"] = {"fields": {"shortwave_wm2": world["wm2"],
+                                          "sunrise_epoch": rise.timestamp()},
                                "age_seconds": 1.0}
         return out
 
@@ -825,11 +828,32 @@ def test_the_heater_daily_count_survives_a_restart_within_a_boot(tmp_path):
     machine.once()
     world["mono"] = 900.0
     machine.once()
-    world["mono"] = 900.0 + 5.9 * 3600
-    machine.once()
-    world["mono"] += 7 * 60
+    while world["mono"] < 900.0 + 5.9 * 3600:
+        world["mono"] += 120.0
+        machine.once()
 
     restarted, pin, published = garage_heating_loop(tmp_path, world)
-    restarted.once()
-    assert pin.levels == [False]
+    while world["mono"] < 900.0 + 6.1 * 3600:
+        world["mono"] += 120.0
+        restarted.once()
+    assert pin.levels[0] is True
+    assert pin.levels[-1] is False
     assert "max_run_per_day" in published["loads"]["battery_heating"]["reason"]
+
+
+def test_a_controller_down_for_hours_does_not_use_up_the_heater_allowance(
+        tmp_path):
+    world = {"temp": 35.0, "volts": 100.0, "soc": 60.0, "mono": 0.0,
+             "now": datetime.datetime(2026, 12, 21, 9, tzinfo=ZONE)}
+    machine, _, _ = garage_heating_loop(tmp_path, world)
+    machine.once()
+    world["mono"] = 900.0
+    machine.once()
+    world["mono"] = 960.0
+    machine.once()
+
+    world["mono"] += 7 * 3600
+    world["now"] = datetime.datetime(2026, 12, 21, 16, tzinfo=ZONE)
+    restarted, pin, _ = garage_heating_loop(tmp_path, world)
+    restarted.once()
+    assert pin.levels == [True]

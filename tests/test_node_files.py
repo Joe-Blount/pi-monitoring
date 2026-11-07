@@ -797,7 +797,7 @@ def test_the_garage_heating_block_parses_once_enabled_with_its_devices():
         ("pack1", "temp_1"), ("pack1", "temp_2"),
         ("pack2", "temp_1"), ("pack2", "temp_2")]
     assert (heater["coldest_below_f"], heater["coldest_above_f"],
-            heater["any_sensor_above_f"]) == (41.0, 50.0, 104.0)
+            heater["any_sensor_above_f"]) == (41.0, 50.0, 70.0)
     assert heater["production"]["source"] == {"device": "inverter",
                                               "field": "pv_volts"}
     assert heater["production"]["above_volts"] == 80.0

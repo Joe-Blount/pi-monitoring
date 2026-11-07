@@ -85,6 +85,10 @@ MAX_REPLY_BYTES = 256 * 1024
 MAX_WM2 = 1500.0
 
 FIELD = "shortwave_wm2"
+#: Which morning the number is about. A forecast fetched with a clock a day
+#: behind describes the wrong morning and looks fresh for hours, so a reader
+#: compares this with the sunrise it is planning for.
+SUNRISE_FIELD = "sunrise_epoch"
 
 
 def https_get(url, timeout):
@@ -105,6 +109,21 @@ def _moment(text):
         return None
 
 
+def sunrise_after(document, after):
+    """The first sunrise past `after`, naive local time like the answer."""
+    try:
+        sunrises = document["daily"]["sunrise"]
+    except (KeyError, TypeError):
+        raise DriverError("the forecast answer is missing radiation or sunrise")
+    if not isinstance(sunrises, list):
+        raise DriverError("the forecast answer is missing radiation or sunrise")
+    ahead = [rise for rise in map(_moment, sunrises)
+             if rise is not None and rise > after]
+    if not ahead:
+        raise DriverError("the forecast answer has no sunrise still to come")
+    return min(ahead)
+
+
 def mean_after_sunrise(document, after, hours):
     """The mean radiation over `hours` hours after the first sunrise past
     `after`, which is naive local time like everything in the answer.
@@ -114,20 +133,14 @@ def mean_after_sunrise(document, after, hours):
     """
     if not isinstance(document, dict) or document.get("error"):
         raise DriverError("the forecast service answered with no forecast")
+    sunrise = sunrise_after(document, after)
     try:
-        sunrises = document["daily"]["sunrise"]
         stamps = document["hourly"]["time"]
         values = document["hourly"]["shortwave_radiation"]
     except (KeyError, TypeError):
         raise DriverError("the forecast answer is missing radiation or sunrise")
-    if not all(isinstance(part, list) for part in (sunrises, stamps, values)):
+    if not all(isinstance(part, list) for part in (stamps, values)):
         raise DriverError("the forecast answer is missing radiation or sunrise")
-
-    ahead = [rise for rise in map(_moment, sunrises)
-             if rise is not None and rise > after]
-    if not ahead:
-        raise DriverError("the forecast answer has no sunrise still to come")
-    sunrise = min(ahead)
 
     half_hour = datetime.timedelta(minutes=30)
     morning = [value for stamp, value in zip(map(_moment, stamps), values)
@@ -152,8 +165,7 @@ def _failure(exc):
         return "the forecast service answered HTTP %d" % exc.code
     if isinstance(exc, urllib.error.URLError):
         return "cannot reach the forecast service: %s" % (
-            exc.reason if isinstance(exc.reason, str)
-            else type(exc.reason).__name__)
+            type(exc.reason).__name__,)
     return "cannot reach the forecast service: %s" % type(exc).__name__
 
 
@@ -243,7 +255,9 @@ class OpenMeteoDriver(Driver):
             raise DriverError("the forecast service answered with something "
                               "that is not JSON")
         after = self._now(zone).replace(tzinfo=None)
-        return mean_after_sunrise(document, after, self.hours)
+        value = mean_after_sunrise(document, after, self.hours)
+        sunrise = sunrise_after(document, after).replace(tzinfo=zone)
+        return {FIELD: value, SUNRISE_FIELD: sunrise.timestamp()}
 
     # -- the record ---------------------------------------------------------
 
@@ -298,8 +312,12 @@ class OpenMeteoDriver(Driver):
             if recorded.get("error"):
                 raise DriverError(recorded["error"])
             value = recorded.get("value")
-            if isinstance(value, (int, float)) and not isinstance(value, bool):
-                return Unchanged({FIELD: float(value)})
+            sunrise = recorded.get("sunrise")
+            if all(isinstance(number, (int, float))
+                   and not isinstance(number, bool)
+                   for number in (value, sunrise)):
+                return Unchanged({FIELD: float(value),
+                                  SUNRISE_FIELD: float(sunrise)})
             raise DriverError("the last fetch of the forecast did not finish")
 
         # Before the record, so a location file still being written does not
@@ -308,16 +326,16 @@ class OpenMeteoDriver(Driver):
         at = self._monotonic()
         self._record(at, error="the last fetch of the forecast did not finish")
         try:
-            value = self._ask(url)
+            fields = self._ask(url)
         except DriverError as exc:
             self._record(at, error=str(exc))
             raise
-        self._record(at, value=value)
-        return {FIELD: value}
+        self._record(at, value=fields[FIELD], sunrise=fields[SUNRISE_FIELD])
+        return fields
 
     def read_once(self):
         """One fetch outside the record, as a read would publish it."""
-        return {FIELD: self._ask(self.url())}
+        return self._ask(self.url())
 
     def check(self):
         """Call the service once, outside the record. A person is watching, and
