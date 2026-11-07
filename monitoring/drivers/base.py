@@ -39,6 +39,16 @@ class Point:
         self.tags = dict(tags or {})
 
 
+class Unchanged(dict):
+    """A reading repeated from an earlier read rather than taken by this one.
+
+    The database gets it like any other, because every declared device reports
+    every interval. Load control does not: the readings cache stamps what it is
+    handed with the moment of arrival, and an old value with a current stamp is
+    what a staleness limit exists to catch and then cannot.
+    """
+
+
 class Driver:
     """Base class. Subclasses implement read(), stream(), or both."""
 
@@ -62,6 +72,12 @@ class Driver:
     #: matched only names beginning "ble_" and therefore skipped bleak for a
     #: Bluetooth driver named after its protocol.
     needs_bluetooth = False
+
+    #: Whether this driver needs the machine's position. A driver reads no
+    #: files but its own device's, so the runner hands it a `locate` parameter
+    #: that returns what the location file holds, to be called when it is
+    #: needed. Building a driver must still work on a machine with no such file.
+    needs_location = False
 
     #: Modes this driver can actually work in. A rain gauge in poll mode
     #: validates, lists, checks and publishes a total that never changes,

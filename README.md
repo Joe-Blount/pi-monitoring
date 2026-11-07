@@ -229,6 +229,7 @@ imports a Bluetooth stack.
 | `jbd` | Chins and other JBD packs | Bluetooth | Identified as JBD from its characteristic UUIDs before anything was sent. Big-endian, and one reply arrives across several notifications, so replies are reassembled by their length byte. |
 | `qinglan` | QinLan coulomb-counting shunts | Bluetooth | No published protocol and nothing findable online. Reverse engineered for interoperability from the vendor's own Android application, then confirmed against the hardware. Nothing is copied from that application: this is an independent implementation of a wire format. Every request carries a bus address, and without it the device ignores you in silence and looks dead. |
 | `eg4_modbus` | EG4 all-in-one inverters | serial | Modbus RTU at 9600, not the PI30 ASCII at 2400 that the model is usually said to speak. The register map was built by changing one load at a time and watching, including disconnecting the array, which is the only way to tell solar power apart from load power while solar is carrying the load. |
+| `open_meteo` | the morning's forecast radiation | internet | The public Open-Meteo forecast, asked for shortwave radiation rather than cloud cover, because a real answer showed 100 percent cloud with 553 W/m2. Called at most once an hour, with the position from the machine's location file rounded to a tenth of a degree. A failure publishes `ok=0` like a dead sensor, and the last good number ages out of the cache meanwhile. |
 | `control` | the load controller itself | none | Not a device. The control loop is its own service and writes a small document; this reads it so what it decided reaches the database through the same path as everything else. A loop that is not running fails loudly here, because every load is then sitting at its fail-safe and nothing is managing the battery. |
 
 Every driver is read-only. Several of these battery modules accept
@@ -261,12 +262,17 @@ block including the charge setpoints is unmapped. Each driver's docstring
 separates what was confirmed against an independent reading from what is
 inferred, which is worth reading before trusting a field.
 
-Control: written and tested for two load types. One is a DC branch shed on
-the battery's state of charge with a floor beneath it. The other is a fan
-aimed at the Pi, run on the chip temperature with a band between on and off.
-The controller is installed at both sites, disabled. The other load types are
+Control: written and tested for four load types. One is a DC branch shed on
+the battery's state of charge with a floor beneath it. Another is a fan aimed
+at the Pi, run on the chip temperature with a band between on and off. The
+third is a vent fan, run when the inside is warm and the outside air is cooler.
+The fourth is a battery heater, run on the coldest pack sensor when the panels
+are producing or a good morning is coming, with a hard stop, a daily cap and a
+fallback to production alone when no temperature can be trusted. Its relay is
+not wired yet, so it is disabled in the node file.
+The controller is installed at both sites, disabled. The pump sequence is
 specified in the node files and refused by the controller until a decision
-for them is written. The pump sequence is
+for it is written. It is
 commissioned in place rather than on a bench, with its run-time cap and its
 guard in force from the first live run, so that a relay which sticks on is
 bounded rather than unbounded.

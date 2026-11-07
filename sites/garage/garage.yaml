@@ -121,6 +121,27 @@ devices:
       baud: 9600
       unit: 1
 
+  # The morning's forecast, for the heater's preheat below. It reaches the
+  # controller through the readings cache like any other device, so the
+  # controller itself never touches the network, and it asks the service at most
+  # once an hour however often the collector runs it.
+  #
+  # The position comes from /etc/monitoring/location.yaml and is rounded before
+  # it leaves the machine. Never write one here: this file is public.
+  #
+  # Disabled until the heater goes into service, because the load's preheat names
+  # it and nothing else on this node wants it. Enabled by itself it is harmless.
+  # Read with the packs on the slow schedule: its ten seconds and five of grace
+  # bring that schedule to 105 of the collector's 120 seconds.
+  - name: forecast
+    driver: open_meteo
+    mode: poll
+    enabled: false
+    tags: {location: forecast}
+    params:
+      hours: 4
+      timeout: 10s
+
   # The load controller, read as though it were a device.
   #
   # The controller is a separate service, not a collector. What it decided
@@ -156,6 +177,15 @@ devices:
 # Leave control disabled until the relay is wired and the probe reads. Turning
 # it on with no heater attached does nothing useful and makes the dashboard
 # claim a load exists.
+#
+# To put it in service: set relay_trigger to what the relay board turns out to
+# need, which the controller requires as soon as a load is enabled, and has no
+# safe default; set enabled: true here, on the load, and on the control and
+# forecast devices. The controller refuses to start if any of those is missed.
+#
+# The tape probably has a thermostat of its own, stopping it near 40 to 50 F,
+# with the snap-disc in series. So heat commanded with no draw behind it is
+# normal, not a fault, and nothing here reads the draw back.
 control:
   enabled: false
   loop_interval: 30s
@@ -163,7 +193,7 @@ control:
 
     battery_heating:
       type: battery_heating
-      enabled: false
+      enabled: false                  # the relay is not wired
       control_pin: 24
       polarity: energize_to_connect   # a dead Pi must not leave a heater on
 
@@ -171,15 +201,18 @@ control:
       # the existing dumb heater, which has run for seasons, and the snap-disc
       # cutout in series bounds it. Refusing would let a flaky radio cost a
       # whole winter of charging.
+      #
+      # That covers sensors that cannot be believed as well as ones that cannot
+      # be read: max_disagreement_f below sends those here too. With the panels
+      # unread as well there is no case for heat, so it is off. The hard stop
+      # below still applies to any sensor that is reading.
       on_stale_data: fallback
 
       temperature:
         # The packs' own sensors, about two per pack. They sit against the
-        # cells rather than on a case, and they need no wiring.
-        #
-        # The exact field names wait on finding the temperature offsets in the
-        # ABC-BMS reply, which is a --raw job on site. Until then this load
-        # stays disabled.
+        # cells rather than on a case, and they need no wiring. The coldest
+        # one that is fresh governs, since the coldest cell is what refuses
+        # charge.
         sources:
           - {device: pack1, field: temp_1}
           - {device: pack1, field: temp_2}
@@ -200,14 +233,18 @@ control:
         coldest_below_f: 41.0         # 5 C
       stop_if_any:
         coldest_above_f: 50.0         # 10 C
-        any_sensor_above_f: 104.0     # 40 C hard stop
+        # Off at once on any fresh sensor, past every timer and past an
+        # operator's force on. Nothing below gets to overrule it.
+        # Far above where the heat stops, and low enough to catch a fault early.
+        # Nothing here needs the packs warmer, and packs warmed by a hot day
+        # cost nothing: the heat would be off anyway.
+        any_sensor_above_f: 70.0      # hard stop, held until it reads below
       heat_dwell: 5m
       stop_dwell: 5m
       min_off: 15m
 
-      # The EG4 is the only source of production here, so this waits on the
-      # serial adapter. Until then the heating stays disabled rather than
-      # running on a guess about the weather.
+      # The EG4 is the only source of production here. With good temperatures
+      # and no fresh reading from it, there is no ordinary heat.
       require_production:
         enabled: true
         # Panel voltage, not watts. A cold pack makes the BMS refuse charge,
@@ -218,6 +255,45 @@ control:
         above_volts: 80
         stale_after: 10m
 
+      # Heat before the sun comes up, so the first of it can reach the cells
+      # rather than be refused. Warming these packs 9 F takes about 1.5 to 2
+      # hours and costs 1 to 2 percent of the bank, which a good morning repays
+      # at once. Holding them warm all night costs more and is not wanted, so
+      # this stays inside the lead and needs every gate:
+      #
+      #   the clock trusted, or the sun times mean nothing
+      #   every charge reading fresh and the lowest above soc_above_pct
+      #   the forecast fresh and above its threshold; none means no preheat
+      #   the temperatures fresh and agreeing; it never runs on the fallback
+      #
+      # After sunrise the ordinary rule takes over. A heater still on then stops
+      # after its dwell unless the panels are up.
+      #
+      # All of these are starting values, to tune against a real winter. The
+      # lead plus the forecast's stale_after has to stay under a day, or a
+      # forecast about yesterday's sunrise could pass for this morning's.
+      preheat:
+        enabled: true
+        lead: 2h
+        soc:
+          sources:
+            - {device: pack1, field: state_of_charge_pct}
+            - {device: pack2, field: state_of_charge_pct}
+          stale_after: 10m
+        soc_above_pct: 40
+        forecast:
+          source: {device: forecast, field: shortwave_wm2}
+          above_wm2: 150              # mean over the hours after sunrise
+          stale_after: 18h
+
+      # Both count every kind of heating, preheat and fallback included. The
+      # cap is per local day, or per rolling 24 hours while the clock cannot be
+      # trusted, and an operator's force on gets past it though its time counts.
+      # The cooldown is off time after a run ends, whatever ended it.
+      #
+      # The count lives in the loop's state on tmpfs, so a reboot starts it again
+      # from zero. That is acceptable: reboots are rare, the worst case is one
+      # more day's allowance, and the snap-disc does not care.
       limits:
         max_run_per_day: 6h
         cooldown: 15m

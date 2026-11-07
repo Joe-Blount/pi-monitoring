@@ -1695,3 +1695,1034 @@ def test_a_fan_pin_driven_before_its_first_recorded_reading_is_timed():
     decision, _ = fan(170.0, spec=timed, state=state, mono=20.0)
     assert not decision.connected
     assert decision.reason_code == decide.HELD_BY_TIMER
+
+
+# -- the vent fan ------------------------------------------------------------
+
+VENT = {"type": "vent_fan", "min_run": 0.0, "min_off": 0.0,
+        "inside": {"device": "box", "field": "temp"},
+        "outside": {"device": "outdoor_temp", "field": "temp"},
+        "stale_after": 600.0,
+        "inside_above_f": 80.0, "inside_below_f": 77.0,
+        "outside_cooler_by_f": 10.0, "outside_cooler_by_less_than_f": 6.0,
+        "outside_below_f": None, "run_dwell": 120.0, "stop_dwell": 300.0}
+
+
+def vent(inside=None, outside=None, state=None, mono=0.0, spec=None,
+         switches=None, age=1.0):
+    readings = {
+        "box": {"fields": {} if inside is None else {"temp": inside},
+                "age_seconds": age},
+        "outdoor_temp": {"fields": {} if outside is None else {"temp": outside},
+                         "age_seconds": age},
+    }
+    decisions, new_state = decide.decide(
+        at(12), mono, True, readings,
+        switches or {"shedding_enabled": True, "loads": {}},
+        {"vent_fan": spec or VENT}, state or {}, SUNS)
+    return decisions["vent_fan"], new_state
+
+
+def vent_running():
+    """A vent fan past its dwell and running."""
+    _, state = vent(85.0, 60.0, mono=0.0)
+    decision, state = vent(85.0, 60.0, state=state, mono=120.0)
+    assert decision.connected
+    return state
+
+
+def test_a_warm_blind_with_cooler_air_outside_waits_out_the_dwell_then_runs():
+    decision, state = vent(85.0, 70.0, mono=0.0)
+    assert not decision.connected
+    assert decision.reason_code == decide.THERMAL
+    decision, state = vent(85.0, 70.0, state=state, mono=119.0)
+    assert not decision.connected
+    decision, _ = vent(85.0, 70.0, state=state, mono=120.0)
+    assert decision.connected
+    assert decision.decided_on == 85.0
+
+
+def test_outside_air_that_is_not_cooler_never_runs_the_fan():
+    _, state = vent(85.0, 84.0, mono=0.0)
+    decision, _ = vent(85.0, 84.0, state=state, mono=10000.0)
+    assert not decision.connected
+
+
+def test_a_cool_blind_never_runs_the_fan():
+    _, state = vent(75.0, 40.0, mono=0.0)
+    decision, _ = vent(75.0, 40.0, state=state, mono=10000.0)
+    assert not decision.connected
+
+
+def test_a_condition_that_lapses_restarts_the_run_dwell():
+    _, state = vent(85.0, 70.0, mono=0.0)
+    _, state = vent(78.0, 70.0, state=state, mono=60.0)
+    _, state = vent(85.0, 70.0, state=state, mono=120.0)
+    decision, _ = vent(85.0, 70.0, state=state, mono=180.0)
+    assert not decision.connected
+    decision, _ = vent(85.0, 70.0, state=state, mono=240.0)
+    assert decision.connected
+
+
+@pytest.mark.parametrize("inside,outside", [
+    (77.0, 60.0),    # the blind has cooled
+    (85.0, 79.0),    # the outside air no longer helps
+])
+def test_a_running_fan_stops_after_its_dwell_when_either_condition_fails(
+        inside, outside):
+    state = vent_running()
+    decision, state = vent(inside, outside, state=state, mono=1000.0)
+    assert decision.connected
+    decision, state = vent(inside, outside, state=state, mono=1299.0)
+    assert decision.connected
+    decision, _ = vent(inside, outside, state=state, mono=1300.0)
+    assert not decision.connected
+
+
+def test_between_its_conditions_a_running_fan_keeps_running():
+    state = vent_running()
+    decision, _ = vent(78.0, 70.0, state=state, mono=100000.0)
+    assert decision.connected
+
+
+def test_between_its_conditions_a_stopped_fan_stays_stopped():
+    _, state = vent(78.0, 70.0, mono=0.0)
+    decision, _ = vent(78.0, 70.0, state=state, mono=100000.0)
+    assert not decision.connected
+
+
+def test_a_set_outside_floor_stops_the_fan():
+    spec = dict(VENT, outside_below_f=50.0)
+    _, state = vent(85.0, 60.0, spec=spec, mono=0.0)
+    _, state = vent(85.0, 60.0, state=state, spec=spec, mono=120.0)
+    _, state = vent(85.0, 50.0, state=state, spec=spec, mono=200.0)
+    decision, _ = vent(85.0, 50.0, state=state, spec=spec, mono=500.0)
+    assert not decision.connected
+
+
+def test_with_no_floor_cold_air_outside_does_not_stop_the_fan():
+    state = vent_running()
+    decision, _ = vent(85.0, 10.0, state=state, mono=100000.0)
+    assert decision.connected
+
+
+@pytest.mark.parametrize("inside,outside", [(None, 60.0), (85.0, None),
+                                            (None, None)])
+def test_a_missing_temperature_stops_a_running_fan(inside, outside):
+    state = vent_running()
+    decision, _ = vent(inside, outside, state=state, mono=1000.0)
+    assert not decision.connected
+    assert decision.reason_code == decide.NO_READING
+    assert decision.decided_on is None
+
+
+def test_a_stale_temperature_stops_a_running_fan():
+    state = vent_running()
+    decision, _ = vent(85.0, 60.0, state=state, mono=1000.0, age=601.0)
+    assert not decision.connected
+
+
+def test_a_fan_with_no_readings_yet_starts_no_timer():
+    _, state = vent(mono=0.0)
+    assert "ran_since" not in state and "off_since" not in state
+    assert not state.get("applied")
+
+
+def test_the_minimum_run_holds_a_fan_on_when_its_dwell_has_passed():
+    spec = dict(VENT, min_run=600.0, run_dwell=0.0, stop_dwell=0.0)
+    _, state = vent(85.0, 60.0, spec=spec, mono=0.0)
+    decision, state = vent(70.0, 60.0, state=state, spec=spec, mono=100.0)
+    assert decision.connected
+    decision, _ = vent(70.0, 60.0, state=state, spec=spec, mono=601.0)
+    assert not decision.connected
+
+
+def test_an_override_runs_a_vent_fan_on_a_cool_day():
+    decision, _ = vent(70.0, 60.0, switches={
+        "shedding_enabled": True,
+        "loads": {"vent_fan": {"force": "on", "expires_epoch": LATER}}})
+    assert decision.connected
+
+
+def test_turning_shedding_off_does_not_run_a_vent_fan():
+    decision, _ = vent(70.0, 60.0,
+                       switches={"shedding_enabled": False, "loads": {}})
+    assert not decision.connected
+
+
+def test_a_wish_to_run_held_by_the_minimum_off_lapses_with_its_condition():
+    spec = dict(VENT, min_off=300.0)
+    _, state = vent(85.0, 60.0, spec=spec, mono=0.0)
+    decision, state = vent(85.0, 60.0, state=state, spec=spec, mono=120.0)
+    assert not decision.connected
+    decision, _ = vent(70.0, 60.0, state=state, spec=spec, mono=400.0)
+    assert not decision.connected
+
+
+# -- battery heating ---------------------------------------------------------
+
+#: Dark, in June terms: sunrise is 06:10, so 05:00 is inside a two hour lead.
+DAWN = datetime.datetime(2026, 6, 21, 5, 0, tzinfo=ZONE)
+NOON = datetime.datetime(2026, 6, 21, 12, 0, tzinfo=ZONE)
+
+PREHEAT = {
+    "lead": 2 * HOUR,
+    "soc_sources": [{"device": "pack1", "field": "state_of_charge_pct"},
+                    {"device": "pack2", "field": "state_of_charge_pct"}],
+    "soc_stale_after": 600.0,
+    "soc_above_pct": 40.0,
+    "forecast_source": {"device": "forecast", "field": "shortwave_wm2"},
+    "forecast_above_wm2": 150.0,
+    "forecast_stale_after": 64800.0,
+}
+
+#: No dwell or timer of any kind, which most tests want. Each is exercised on
+#: its own further down.
+HEATER = {
+    "type": "battery_heating", "min_run": 0.0, "min_off": 0.0,
+    "on_stale_data": "fallback",
+    "sources": [{"device": "pack1", "field": "temp_1"},
+                {"device": "pack1", "field": "temp_2"},
+                {"device": "pack2", "field": "temp_1"},
+                {"device": "pack2", "field": "temp_2"}],
+    "stale_after": 600.0,
+    "max_disagreement_f": 15.0,
+    "coldest_below_f": 41.0,
+    "coldest_above_f": 50.0,
+    "any_sensor_above_f": 104.0,
+    "heat_dwell": 0.0,
+    "stop_dwell": 0.0,
+    "production": {"source": {"device": "inverter", "field": "pv_volts"},
+                   "above_volts": 80.0, "stale_after": 600.0},
+    "max_run_per_day": 6 * 3600.0,
+    "cooldown": 0.0,
+    "preheat": PREHEAT,
+}
+
+SWITCHES_CLEAR = {"shedding_enabled": True, "loads": {}}
+
+
+def heat_world(temps=(35.0, 35.0, 35.0, 35.0), volts=100.0, soc=(60.0, 60.0),
+               wm2=300.0, temp_age=1.0, volts_age=1.0, wm2_age=1.0):
+    """What the collectors have published. None leaves a field out."""
+    def fields(**values):
+        return {k: v for k, v in values.items() if v is not None}
+    return {
+        "pack1": {"fields": fields(temp_1=temps[0], temp_2=temps[1],
+                                   state_of_charge_pct=soc[0]),
+                  "age_seconds": temp_age},
+        "pack2": {"fields": fields(temp_1=temps[2], temp_2=temps[3],
+                                   state_of_charge_pct=soc[1]),
+                  "age_seconds": temp_age},
+        "inverter": {"fields": fields(pv_volts=volts),
+                     "age_seconds": volts_age},
+        "forecast": {"fields": fields(shortwave_wm2=wm2),
+                     "age_seconds": wm2_age},
+    }
+
+
+def about_the_next_morning(world, when, suns):
+    """A forecast that says which morning it is about, unless a test says."""
+    fields = (world.get("forecast") or {}).get("fields") or {}
+    if "shortwave_wm2" in fields and "sunrise_epoch" not in fields:
+        ahead = [day["sunrise"] for day in suns if day["sunrise"] > when]
+        if ahead:
+            fields["sunrise_epoch"] = min(ahead).timestamp()
+    return world
+
+
+def heater(world=None, state=None, mono=0.0, when=NOON, trusted=True,
+           switches=None, spec=None, suns=None):
+    world = about_the_next_morning(heat_world() if world is None else world,
+                                   when, SUNS if suns is None else suns)
+    decisions, new_state = decide.decide(
+        when, mono, trusted, world,
+        switches or SWITCHES_CLEAR, {"heat": spec or HEATER},
+        {"heat": state} if state else {},
+        SUNS if suns is None else suns)
+    return decisions["heat"], new_state["heat"]
+
+
+def heating(**kwargs):
+    """A heater that the rules have turned on, and its state."""
+    decision, state = heater(**kwargs)
+    assert decision.connected
+    return state
+
+
+UNREADABLE = (None, None, None, None)
+DARK = 17.0
+
+
+def forced(force, expires=NOON.timestamp() + 3600.0):
+    return {"shedding_enabled": True,
+            "loads": {"heat": {"force": force, "expires_epoch": expires}}}
+
+
+# ... the hard stop
+
+def test_a_fresh_sensor_at_the_hard_stop_turns_the_heat_off():
+    decision, _ = heater(heat_world(temps=(35.0, 35.0, 35.0, 104.0)))
+    assert not decision.connected
+    assert decision.reason_code == decide.THERMAL
+    assert "104.0" in decision.reason
+    assert decision.decided_on == 104.0
+
+
+def test_a_sensor_just_under_the_hard_stop_does_not_trip_it():
+    decision, _ = heater(heat_world(temps=(103.9,) * 4))
+    assert "hard stop" not in decision.reason
+
+
+def test_the_hard_stop_gets_past_the_minimum_run_time_and_the_stop_dwell():
+    spec = dict(HEATER, min_run=3600.0, stop_dwell=3600.0)
+    state = heating(spec=spec)
+    decision, state = heater(heat_world(temps=(35.0, 35.0, 35.0, 110.0)),
+                             state=state, mono=30.0, spec=spec)
+    assert not decision.connected
+    assert decision.reason_code == decide.THERMAL
+    assert state["commanded"] is False
+
+
+def test_the_hard_stop_is_not_overridden_by_preheat():
+    decision, _ = heater(heat_world(temps=(35.0, 35.0, 35.0, 104.0), volts=DARK),
+                         when=DAWN)
+    assert not decision.connected
+    assert "preheat" not in decision.reason
+
+
+def test_the_hard_stop_is_not_overridden_by_the_fallback_when_sensors_disagree():
+    decision, _ = heater(heat_world(temps=(35.0, 35.0, 35.0, 120.0)))
+    assert not decision.connected
+    assert decision.reason_code == decide.THERMAL
+
+
+def test_an_operator_force_on_does_not_defeat_the_hard_stop_and_is_told_so():
+    decision, _ = heater(heat_world(temps=(35.0, 35.0, 35.0, 104.0)),
+                         switches=forced("on"))
+    assert not decision.connected
+    assert decision.reason_code == decide.THERMAL
+    assert "force" in decision.reason
+
+
+def test_a_force_on_takes_effect_again_once_the_hard_stop_clears():
+    _, state = heater(heat_world(temps=(35.0, 35.0, 35.0, 104.0)),
+                      switches=forced("on"))
+    decision, _ = heater(heat_world(temps=(60.0,) * 4), state=state, mono=30.0,
+                         switches=forced("on"))
+    assert decision.connected
+    assert decision.reason_code == decide.OVERRIDE
+
+
+def test_the_hard_stop_holds_after_the_hot_sensor_goes_quiet():
+    _, state = heater(heat_world(temps=(35.0, 35.0, 110.0, 35.0)))
+    assert state["hot_sensors"] == ["pack2.temp_1"]
+    quiet = heat_world(temps=(35.0, 35.0, None, 35.0))
+    decision, state = heater(quiet, state=state, mono=100000.0)
+    assert not decision.connected
+    assert "pack2.temp_1" in decision.reason
+    assert state["hard_stop"]
+
+
+def test_the_hard_stop_holds_with_every_sensor_gone_and_the_sun_up():
+    _, state = heater(heat_world(temps=(35.0, 35.0, 110.0, 35.0)))
+    decision, _ = heater(heat_world(temps=UNREADABLE), state=state,
+                         mono=100000.0)
+    assert not decision.connected
+
+
+def test_the_hard_stop_lets_go_once_the_hot_sensor_reads_below_the_limit():
+    _, state = heater(heat_world(temps=(35.0, 35.0, 110.0, 35.0)))
+    _, state = heater(heat_world(), state=state, mono=100.0)
+    assert state["hot_sensors"] == []
+    assert not state.get("hard_stop")
+
+
+def test_another_sensor_reading_cool_does_not_release_the_hard_stop():
+    _, state = heater(heat_world(temps=(35.0, 35.0, 110.0, 35.0)))
+    decision, state = heater(heat_world(temps=(35.0, 35.0, None, 35.0)),
+                             state=state, mono=100.0)
+    assert state["hot_sensors"] == ["pack2.temp_1"]
+
+
+def test_an_operator_cannot_force_past_a_held_hard_stop():
+    _, state = heater(heat_world(temps=(35.0, 35.0, 110.0, 35.0)))
+    decision, _ = heater(heat_world(temps=(35.0, 35.0, None, 35.0)),
+                         state=state, mono=100.0, switches=forced("on"))
+    assert not decision.connected
+
+
+def test_the_daily_cap_ends_a_run_past_the_stop_dwell_and_minimum_run():
+    spec = dict(HEATER, min_run=7200.0, max_run_per_day=3600.0, heat_dwell=0.0)
+    decision, state = heater(spec=spec, mono=0.0)
+    assert decision.connected
+    for mono in range(60, 3600, 60):
+        decision, state = heater(spec=spec, state=state, mono=float(mono))
+        assert decision.connected
+    decision, state = heater(heat_world(volts=DARK), spec=spec, state=state,
+                             mono=3600.0)
+    assert not decision.connected
+    assert decision.reason_code == decide.HELD_BY_TIMER
+
+
+def test_time_the_controller_was_down_does_not_count_against_the_cap():
+    spec = dict(HEATER, max_run_per_day=3600.0, heat_dwell=0.0)
+    decision, state = heater(spec=spec, mono=0.0)
+    decision, state = heater(spec=spec, state=state, mono=60.0)
+    decision, state = heater(spec=spec, state=dict(state, restarted=True),
+                             mono=3000.0)
+    assert decision.connected
+    assert state["runs"] == [[0.0, 60.0], [3000.0, 3000.0]]
+    assert "restarted" not in state
+
+
+def test_a_long_loop_interval_counts_the_whole_run_against_the_cap():
+    spec = dict(HEATER, max_run_per_day=3600.0, heat_dwell=0.0)
+    decision, state = heater(spec=spec, mono=0.0)
+    assert decision.connected
+    decision, state = heater(spec=spec, state=state, mono=1800.0)
+    assert decision.connected
+    decision, _ = heater(spec=spec, state=state, mono=3600.0)
+    assert not decision.connected
+
+
+def test_a_restart_after_a_new_run_keeps_counting_from_the_restart():
+    spec = dict(HEATER, max_run_per_day=3600.0, heat_dwell=0.0)
+    _, state = heater(spec=spec, mono=0.0)
+    _, state = heater(spec=spec, state=dict(state, restarted=True), mono=1000.0)
+    _, state = heater(spec=spec, state=state, mono=1500.0)
+    assert state["runs"][-1] == [1000.0, 1500.0]
+
+
+def test_a_forecast_about_a_different_morning_stops_preheat():
+    world = heat_world(volts=DARK)
+    world["forecast"]["fields"]["sunrise_epoch"] = (
+        SUNS[1]["sunrise"].timestamp() - 86400.0)
+    decision, state = heater(world, when=SUNS[1]["sunrise"]
+                             - datetime.timedelta(minutes=30), mono=0.0)
+    assert not decision.connected
+    assert "different morning" in decision.reason
+
+
+def test_a_forecast_that_does_not_say_which_morning_stops_preheat():
+    world = heat_world(volts=DARK)
+    world["forecast"]["fields"]["sunrise_epoch"] = None
+    decision, _ = heater(world, when=SUNS[1]["sunrise"]
+                         - datetime.timedelta(minutes=30), mono=0.0)
+    assert not decision.connected
+
+
+def test_a_stale_sensor_cannot_trip_the_hard_stop():
+    world = heat_world(temps=(35.0, 35.0, 110.0, 110.0))
+    world["pack2"]["age_seconds"] = 601.0
+    decision, _ = heater(world)
+    assert decision.connected
+
+
+# ... ordinary heat
+
+def test_a_cold_pack_with_the_sun_up_heats():
+    decision, _ = heater()
+    assert decision.connected
+    assert decision.reason_code == decide.THERMAL
+    assert decision.decided_on == 35.0
+    assert "35.0" in decision.reason and "100.0" in decision.reason
+
+
+def test_the_coldest_sensor_is_the_one_that_decides():
+    decision, _ = heater(heat_world(temps=(50.0, 49.0, 41.0, 45.0)))
+    assert decision.connected
+    assert decision.decided_on == 41.0
+
+
+def test_a_pack_at_the_lower_bound_counts_as_cold_and_just_above_does_not():
+    assert heater(heat_world(temps=(41.0,) * 4))[0].connected
+    assert not heater(heat_world(temps=(41.1,) * 4))[0].connected
+
+
+def test_panel_volts_at_the_threshold_do_not_count_as_production():
+    assert not heater(heat_world(volts=80.0), when=NOON)[0].connected
+    assert heater(heat_world(volts=80.1), when=NOON)[0].connected
+
+
+def test_a_cold_pack_in_the_dark_stays_off_and_says_production_stopped_it():
+    decision, _ = heater(heat_world(volts=DARK))
+    assert not decision.connected
+    assert "pv_volts" in decision.reason
+    assert decision.reason_code == decide.THERMAL
+
+
+def test_stale_production_with_good_temperatures_gives_no_ordinary_heat():
+    decision, _ = heater(heat_world(volts_age=601.0))
+    assert not decision.connected
+    assert decision.reason_code == decide.NO_READING
+    assert "pv_volts" in decision.reason
+
+
+def test_it_stops_at_the_upper_bound():
+    state = heating()
+    decision, _ = heater(heat_world(temps=(50.0,) * 4), state=state, mono=30.0)
+    assert not decision.connected
+    assert decision.reason_code == decide.THERMAL
+
+
+def test_between_the_bounds_a_running_heater_keeps_running():
+    state = heating()
+    decision, _ = heater(heat_world(temps=(45.0,) * 4), state=state, mono=30.0)
+    assert decision.connected
+    assert "on" in decision.reason
+
+
+def test_between_the_bounds_a_stopped_heater_stays_stopped():
+    decision, _ = heater(heat_world(temps=(45.0,) * 4))
+    assert not decision.connected
+
+
+def test_a_running_heater_stops_when_the_sun_goes_even_between_the_bounds():
+    state = heating()
+    decision, _ = heater(heat_world(temps=(45.0,) * 4, volts=DARK), state=state,
+                         mono=30.0)
+    assert not decision.connected
+
+
+def test_a_stale_sensor_is_left_out_of_the_coldest():
+    world = heat_world(temps=(60.0, 60.0, 20.0, 20.0))
+    world["pack2"]["age_seconds"] = 601.0
+    decision, _ = heater(world)
+    assert decision.decided_on == 60.0
+    assert not decision.connected
+
+
+def test_heat_waits_out_its_dwell():
+    spec = dict(HEATER, heat_dwell=300.0)
+    decision, state = heater(spec=spec)
+    assert not decision.connected
+    assert "dwell" in decision.reason
+    decision, state = heater(state=state, mono=299.0, spec=spec)
+    assert not decision.connected
+    decision, _ = heater(state=state, mono=300.0, spec=spec)
+    assert decision.connected
+
+
+def test_a_stop_waits_out_its_dwell():
+    spec = dict(HEATER, stop_dwell=300.0)
+    state = heating(spec=spec)
+    warm = heat_world(temps=(55.0,) * 4)
+    decision, state = heater(warm, state=state, mono=10.0, spec=spec)
+    assert decision.connected
+    assert "dwell" in decision.reason
+    decision, state = heater(warm, state=state, mono=309.0, spec=spec)
+    assert decision.connected
+    decision, _ = heater(warm, state=state, mono=310.0, spec=spec)
+    assert not decision.connected
+
+
+def test_a_dwell_starts_again_when_its_condition_lapses():
+    spec = dict(HEATER, heat_dwell=300.0)
+    _, state = heater(spec=spec)
+    _, state = heater(heat_world(volts=DARK), state=state, mono=200.0, spec=spec)
+    decision, state = heater(state=state, mono=400.0, spec=spec)
+    assert not decision.connected
+    decision, _ = heater(state=state, mono=700.0, spec=spec)
+    assert decision.connected
+
+
+def test_a_wish_held_by_the_minimum_off_time_has_not_happened():
+    """The dwell compares against what was commanded. If it compared against
+    what was last wished, a heater held off by the timer would count as on,
+    and a pack that warmed meanwhile would be heated when the timer let go."""
+    spec = dict(HEATER, min_off=900.0)
+    _, state = heater(heat_world(temps=(60.0,) * 4), spec=spec)
+    decision, state = heater(state=state, mono=100.0, spec=spec)
+    assert not decision.connected
+    assert decision.reason_code == decide.HELD_BY_TIMER
+    decision, state = heater(heat_world(temps=(45.0,) * 4), state=state,
+                             mono=1000.0, spec=spec)
+    assert not decision.connected
+
+
+def test_the_minimum_off_time_holds_a_start():
+    spec = dict(HEATER, min_off=900.0)
+    state = heating(spec=spec)
+    _, state = heater(heat_world(temps=(60.0,) * 4), state=state, mono=10.0,
+                      spec=spec)
+    decision, state = heater(state=state, mono=20.0, spec=spec)
+    assert not decision.connected
+    assert decision.reason_code == decide.HELD_BY_TIMER
+    decision, _ = heater(state=state, mono=910.0, spec=spec)
+    assert decision.connected
+
+
+# ... preheat
+
+def test_a_cold_dark_morning_with_sun_coming_preheats_without_production():
+    decision, _ = heater(heat_world(volts=DARK), when=DAWN)
+    assert decision.connected
+    assert decision.reason_code == decide.THERMAL
+    assert "preheat" in decision.reason
+
+
+def test_preheat_needs_no_production_reading_at_all():
+    assert heater(heat_world(volts=None), when=DAWN)[0].connected
+    assert heater(heat_world(volts_age=601.0), when=DAWN)[0].connected
+
+
+@pytest.mark.parametrize("when,inside", [
+    (SUNRISE - 2 * HOUR - datetime.timedelta(seconds=1), False),
+    (SUNRISE - 2 * HOUR, True),
+    (SUNRISE - datetime.timedelta(seconds=1), True),
+    (SUNRISE, False),
+])
+def test_preheat_runs_only_inside_the_lead_before_sunrise(when, inside):
+    decision, _ = heater(heat_world(volts=DARK), when=when)
+    assert decision.connected is inside
+    if not inside:
+        assert "window" in decision.reason
+
+
+def test_a_lead_reaching_back_across_midnight_still_counts():
+    spec = dict(HEATER, preheat=dict(PREHEAT, lead=8 * HOUR))
+    late_evening = datetime.datetime(2026, 6, 20, 23, 30, tzinfo=ZONE)
+    decision, _ = heater(heat_world(volts=DARK), spec=spec, when=late_evening)
+    assert decision.connected
+
+
+def test_a_running_preheat_keeps_going_between_the_bounds():
+    state = heating(world=heat_world(volts=DARK), when=DAWN)
+    decision, _ = heater(heat_world(temps=(45.0,) * 4, volts=DARK), state=state,
+                         mono=30.0, when=DAWN)
+    assert decision.connected
+
+
+def test_a_stopped_heater_does_not_preheat_between_the_bounds():
+    decision, _ = heater(heat_world(temps=(45.0,) * 4, volts=DARK), when=DAWN)
+    assert not decision.connected
+
+
+def test_a_running_preheat_stops_at_the_upper_bound():
+    state = heating(world=heat_world(volts=DARK), when=DAWN)
+    decision, _ = heater(heat_world(temps=(50.0,) * 4, volts=DARK), state=state,
+                         mono=30.0, when=DAWN)
+    assert not decision.connected
+
+
+def test_after_sunrise_the_ordinary_rule_takes_over():
+    state = heating(world=heat_world(volts=DARK), when=DAWN)
+    decision, state = heater(heat_world(volts=DARK), state=state, mono=30.0,
+                             when=SUNRISE)
+    assert not decision.connected
+    state = heating(world=heat_world(volts=100.0), state=state, mono=60.0,
+                    when=SUNRISE)
+
+
+def test_low_charge_stops_preheat_and_says_so():
+    decision, _ = heater(heat_world(volts=DARK, soc=(60.0, 40.0)), when=DAWN)
+    assert not decision.connected
+    assert "charge" in decision.reason and "40.0" in decision.reason
+    assert heater(heat_world(volts=DARK, soc=(60.0, 40.1)),
+                  when=DAWN)[0].connected
+
+
+def test_the_lowest_charge_decides_whichever_pack_holds_it():
+    assert not heater(heat_world(volts=DARK, soc=(30.0, 60.0)),
+                      when=DAWN)[0].connected
+    assert not heater(heat_world(volts=DARK, soc=(60.0, 30.0)),
+                      when=DAWN)[0].connected
+
+
+def test_one_stale_charge_reading_stops_preheat():
+    world = heat_world(volts=DARK)
+    world["pack2"]["fields"].pop("state_of_charge_pct")
+    decision, _ = heater(world, when=DAWN)
+    assert not decision.connected
+    assert "pack2" in decision.reason
+
+
+def test_a_charge_reading_older_than_its_own_limit_stops_preheat():
+    spec = dict(HEATER, preheat=dict(PREHEAT, soc_stale_after=60.0))
+    decision, _ = heater(heat_world(volts=DARK, temp_age=61.0), when=DAWN,
+                         spec=spec)
+    assert not decision.connected
+    assert "charge" in decision.reason
+
+
+def test_a_missing_forecast_stops_preheat():
+    decision, _ = heater(heat_world(volts=DARK, wm2=None), when=DAWN)
+    assert not decision.connected
+    assert "forecast" in decision.reason
+
+
+def test_a_stale_forecast_stops_preheat():
+    decision, _ = heater(heat_world(volts=DARK, wm2_age=64801.0), when=DAWN)
+    assert not decision.connected
+    assert "forecast" in decision.reason
+    assert heater(heat_world(volts=DARK, wm2_age=64800.0),
+                  when=DAWN)[0].connected
+
+
+def test_a_poor_forecast_stops_preheat():
+    decision, _ = heater(heat_world(volts=DARK, wm2=150.0), when=DAWN)
+    assert not decision.connected
+    assert "forecast" in decision.reason and "150" in decision.reason
+    assert heater(heat_world(volts=DARK, wm2=150.5), when=DAWN)[0].connected
+
+
+def test_an_untrusted_clock_stops_preheat():
+    decision, _ = heater(heat_world(volts=DARK), when=DAWN, trusted=False,
+                         suns=[])
+    assert not decision.connected
+    assert "clock" in decision.reason
+
+
+def test_an_untrusted_clock_stops_preheat_even_with_sun_times_supplied():
+    decision, _ = heater(heat_world(volts=DARK), when=DAWN, trusted=False)
+    assert not decision.connected
+    assert "clock" in decision.reason
+
+
+def test_an_untrusted_clock_leaves_ordinary_heat_alone():
+    assert heater(when=NOON, trusted=False, suns=[])[0].connected
+
+
+def test_preheat_never_runs_on_stale_temperatures():
+    spec = dict(HEATER, preheat=dict(PREHEAT, soc_stale_after=3600.0))
+    decision, _ = heater(heat_world(volts=DARK, temp_age=601.0), when=DAWN,
+                         spec=spec)
+    assert not decision.connected
+    assert decision.reason_code == decide.NO_READING
+
+
+def test_preheat_never_runs_when_the_sensors_disagree():
+    decision, _ = heater(heat_world(temps=(35.0, 35.0, 35.0, 60.0), volts=DARK),
+                         when=DAWN)
+    assert not decision.connected
+
+
+def test_a_heater_with_no_preheat_block_stays_off_in_the_dark():
+    decision, _ = heater(heat_world(volts=DARK), when=DAWN,
+                         spec=dict(HEATER, preheat=None))
+    assert not decision.connected
+
+
+def test_preheat_is_held_by_the_dwell_like_any_other_start():
+    spec = dict(HEATER, heat_dwell=300.0)
+    decision, state = heater(heat_world(volts=DARK), when=DAWN, spec=spec)
+    assert not decision.connected
+    decision, _ = heater(heat_world(volts=DARK), state=state, mono=300.0,
+                         when=DAWN, spec=spec)
+    assert decision.connected
+
+
+# ... with no temperature to go on
+
+def test_with_no_temperature_it_heats_on_production_alone():
+    decision, _ = heater(heat_world(temps=UNREADABLE))
+    assert decision.connected
+    assert decision.reason_code == decide.NO_READING
+    assert decision.decided_on == 100.0
+    assert "production" in decision.reason
+
+
+def test_with_stale_temperatures_it_heats_on_production_alone():
+    assert heater(heat_world(temp_age=601.0))[0].connected
+
+
+def test_the_fallback_needs_panel_volts_above_the_threshold():
+    assert not heater(heat_world(temps=UNREADABLE, volts=80.0))[0].connected
+    assert heater(heat_world(temps=UNREADABLE, volts=80.1))[0].connected
+
+
+def test_the_fallback_does_not_heat_in_the_dark():
+    decision, _ = heater(heat_world(temps=UNREADABLE, volts=DARK))
+    assert not decision.connected
+    assert decision.reason_code == decide.NO_READING
+
+
+def test_with_neither_temperature_nor_production_it_is_off():
+    decision, state = heater(heat_world(temps=UNREADABLE, volts=None))
+    assert not decision.connected
+    assert decision.reason_code == decide.NO_READING
+    assert decision.decided_on is None
+
+
+def test_a_running_heater_stops_at_once_when_nothing_at_all_can_be_read():
+    spec = dict(HEATER, stop_dwell=3600.0)
+    state = heating(spec=spec)
+    decision, _ = heater(heat_world(temps=UNREADABLE, volts=None), state=state,
+                         mono=30.0, spec=spec)
+    assert not decision.connected
+
+
+def test_sensors_that_disagree_fall_back_to_production():
+    decision, _ = heater(heat_world(temps=(35.0, 35.0, 35.0, 50.1)))
+    assert decision.connected
+    assert decision.reason_code == decide.NO_READING
+    assert "disagree" in decision.reason
+
+
+def test_sensors_exactly_at_the_limit_do_not_count_as_disagreeing():
+    decision, _ = heater(heat_world(temps=(35.0, 35.0, 35.0, 50.0)))
+    assert decision.reason_code == decide.THERMAL
+
+
+def test_sensors_that_disagree_in_the_dark_stay_off():
+    assert not heater(heat_world(temps=(35.0, 35.0, 35.0, 60.0),
+                                 volts=DARK))[0].connected
+
+
+def test_refusing_on_stale_data_leaves_it_off_with_the_sun_up():
+    spec = dict(HEATER, on_stale_data="deny")
+    decision, _ = heater(heat_world(temps=UNREADABLE), spec=spec)
+    assert not decision.connected
+    assert decision.reason_code == decide.NO_READING
+    assert not heater(heat_world(temps=(35.0, 35.0, 35.0, 60.0)),
+                      spec=spec)[0].connected
+
+
+def test_the_fallback_waits_out_the_dwell():
+    spec = dict(HEATER, heat_dwell=300.0)
+    world = heat_world(temps=UNREADABLE)
+    decision, state = heater(world, spec=spec)
+    assert not decision.connected
+    decision, _ = heater(world, state=state, mono=300.0, spec=spec)
+    assert decision.connected
+
+
+def test_a_pin_is_not_timed_until_a_reading_has_informed_a_decision():
+    """Nothing reaches the pin before that, so a timer started on it would hold
+    the first real decision against a drive that never went out."""
+    spec = dict(HEATER, min_off=900.0)
+    _, state = heater(heat_world(temps=UNREADABLE, volts=None), spec=spec)
+    assert "commanded" not in state
+    decision, _ = heater(state=state, mono=10.0, spec=spec)
+    assert decision.connected
+
+
+# ... the limits
+
+def run_for(seconds, state, start, world=None, when=NOON, trusted=True,
+            spec=None, step=60.0):
+    """Walk the loop forward, returning the last decision, state and time."""
+    decision = None
+    mono = start
+    while mono < start + seconds:
+        mono += step
+        decision, state = heater(world, state=state, mono=mono, when=when,
+                                 trusted=trusted, spec=spec,
+                                 suns=None if trusted else [])
+    return decision, state, mono
+
+
+def capped(**changes):
+    return dict(HEATER, max_run_per_day=3600.0, **changes)
+
+
+def test_the_daily_cap_stops_a_running_heater_and_says_so():
+    spec = capped()
+    state = heating(spec=spec)
+    decision, state, _ = run_for(3540.0, state, 0.0, spec=spec)
+    assert decision.connected
+    decision, state, _ = run_for(60.0, state, 3540.0, spec=spec)
+    assert not decision.connected
+    assert decision.reason_code == decide.HELD_BY_TIMER
+    assert "max_run_per_day" in decision.reason
+
+
+def test_the_daily_cap_is_not_held_up_by_the_stop_dwell():
+    spec = capped(stop_dwell=3600.0)
+    state = heating(spec=spec)
+    decision, _, _ = run_for(3600.0, state, 0.0, spec=spec)
+    assert not decision.connected
+
+
+def test_the_daily_cap_holds_until_the_next_local_day():
+    spec = capped()
+    state = heating(spec=spec)
+    _, state, mono = run_for(3600.0, state, 0.0, spec=spec)
+    late = NOON.replace(hour=23, minute=59)
+    decision, state = heater(state=state, mono=mono + 60.0, when=late, spec=spec)
+    assert not decision.connected
+    assert "max_run_per_day" in decision.reason
+    tomorrow = NOON.replace(day=22, hour=0, minute=1)
+    decision, _ = heater(state=state, mono=mono + 120.0, when=tomorrow, spec=spec)
+    assert decision.connected
+
+
+def test_running_time_before_midnight_does_not_count_against_the_day_after():
+    spec = capped()
+    night = NOON.replace(hour=23, minute=40)
+    state = heating(spec=spec, when=night)
+    _, state, mono = run_for(1800.0, state, 0.0, spec=spec, when=night)
+    after = NOON.replace(day=22, hour=0, minute=10)
+    decision, state, mono = run_for(1800.0, state, mono, when=after, spec=spec)
+    assert decision.connected
+
+
+def test_preheat_time_counts_against_the_daily_cap():
+    spec = capped()
+    dark = heat_world(volts=DARK)
+    state = heating(world=dark, when=DAWN, spec=spec)
+    _, state, mono = run_for(3600.0, state, 0.0, world=dark, when=DAWN, spec=spec)
+    decision, _ = heater(state=state, mono=mono + 60.0, when=NOON, spec=spec)
+    assert not decision.connected
+    assert "max_run_per_day" in decision.reason
+
+
+def test_the_daily_cap_applies_to_the_fallback():
+    spec = capped()
+    world = heat_world(temps=UNREADABLE)
+    state = heating(world=world, spec=spec)
+    decision, _, _ = run_for(3600.0, state, 0.0, world=world, spec=spec)
+    assert not decision.connected
+    assert "max_run_per_day" in decision.reason
+
+
+def test_the_daily_cap_counts_time_a_force_on_kept_it_running():
+    spec = capped()
+    switches = forced("on")
+    state = heating(spec=spec, world=heat_world(temps=(60.0,) * 4),
+                    switches=switches)
+    mono = 0.0
+    while mono < 3600.0:
+        mono += 60.0
+        _, state = heater(heat_world(temps=(60.0,) * 4), state=state, mono=mono,
+                          spec=spec, switches=switches)
+    decision, _ = heater(state=state, mono=mono + 60.0, spec=spec)
+    assert not decision.connected
+    assert "max_run_per_day" in decision.reason
+
+
+def test_a_force_on_gets_past_the_daily_cap():
+    spec = capped()
+    state = heating(spec=spec)
+    _, state, mono = run_for(3600.0, state, 0.0, spec=spec)
+    decision, _ = heater(state=state, mono=mono + 60.0, spec=spec,
+                         switches=forced("on"))
+    assert decision.connected
+    assert decision.reason_code == decide.OVERRIDE
+
+
+def test_the_running_time_uses_the_monotonic_clock_and_not_the_wall():
+    """The wall clock can step by hours when it first synchronises. Every pass
+    here reads the same wall time and only the monotonic clock moves."""
+    spec = capped()
+    state = heating(spec=spec)
+    decision, _, _ = run_for(3600.0, state, 0.0, spec=spec, when=NOON)
+    assert not decision.connected
+
+
+def test_an_untrusted_clock_caps_on_a_rolling_day():
+    spec = capped()
+    state = heating(spec=spec, trusted=False, suns=[])
+    decision, state, mono = run_for(3600.0, state, 0.0, spec=spec, trusted=False)
+    assert not decision.connected
+    assert "24 hours" in decision.reason
+    decision, state = heater(state=state, mono=mono + 3600.0, trusted=False,
+                             suns=[], spec=spec)
+    assert not decision.connected, "still inside the rolling day"
+    decision, _ = heater(state=state, mono=mono + 86400.0, trusted=False,
+                         suns=[], spec=spec)
+    assert decision.connected
+
+
+def test_a_rolling_day_lets_older_running_time_fall_away_gradually():
+    spec = capped()
+    state = heating(spec=spec, trusted=False, suns=[])
+    _, state, mono = run_for(3600.0, state, 0.0, spec=spec, trusted=False)
+    assert mono == 3600.0
+    # At 24 hours and one minute the first minute of the run has fallen away.
+    decision, _ = heater(state=state, mono=86400.0 + 60.0, trusted=False,
+                         suns=[], spec=spec)
+    assert decision.connected
+
+
+def test_a_clock_that_becomes_trusted_keeps_the_running_time_of_this_local_day():
+    spec = capped()
+    state = heating(spec=spec, trusted=False, suns=[])
+    _, state, mono = run_for(3600.0, state, 0.0, spec=spec, trusted=False)
+    decision, _ = heater(state=state, mono=mono + 60.0, spec=spec, when=NOON)
+    assert not decision.connected
+    assert "max_run_per_day" in decision.reason
+
+
+def test_running_records_older_than_any_window_are_dropped():
+    spec = capped()
+    state = heating(spec=spec)
+    _, state, mono = run_for(600.0, state, 0.0, spec=spec)
+    _, state = heater(heat_world(temps=(60.0,) * 4), state=state, mono=mono + 60.0,
+                      spec=spec)
+    _, state = heater(heat_world(temps=(60.0,) * 4), state=state,
+                      mono=mono + 3 * 86400.0, spec=spec)
+    assert state["runs"] == []
+
+
+def test_the_cooldown_is_the_off_time_between_runs():
+    spec = dict(HEATER, cooldown=900.0)
+    state = heating(spec=spec)
+    _, state = heater(heat_world(temps=(60.0,) * 4), state=state, mono=60.0,
+                      spec=spec)
+    decision, state = heater(state=state, mono=120.0, spec=spec)
+    assert not decision.connected
+    assert decision.reason_code == decide.HELD_BY_TIMER
+    assert "cooldown" in decision.reason
+    decision, state = heater(state=state, mono=959.0, spec=spec)
+    assert not decision.connected
+    decision, _ = heater(state=state, mono=960.0, spec=spec)
+    assert decision.connected
+
+
+def test_the_cooldown_follows_the_cap_into_the_next_day():
+    spec = capped(cooldown=900.0)
+    night = NOON.replace(hour=23, minute=0)
+    state = heating(spec=spec, when=night)
+    _, state, mono = run_for(3600.0, state, 0.0, spec=spec, when=night)
+    tomorrow = NOON.replace(day=22, hour=0, minute=5)
+    decision, state = heater(state=state, mono=mono + 300.0, when=tomorrow,
+                             spec=spec)
+    assert not decision.connected
+    assert "cooldown" in decision.reason
+    decision, _ = heater(state=state, mono=mono + 900.0, when=tomorrow, spec=spec)
+    assert decision.connected
+
+
+def test_the_cooldown_does_not_interrupt_a_run():
+    spec = dict(HEATER, cooldown=900.0)
+    state = heating(spec=spec)
+    decision, _, _ = run_for(1800.0, state, 0.0, spec=spec)
+    assert decision.connected
+
+
+def test_a_force_on_gets_past_the_cooldown():
+    spec = dict(HEATER, cooldown=900.0)
+    state = heating(spec=spec)
+    _, state = heater(heat_world(temps=(60.0,) * 4), state=state, mono=60.0,
+                      spec=spec)
+    decision, _ = heater(state=state, mono=120.0, spec=spec,
+                         switches=forced("on"))
+    assert decision.connected
+
+
+# ... the operator
+
+def test_a_force_on_runs_it_when_the_rules_would_not():
+    decision, _ = heater(heat_world(temps=(60.0,) * 4), switches=forced("on"))
+    assert decision.connected
+    assert decision.reason_code == decide.OVERRIDE
+
+
+def test_a_force_off_stops_it_when_the_rules_would_heat():
+    decision, _ = heater(switches=forced("off"))
+    assert not decision.connected
+    assert decision.reason_code == decide.OVERRIDE
+
+
+def test_a_force_on_is_ignored_while_the_clock_is_untrusted():
+    decision, _ = heater(heat_world(temps=(60.0,) * 4), switches=forced("on"),
+                         trusted=False, suns=[])
+    assert not decision.connected
+
+
+def test_the_shedding_switch_does_not_touch_this_load():
+    off = {"shedding_enabled": False, "loads": {}}
+    assert not heater(heat_world(temps=(60.0,) * 4), switches=off)[0].connected
+    assert heater(switches=off)[0].connected

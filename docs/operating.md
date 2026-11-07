@@ -332,10 +332,47 @@ never be the reason a site stays dark.
 | blind1 / upstairs | vent fan | 26 | 37 | off (normally open) |
 | garage | battery heating | 24 | not recorded | off (normally open) |
 
-Of these, the two camera groups, the recorder and the two CPU fans are load
-types the controller drives. Irrigation and the vent fan are declared and deliberately held back,
-disabled in the node file. Battery heating is declared for its relay and
-wiring, but is not yet a load type this controller drives.
+Of these, the two camera groups, the recorder, the two CPU fans, the vent fan
+and battery heating are load types the controller drives. Irrigation is declared
+and deliberately held back, disabled in the node file. Battery heating is
+disabled in the node file too, because its relay is not wired.
+
+## Battery heating
+
+The heater is decided by these rules, in this order. The `reason` field says
+which one applied and, when it stayed off, which gate stopped it.
+
+1. **Hard stop.** Any fresh sensor at or above `any_sensor_above_f` turns it off
+   at once, past every timer. It holds until that sensor reads below the limit,
+   so a sensor that goes quiet while hot keeps the heat off until a reboot. A
+   `control override` to on does not get past this.
+2. **Ordinary heat.** The coldest fresh sensor at or below `coldest_below_f`, with
+   panel voltage fresh and above `above_volts`. It stops at or above
+   `coldest_above_f`, or when production is lost. Between the two bounds it does
+   what it was last commanded to do. Each change waits out `heat_dwell` or
+   `stop_dwell`.
+3. **Preheat.** Within `lead` before sunrise, a cold pack heats with no
+   production, if the clock is trusted, every charge reading is fresh with the
+   lowest above `soc_above_pct`, and the forecast is fresh and above its
+   threshold.
+4. **No temperature to trust.** With every sensor stale, or two further apart
+   than `max_disagreement_f`, it heats on production alone as the plain heater
+   did, bounded by the snap-disc cutout. With production unread too, it is off.
+
+`max_run_per_day` caps all of that together, per local day, or per rolling 24
+hours while the clock is untrusted. `cooldown` is the off time after a run ends,
+and `min_off` still applies. An operator's force on gets past the cap and the
+cooldown, and the time it runs still counts. The count is kept in tmpfs, so a
+reboot starts it again from zero. The shedding switch does not touch this load.
+
+The tape probably has a thermostat of its own, so `powered` at `1.0` says what
+was commanded, and the tape drawing nothing then is normal, not a fault. Nothing
+reads the draw back.
+
+The forecast comes from the `open_meteo` device, which needs the internet and
+calls the service at most once an hour. If it fails it publishes `ok=0.0` with
+the reason, and its last good reading goes on aging in the cache, so a forecast
+past its `stale_after` stops preheat and nothing else.
 
 ## Published fields, per load
 
@@ -386,7 +423,7 @@ a collector fault, never a load with nothing to say.
 | 4 | override | An operator forced this with `control override`. |
 | 5 | shedding disabled | `control shedding off` is holding this load on despite its tiers. |
 | 6 | schedule suspended | A latched tier has a schedule, and the clock cannot be trusted to judge it. |
-| 7 | no reading | A CPU fan has no fresh temperature. It runs if it has had a reading since the machine booted, and stays off if it has not. |
-| 8 | thermal | A CPU fan decided on its temperature: at or above its upper bound, at or below its lower bound, or between them and keeping its last state. |
+| 7 | no reading | A fan or heater lacks a reading it needs. A CPU fan runs if it has had a reading since the machine booted, and stays off if it has not. A vent fan stops. A heater with no temperature to trust heats on production alone, and a heater with no fresh production reading does not heat unless a preheat lets it. |
+| 8 | thermal | A fan or heater decided on its temperatures: at or above its upper bound, at or below its lower bound, or between them and keeping its last state. A heater's hard stop and its preheat are in here too; `reason` tells them apart. |
 | 9 | refused | The node file declares a load type this controller does not drive. |
-| 10 | held by timer | The decision is correct, but a minimum run or minimum off time has not elapsed, so it has not taken effect yet. |
+| 10 | held by timer | The decision is correct, but a minimum run or minimum off time has not elapsed, so it has not taken effect yet. Also a heater that wants heat with its daily cap used up or its cooldown still running. |

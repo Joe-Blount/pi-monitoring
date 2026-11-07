@@ -525,14 +525,13 @@ def test_a_disabled_deferred_load_is_accepted_and_not_driven():
 
 
 def test_a_load_type_nothing_drives_is_refused():
-    assert "not a type this controller drives" in refused(
-        type="battery_heating")
+    assert "not a type this controller drives" in refused(type="hot_tub")
 
 
-def test_a_vent_fan_is_specified_and_not_driven():
-    assert spec.load_spec("vent_fan", {"type": "vent_fan", "enabled": False,
+def test_a_deferred_type_is_specified_and_not_driven():
+    assert spec.load_spec("pump", {"type": "sequenced_ac", "enabled": False,
                                        "inside": {}}, {"box"}) is None
-    assert "enabled: false" in refused({"type": "vent_fan"})
+    assert "enabled: false" in refused({"type": "sequenced_ac"})
 
 
 # -- a CPU fan --------------------------------------------------------------
@@ -887,3 +886,371 @@ def test_a_block_that_drives_a_load_must_say_how_its_board_triggers(trigger):
 def test_a_block_with_nothing_to_drive_needs_no_trigger():
     node = FakeNode({"spare": dict(CAMERAS, enabled=False)}, trigger=None)
     assert spec.load_control(node) == {}
+
+
+# -- the vent fan ------------------------------------------------------------
+
+VENT = {
+    "type": "vent_fan",
+    "control_pin": 26,
+    "polarity": "energize_to_connect",
+    "on_stale_data": "deny",
+    "inside": {"device": "box", "field": "temp"},
+    "outside": {"device": "outdoor_temp", "field": "temp"},
+    "stale_after": "10m",
+    "run_if_all": {"inside_above_f": 80.0, "outside_cooler_by_f": 10.0},
+    "stop_if_any": {"inside_below_f": 77.0,
+                    "outside_cooler_by_less_than_f": 6.0,
+                    "outside_below_f": None},
+    "run_dwell": "2m",
+    "stop_dwell": "5m",
+    "min_run": "5m",
+    "min_off": "5m",
+    "readback": {"source": "none", "pin": None},
+}
+VENT_DEVICES = {"box", "outdoor_temp"}
+
+
+def vent(**changes):
+    merged = dict(VENT, **changes)
+    return spec.load_spec("vent_fan", merged, VENT_DEVICES)
+
+
+def vent_refused(**changes):
+    with pytest.raises(spec.SpecError) as e:
+        vent(**changes)
+    return str(e.value)
+
+
+def test_a_vent_fan_parses_to_what_its_decision_reads():
+    parsed = vent()
+    assert parsed["inside_above_f"] == 80.0
+    assert parsed["outside_cooler_by_less_than_f"] == 6.0
+    assert parsed["outside_below_f"] is None
+    assert parsed["run_dwell"] == 120.0
+    assert parsed["stop_dwell"] == 300.0
+    assert parsed["min_run"] == 300.0
+
+
+def test_a_disabled_vent_fan_is_not_driven():
+    assert vent(enabled=False) is None
+
+
+@pytest.mark.parametrize("key", ["inside", "outside", "stale_after",
+                                 "run_if_all", "stop_if_any", "run_dwell",
+                                 "stop_dwell"])
+def test_a_vent_fan_missing_a_required_key_is_refused(key):
+    merged = {k: v for k, v in VENT.items() if k != key}
+    with pytest.raises(spec.SpecError, match=key):
+        spec.load_spec("vent_fan", merged, VENT_DEVICES)
+
+
+def test_a_vent_fan_with_an_unknown_key_is_refused():
+    with pytest.raises(spec.SpecError):
+        vent(colour="red")
+
+
+def test_a_vent_fan_on_a_device_nothing_writes_is_refused():
+    with pytest.raises(spec.SpecError):
+        spec.load_spec("vent_fan", VENT, {"box"})
+
+
+def test_a_vent_fan_reading_one_sensor_twice_is_refused():
+    assert "different sensors" in vent_refused(outside=VENT["inside"])
+
+
+def test_a_vent_fan_that_would_run_on_stale_data_is_refused():
+    assert "must be deny" in vent_refused(on_stale_data="fallback")
+
+
+def test_a_vent_fan_inside_bounds_must_leave_a_gap():
+    assert "inside_above_f" in vent_refused(
+        run_if_all={"inside_above_f": 77.0, "outside_cooler_by_f": 10.0})
+
+
+def test_a_vent_fan_cooler_bounds_must_leave_a_gap():
+    assert "outside_cooler_by_f" in vent_refused(
+        run_if_all={"inside_above_f": 80.0, "outside_cooler_by_f": 6.0})
+
+
+def test_a_vent_fan_with_a_readback_nothing_acts_on_is_refused():
+    assert "readback" in vent_refused(readback={"source": "load"})
+
+
+# -- battery heating --------------------------------------------------------
+
+HEATER = {
+    "type": "battery_heating",
+    "control_pin": 24,
+    "polarity": "energize_to_connect",
+    "on_stale_data": "fallback",
+    "temperature": {
+        "sources": [{"device": "pack1", "field": "temp_1"},
+                    {"device": "pack2", "field": "temp_1"}],
+        "fallback_sources": [],
+        "max_disagreement_f": 15,
+        "stale_after": "10m",
+    },
+    "heat_if_all": {"coldest_below_f": 41.0},
+    "stop_if_any": {"coldest_above_f": 50.0, "any_sensor_above_f": 104.0},
+    "heat_dwell": "5m",
+    "stop_dwell": "5m",
+    "min_off": "15m",
+    "require_production": {
+        "enabled": True,
+        "source": {"device": "inverter", "field": "pv_volts"},
+        "above_volts": 80,
+        "stale_after": "10m",
+    },
+    "limits": {"max_run_per_day": "6h", "cooldown": "15m"},
+    "preheat": {
+        "enabled": True,
+        "lead": "2h",
+        "soc": {"sources": [
+            {"device": "pack1", "field": "state_of_charge_pct"},
+            {"device": "pack2", "field": "state_of_charge_pct"}],
+            "stale_after": "10m"},
+        "soc_above_pct": 40,
+        "forecast": {"source": {"device": "forecast", "field": "shortwave_wm2"},
+                     "above_wm2": 150,
+                     "stale_after": "18h"},
+    },
+    "readback": {"source": "none", "pin": None},
+}
+HEATER_DEVICES = {"pack1", "pack2", "inverter", "forecast"}
+
+
+def heater(**changes):
+    return spec.load_spec("battery_heating", dict(HEATER, **changes),
+                          HEATER_DEVICES)
+
+
+def heater_refused(**changes):
+    with pytest.raises(spec.SpecError) as raised:
+        heater(**changes)
+    return str(raised.value)
+
+
+def with_part(part, **changes):
+    """One nested block with some of its keys changed, for `heater_refused`."""
+    return {part: dict(HEATER[part], **changes)}
+
+
+def without(part, key):
+    return {part: {k: v for k, v in HEATER[part].items() if k != key}}
+
+
+def with_preheat(part=None, **changes):
+    block = dict(HEATER["preheat"])
+    if part is None:
+        block.update(changes)
+    else:
+        block[part] = dict(block[part], **changes)
+    return {"preheat": block}
+
+
+def test_a_battery_heater_parses_to_what_its_decision_reads():
+    parsed = heater()
+    assert parsed["on_stale_data"] == "fallback"
+    assert [s["device"] for s in parsed["sources"]] == ["pack1", "pack2"]
+    assert parsed["stale_after"] == 600.0
+    assert parsed["max_disagreement_f"] == 15.0
+    assert parsed["coldest_below_f"] == 41.0
+    assert parsed["coldest_above_f"] == 50.0
+    assert parsed["any_sensor_above_f"] == 104.0
+    assert parsed["heat_dwell"] == 300.0
+    assert parsed["stop_dwell"] == 300.0
+    assert parsed["min_off"] == 900.0
+    assert parsed["production"] == {
+        "source": {"device": "inverter", "field": "pv_volts"},
+        "above_volts": 80.0, "stale_after": 600.0}
+    assert parsed["max_run_per_day"] == 21600.0
+    assert parsed["cooldown"] == 900.0
+
+
+def test_the_preheat_block_parses_to_what_its_decision_reads():
+    import datetime
+    preheat = heater()["preheat"]
+    assert preheat["lead"] == datetime.timedelta(hours=2)
+    assert [s["device"] for s in preheat["soc_sources"]] == ["pack1", "pack2"]
+    assert preheat["soc_stale_after"] == 600.0
+    assert preheat["soc_above_pct"] == 40.0
+    assert preheat["forecast_source"] == {"device": "forecast",
+                                          "field": "shortwave_wm2"}
+    assert preheat["forecast_above_wm2"] == 150.0
+    assert preheat["forecast_stale_after"] == 64800.0
+
+
+def test_a_heater_with_no_preheat_block_has_no_preheat():
+    merged = {k: v for k, v in HEATER.items() if k != "preheat"}
+    assert spec.load_spec("h", merged, HEATER_DEVICES)["preheat"] is None
+
+
+def test_a_preheat_block_switched_off_needs_nothing_else_and_names_no_device():
+    assert heater(preheat={"enabled": False})["preheat"] is None
+
+
+def test_a_disabled_battery_heater_is_not_driven():
+    assert heater(enabled=False) is None
+
+
+def test_a_disabled_battery_heater_still_has_its_own_keys_checked():
+    with pytest.raises(spec.SpecError):
+        heater(enabled=False, colour="red")
+
+
+@pytest.mark.parametrize("key", [
+    "on_stale_data", "temperature", "heat_if_all", "stop_if_any", "heat_dwell",
+    "stop_dwell", "require_production", "limits"])
+def test_a_battery_heater_missing_a_required_key_is_refused(key):
+    merged = {k: v for k, v in HEATER.items() if k != key}
+    with pytest.raises(spec.SpecError, match=key):
+        spec.load_spec("h", merged, HEATER_DEVICES)
+
+
+@pytest.mark.parametrize("part,key", [
+    ("temperature", "sources"), ("temperature", "max_disagreement_f"),
+    ("temperature", "stale_after"), ("heat_if_all", "coldest_below_f"),
+    ("stop_if_any", "coldest_above_f"), ("stop_if_any", "any_sensor_above_f"),
+    ("require_production", "source"), ("require_production", "above_volts"),
+    ("require_production", "stale_after"), ("limits", "max_run_per_day"),
+    ("limits", "cooldown"), ("preheat", "lead"), ("preheat", "soc"),
+    ("preheat", "soc_above_pct"), ("preheat", "forecast")])
+def test_a_battery_heater_missing_a_nested_key_is_refused(part, key):
+    assert key in heater_refused(**without(part, key))
+
+
+@pytest.mark.parametrize("part", [
+    "temperature", "heat_if_all", "stop_if_any", "require_production", "limits",
+    "preheat"])
+def test_an_unknown_key_in_any_block_is_refused(part):
+    assert "colour" in heater_refused(**with_part(part, colour="red"))
+
+
+@pytest.mark.parametrize("part", [
+    "temperature", "heat_if_all", "stop_if_any", "require_production", "limits",
+    "preheat"])
+def test_a_block_that_is_not_a_mapping_is_refused(part):
+    assert part in heater_refused(**{part: "yes"})
+
+
+def test_an_unknown_key_at_the_top_is_refused():
+    assert "colour" in heater_refused(colour="red")
+
+
+def test_an_unknown_key_in_the_preheat_soc_or_forecast_is_refused():
+    assert "colour" in heater_refused(**with_preheat("soc", colour="red"))
+    assert "colour" in heater_refused(**with_preheat("forecast", colour="red"))
+
+
+@pytest.mark.parametrize("sources", [[], None, "pack1"])
+def test_a_heater_with_no_temperature_sources_is_refused(sources):
+    assert "sources" in heater_refused(
+        **with_part("temperature", sources=sources))
+
+
+@pytest.mark.parametrize("source", [
+    {"temperature": dict(HEATER["temperature"], sources=[
+        {"device": "other", "field": "temp_1"}])},
+    with_part("require_production",
+              source={"device": "other", "field": "pv_volts"}),
+    with_preheat("soc", sources=[{"device": "other",
+                                  "field": "state_of_charge_pct"}]),
+    with_preheat("forecast", source={"device": "other",
+                                     "field": "shortwave_wm2"}),
+], ids=["temperature", "production", "charge", "forecast"])
+def test_every_source_on_a_device_nothing_writes_is_refused(source):
+    assert "other" in heater_refused(**source)
+
+
+def test_a_preheat_with_no_charge_sources_is_refused():
+    assert "sources" in heater_refused(**with_preheat("soc", sources=[]))
+
+
+def test_on_stale_data_must_be_one_of_the_two_answers():
+    assert "on_stale_data" in heater_refused(on_stale_data="guess")
+    assert heater(on_stale_data="deny")["on_stale_data"] == "deny"
+
+
+def test_a_fallback_source_nothing_reads_is_refused():
+    assert "fallback_sources" in heater_refused(**with_part(
+        "temperature",
+        fallback_sources=[{"device": "pack1", "field": "temp_1"}]))
+
+
+def test_a_heater_must_stop_warmer_than_it_starts():
+    assert "coldest_above_f" in heater_refused(
+        stop_if_any={"coldest_above_f": 41.0, "any_sensor_above_f": 104.0})
+
+
+def test_the_hard_stop_must_sit_above_the_working_stop():
+    assert "any_sensor_above_f" in heater_refused(
+        stop_if_any={"coldest_above_f": 50.0, "any_sensor_above_f": 50.0})
+
+
+def test_a_threshold_that_is_not_a_number_is_refused():
+    assert "coldest_below_f" in heater_refused(
+        heat_if_all={"coldest_below_f": "cold"})
+    assert "coldest_below_f" in heater_refused(
+        heat_if_all={"coldest_below_f": float("nan")})
+
+
+def test_a_disagreement_limit_of_zero_is_refused():
+    assert "max_disagreement_f" in heater_refused(
+        **with_part("temperature", max_disagreement_f=0))
+
+
+def test_heating_with_no_production_gate_is_refused():
+    """It would run all night, which is the one thing it must not do."""
+    assert "require_production" in heater_refused(
+        **with_part("require_production", enabled=False))
+
+
+def test_a_production_gate_enable_that_is_not_a_yes_or_no_is_refused():
+    assert "enabled" in heater_refused(
+        **with_part("require_production", enabled="true"))
+
+
+def test_a_cap_of_zero_is_refused():
+    assert "max_run_per_day" in heater_refused(
+        **with_part("limits", max_run_per_day=0))
+
+
+def test_a_cap_longer_than_a_day_is_refused():
+    assert "max_run_per_day" in heater_refused(
+        **with_part("limits", max_run_per_day="25h"))
+
+
+def test_a_negative_cooldown_is_refused():
+    assert "cooldown" in heater_refused(**with_part("limits", cooldown=-1))
+
+
+def test_a_heater_with_a_readback_nothing_acts_on_is_refused():
+    assert "readback" in heater_refused(readback={"source": "gpio", "pin": 5})
+
+
+def test_a_preheat_lead_of_zero_is_refused():
+    assert "lead" in heater_refused(**with_preheat(lead=0))
+
+
+@pytest.mark.parametrize("floor", [-1, 100, 101])
+def test_a_charge_floor_outside_a_percentage_is_refused(floor):
+    assert "soc_above_pct" in heater_refused(**with_preheat(soc_above_pct=floor))
+
+
+def test_a_forecast_threshold_below_zero_is_refused():
+    assert "above_wm2" in heater_refused(**with_preheat("forecast",
+                                                        above_wm2=-1))
+
+
+def test_a_forecast_that_could_be_about_an_earlier_sunrise_is_refused():
+    """The reading says nothing about which sunrise it describes. Its limit
+    plus the lead must stay under a day, or one taken just after yesterday's
+    sunrise would pass as a forecast for this morning."""
+    assert "stale_after" in heater_refused(**with_preheat(
+        "forecast", stale_after="22h"))
+    assert heater(**with_preheat("forecast", stale_after="21h"))
+
+
+def test_a_preheat_enable_that_is_not_a_yes_or_no_is_refused():
+    assert "enabled" in heater_refused(**with_preheat(enabled="false"))

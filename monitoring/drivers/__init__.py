@@ -23,6 +23,7 @@ REGISTRY = {
     "qinglan": ("monitoring.drivers.qinglan", "QinlanDriver"),
     "eg4_modbus": ("monitoring.drivers.eg4_modbus", "Eg4ModbusDriver"),
     "control": ("monitoring.drivers.control", "ControlDriver"),
+    "open_meteo": ("monitoring.drivers.open_meteo", "OpenMeteoDriver"),
 }
 
 

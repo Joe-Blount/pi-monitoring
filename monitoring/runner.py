@@ -17,7 +17,8 @@ import time
 from . import calibration, lineproto
 from . import drivers as driver_registry
 from .control import files as control_files
-from .drivers.base import DriverError, Point
+from .control import location as control_location
+from .drivers.base import DriverError, Point, Unchanged
 
 
 class Result:
@@ -46,7 +47,13 @@ def _now_ns():
 def build_driver(device):
     """Instantiate the driver a device declares."""
     cls = driver_registry.get(device.driver)
-    return cls(device.name, device.params, device.tags)
+    params = device.params
+    if cls.needs_location:
+        # Replaces anything by this name in the node file, and is only called
+        # when the driver wants the position. A machine whose location file
+        # is not written yet builds and lists its devices like any other.
+        params = dict(params, locate=control_location.read)
+    return cls(device.name, params, device.tags)
 
 
 #: Field names the runner adds to every point. No driver may use one: the
@@ -229,7 +236,8 @@ def read_device(node, device, now_ns=None, clock=None):
     driver = None
     try:
         driver = build_driver(device)
-        series = points(device, driver.read())
+        reading = driver.read()
+        series = points(device, reading)
         if not any(value is not None for _, fields in series
                    for value in fields.values()):
             # Every reading carries ok=1.0, so without this check a driver
@@ -238,7 +246,8 @@ def read_device(node, device, now_ns=None, clock=None):
             # no value is a failed read.
             raise DriverError("the device returned no usable values")
         at = stamp()
-        _cache_series(node, device, series)
+        if not isinstance(reading, Unchanged):
+            _cache_series(node, device, series)
         return Result(device, lines=[point(node, device, fields, at, tags)
                                      for tags, fields in series],
                       stamp=at)
