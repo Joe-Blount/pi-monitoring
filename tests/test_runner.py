@@ -8,7 +8,7 @@ import pytest
 from monitoring import config, runner
 from monitoring.control import files as control_files
 from monitoring.drivers import REGISTRY
-from monitoring.drivers.base import Driver, DriverError, Point
+from monitoring.drivers.base import Driver, DriverError, Point, Unchanged
 
 NOW = 1700000000000000000
 
@@ -1021,3 +1021,35 @@ def test_only_the_point_without_its_own_tags_reaches_the_cache(
         tmp_path, "  - {name: a, driver: several, mode: poll}\n")
     runner.poll(node, NOW, io.StringIO(), io.StringIO())
     assert cached(cache)["a"]["fields"] == {"value": 1.0}
+
+
+# -- a reading repeated from an earlier read --------------------------------
+
+class RepeatingDriver(Driver):
+    description = "test double that repeats what it read earlier"
+
+    def read(self):
+        return Unchanged({"value": 3.0})
+
+
+def test_a_repeated_reading_reaches_the_database_and_not_the_readings_cache(
+        tmp_path, monkeypatch):
+    """Its age has to keep growing, or a dead source looks current forever."""
+    original = dict(REGISTRY)
+    REGISTRY["repeating"] = ("tests.test_runner", "RepeatingDriver")
+    published = []
+    monkeypatch.setattr(control_files, "publish_reading",
+                        lambda *args, **kwargs: published.append(args))
+    try:
+        path = tmp_path / "node.yaml"
+        path.write_text("site: s\nnode: n\nmeasurement: m\n"
+                        "control: {loads: {}}\ndevices:\n"
+                        "  - {name: a, driver: repeating, mode: poll}\n")
+        node = config.load(path, set(REGISTRY))
+        result = runner.read_device(node, node.devices[0], now_ns=NOW)
+    finally:
+        REGISTRY.clear()
+        REGISTRY.update(original)
+    assert result.ok
+    assert "value=3" in result.lines[0]
+    assert published == []

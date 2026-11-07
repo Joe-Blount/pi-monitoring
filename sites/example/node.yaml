@@ -206,6 +206,21 @@ devices:
     interval: 30s
     tags: {location: pi}
 
+  # Radiation forecast for the first hours after the next sunrise, as the field
+  # shortwave_wm2. The position comes from /etc/monitoring/location.yaml and
+  # leaves the machine rounded to a tenth of a degree; a node file carrying one
+  # is refused. The driver calls the service at most once an hour however often
+  # the collector runs it, and a poll between calls does not refresh the reading
+  # in the cache, so a staleness limit on it means what it says.
+  - name: forecast
+    driver: open_meteo
+    mode: poll
+    enabled: false            # needs the internet, so nothing depends on it
+    tags: {location: forecast}
+    params:
+      hours: 4                # how many hours after sunrise the mean covers
+      timeout: 10s
+
 
 # ---------------------------------------------------------------------------
 # Control
