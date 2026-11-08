@@ -203,17 +203,22 @@ class Loop:
             moved = abs(record.get("amp_hours_today", 0.0)
                         - last.get("amp_hours_today", 0.0))
             idle = (self.state.get(name) or {}).get("phase") == "idle"
+            held = self.state[name]
             if rest(record) == rest(last) and (
                     moved < self.PERSIST_AMP_HOURS_STEP
                     and not (idle and moved)):
+                held["persist_saved"] = True
                 continue
             try:
                 files.write_json(self.specs[name]["state_file"], record,
                                  mode=0o644)
             except OSError:
-                # Controlling is the job. The record is written again on
-                # the next change.
+                # Controlling goes on. A run does not start on a record that
+                # did not reach the card, because after a reboot it would
+                # run the same request again.
+                held["persist_saved"] = False
                 continue
+            held["persist_saved"] = True
             self._persisted[name] = dict(record)
 
     def _apply(self, decisions, driven):

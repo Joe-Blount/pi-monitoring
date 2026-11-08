@@ -60,6 +60,10 @@ dry_run_check:
   deadline: 150s
 absolute_max_run: 60m
 state_file: /var/lib/monitoring/irrigation.json
+floor:
+  sources:
+    - {device: bms, field: cell_min_volts, shed_below: 3.15,
+       restore_above: 3.25}
 """)
 
 DEVICES = {"bms", "mppt", "shunt"}
@@ -79,6 +83,7 @@ class Site:
         self.now = start or datetime.datetime(2026, 6, 21, 12, 0, tzinfo=ZONE)
         self.mono = 1000.0
         self.soc = 80.0
+        self.cell = 3.30
         self.volts = 13.4
         self.charge_state = 5.0
         self.amps = -2.0          # the battery discharge before the pump
@@ -86,11 +91,13 @@ class Site:
         self.switches = {"shedding_enabled": True, "loads": {}}
         self.state = {}
         self.trusted = True
+        self.saves = True
         self.history = []
 
     def readings(self):
         return {
-            "bms": {"fields": {"state_of_charge_pct": self.soc},
+            "bms": {"fields": {"state_of_charge_pct": self.soc,
+                               "cell_min_volts": self.cell},
                     "age_seconds": 30.0, "taken_at": self.mono - 30},
             "mppt": {"fields": {"battery_volts": self.volts,
                                 "charge_state_code": self.charge_state},
@@ -116,6 +123,9 @@ class Site:
         decisions, self.state = decide.decide(
             self.now, self.mono, self.trusted, self.readings(),
             self.switches, {"irrigation": self.spec}, self.state, SUNS)
+        # The loop writes the record after each pass and says whether it
+        # reached the card.
+        self.state["irrigation"]["persist_saved"] = self.saves
         pump = decisions["irrigation"]
         inverter = decisions["irrigation.inverter"]
         assert not (pump.connected and not inverter.connected), \
@@ -142,15 +152,28 @@ def run_to_pump(site):
 
 # -- the order ----------------------------------------------------------------
 
-def test_a_run_starts_the_inverter_first_and_the_pump_after_it_settles():
+def test_a_run_records_itself_then_starts_the_inverter_then_the_pump():
     site = Site()
     site.force("irrigation", "on", 20)
+    pump, inverter = site.step()
+    assert not inverter.connected and not pump.connected
+    assert "recording" in pump.reason
     pump, inverter = site.step()
     assert inverter.connected and not pump.connected
     pump, inverter = site.step(5)
     assert not pump.connected, "the pump started before the inverter settled"
     pump, inverter = site.step(5)
     assert inverter.connected and pump.connected
+
+
+def test_a_run_whose_record_cannot_be_saved_does_not_start():
+    site = Site()
+    site.saves = False
+    site.force("irrigation", "on", 20)
+    for _ in range(3):
+        pump, inverter = site.step()
+        assert not inverter.connected
+    assert "recorded on the card" in pump.reason
 
 
 def test_a_stop_turns_the_pump_off_first_and_the_inverter_after():
@@ -236,6 +259,7 @@ def test_three_failed_starts_lock_out_until_the_next_day():
     assert "locked out" in pump.reason
     site.now += datetime.timedelta(days=1)
     site.force("irrigation", "on", 20)
+    site.step()
     _, inverter = site.step()
     assert inverter.connected
 
@@ -248,6 +272,7 @@ def test_clearing_a_lockout_lets_a_run_start():
     site.switches["loads"]["irrigation.clear_lockout"] = {
         "at": site.now.timestamp()}
     site.force("irrigation", "on", 20)
+    site.step()
     _, inverter = site.step()
     assert inverter.connected
     assert site.persist["failed_today"] == 0
@@ -363,6 +388,7 @@ def test_a_manual_run_does_not_need_the_charge_state():
     site = Site()
     site.charge_state = 3.0     # bulk
     site.force("irrigation", "on", 20)
+    site.step()
     _, inverter = site.step()
     assert inverter.connected
 
@@ -392,8 +418,9 @@ def test_a_scheduled_start_runs_when_its_conditions_hold():
     site = Site(parsed(schedule=SCHEDULE))
     _, inverter = site.step(30)
     assert not inverter.connected       # 12:00:30
-    _, inverter = site.step(60)
-    assert inverter.connected           # 12:01:30
+    site.step(60)
+    _, inverter = site.step()
+    assert inverter.connected           # 12:01:40
 
 
 def test_a_scheduled_start_needs_the_charge_state():
@@ -429,7 +456,8 @@ def test_a_solar_start_is_placed_from_the_days_sunrise():
     raw = {"every_days": 1, "starts": [{"at": ["sunrise", "6h"],
                                         "run": "20m"}]}
     site = Site(parsed(schedule=raw))
-    _, inverter = site.step(60 * 11)     # 12:11, sunrise 06:10 plus 6 h
+    site.step(60 * 11)                   # 12:11, sunrise 06:10 plus 6 h
+    _, inverter = site.step()
     assert inverter.connected
 
 
@@ -473,9 +501,49 @@ def test_the_inverter_forced_off_stops_a_run_pump_first():
     checked_run(site)
     site.force("irrigation.inverter", "off", 60)
     pump, inverter = site.step()
-    assert not pump.connected
+    assert not pump.connected and inverter.connected
+    pump, inverter = site.step()
+    assert not pump.connected and not inverter.connected
+
+
+def test_the_inverter_alone_stays_on_while_a_run_starts():
+    site = Site()
+    site.force("irrigation.inverter", "on", 120)
+    site.step()
+    site.force("irrigation", "on", 20)
+    for _ in range(4):
+        _, inverter = site.step()
+        assert inverter.connected
+
+
+def test_a_cell_under_the_floor_stops_a_run_and_the_inverter_alone():
+    site = Site()
+    site.force("irrigation.inverter", "on", 120)
+    checked_run(site)
+    site.cell = 3.10
+    pump, inverter = site.step()
+    assert not pump.connected and "floor" in pump.reason
+    site.step()
+    _, inverter = site.step()
     assert not inverter.connected
-    assert site.history[-2] == (True, True)
+
+
+def test_a_cell_under_the_floor_refuses_a_start():
+    site = Site()
+    site.cell = 3.10
+    site.force("irrigation", "on", 20)
+    pump, inverter = site.step()
+    assert not inverter.connected and "floor" in pump.reason
+
+
+def test_a_run_waits_for_a_battery_reading_while_starting():
+    site = Site()
+    site.force("irrigation", "on", 20)
+    site.step()
+    site.step()
+    site.soc = 29.0
+    pump, inverter = site.step()
+    assert not inverter.connected and not pump.connected
 
 
 # -- the specification ----------------------------------------------------------
@@ -580,3 +648,98 @@ def test_the_days_record_is_written_when_it_changes(tmp_path):
     machine.once()
     saved = files.read_json(str(tmp_path / "irrigation.json"))
     assert saved["consumed"], "the request a run used was not recorded"
+
+
+# -- the record across clocks and restarts ----------------------------------
+
+def test_an_untrusted_clock_does_not_reset_the_days_counts():
+    site = Site()
+    site.state = {"irrigation": {"persist": {
+        "day": "2026-06-21", "amp_hours_today": 160.0, "failed_today": 2,
+        "skipped_today": [], "consumed": []}}}
+    site.trusted = False
+    site.now -= datetime.timedelta(days=1)
+    site.step()
+    assert site.persist["amp_hours_today"] == 160.0
+    site.trusted = True
+    site.now += datetime.timedelta(days=1)
+    site.step()
+    assert site.persist["amp_hours_today"] == 160.0
+
+
+def test_a_clock_stepped_back_does_not_reset_the_days_counts():
+    site = Site()
+    site.state = {"irrigation": {"persist": {
+        "day": "2026-06-22", "amp_hours_today": 160.0, "failed_today": 2,
+        "skipped_today": [], "consumed": []}}}
+    site.step()
+    assert site.persist["amp_hours_today"] == 160.0
+
+
+def test_a_run_a_reboot_ended_starts_the_cooldown():
+    site = Site(parsed(schedule={"every_days": 1,
+                                 "starts": [{"at": "12:00", "run": "20m"}]}))
+    site.state = {"irrigation": {"persist": {
+        "day": "2026-06-21", "amp_hours_today": 0.0, "failed_today": 0,
+        "skipped_today": [], "consumed": [], "active_run": "manual:1.0"}}}
+    pump, inverter = site.step()
+    assert not inverter.connected
+    assert "cooldown" in pump.reason
+    assert "active_run" not in site.persist
+    assert site.persist["last_run_end_epoch"] > 0
+
+
+def test_the_sample_a_run_stops_on_is_counted():
+    site = Site()
+    site.force("irrigation", "on", 2)
+    checked_run(site)
+    before = site.persist["amp_hours_today"]
+    site.step(60)
+    site.shunt(-2.0 - 40.0)
+    for _ in range(3):
+        site.step(30)
+    assert site.persist["amp_hours_today"] > before
+
+
+def test_a_reading_after_the_deadline_is_not_the_check():
+    site = Site()
+    run_to_pump(site)
+    pump_on = site.mono
+    site.step(5)
+    site.shunt(-2.0 - 3.0)                 # before the settle time
+    site.amps = -2.0 - 44.7
+    site.shunt_at = pump_on + 15 + 150 + 5  # past the deadline
+    site.mono = site.shunt_at
+    pump, _ = site.step(1)
+    assert not pump.connected
+    assert site.persist["failed_today"] == 1
+
+
+def test_a_second_start_runs_on_a_watering_day():
+    raw = {"every_days": 2, "starts": [{"at": "12:01", "run": "5m"},
+                                       {"at": "14:00", "run": "5m"}]}
+    site = Site(parsed(schedule=raw, limits=dict(BLOCK["limits"],
+                                                 cooldown="1h")))
+    site.step(90)
+    site.step()
+    site.step(10)
+    site.step(15)
+    site.shunt(-2.0 - 44.7)
+    site.step()
+    for _ in range(10):
+        site.shunt(-2.0 - 44.7)
+        site.step(60)
+    assert site.persist["last_run_day"] == "2026-06-21"
+    site.now = site.now.replace(hour=14, minute=0, second=30)
+    site.shunt(-2.0)
+    site.step()
+    _, inverter = site.step()
+    assert inverter.connected
+
+
+def test_a_late_scheduled_start_runs_its_whole_length():
+    raw = {"every_days": 1, "starts": [{"at": "11:00", "run": "20m"}]}
+    site = Site(parsed(schedule=raw))
+    site.step()
+    run = site.state["irrigation"]["run"]
+    assert run["ends_epoch"] - site.now.timestamp() == 20 * 60

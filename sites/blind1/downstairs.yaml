@@ -496,3 +496,16 @@ control:
 
       absolute_max_run: 60m
       state_file: /var/lib/monitoring/blind1-irrigation.json
+
+      # The same floor as the camera branches. A cell under it stops a run
+      # and the inverter, however the pack voltage and the charge read.
+      floor:
+        sources:
+          - device: bms
+            field: cell_min_volts
+            shed_below: 3.15
+            restore_above: 3.25
+          - device: mppt
+            field: battery_volts
+            shed_below: 12.6
+            restore_above: 13.0

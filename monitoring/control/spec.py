@@ -130,7 +130,8 @@ SOURCE_KEYS = {"device", "field"}
 IRRIGATION_KEYS = {"type", "enabled", "on_stale_data", "inverter", "pump",
                    "sources", "stale_after", "shunt_stale_after", "schedule",
                    "start_conditions", "continue_conditions", "limits",
-                   "dry_run_check", "absolute_max_run", "state_file"}
+                   "dry_run_check", "absolute_max_run", "state_file",
+                   "floor"}
 IRRIGATION_INVERTER_KEYS = {"control_pin", "polarity", "settle_after_on"}
 IRRIGATION_PUMP_KEYS = {"control_pin", "polarity",
                         "settle_before_inverter_off", "readback"}
@@ -724,9 +725,10 @@ def _sequenced_ac(name, where, raw, devices):
     inverter_raw = block("inverter", IRRIGATION_INVERTER_KEYS)
     inverter = _relay_part(where + " inverter", inverter_raw,
                            IRRIGATION_INVERTER_KEYS)
+    # Not zero: the pump must start on a later pass than the inverter.
     inverter["settle"] = _duration(where + " inverter", need(
         where + " inverter", inverter_raw, "settle_after_on"),
-        "settle_after_on")
+        "settle_after_on", allow_zero=False)
 
     pump_raw = block("pump", IRRIGATION_PUMP_KEYS)
     pump = _relay_part(where + " pump", pump_raw, IRRIGATION_PUMP_KEYS)
@@ -851,6 +853,11 @@ def _sequenced_ac(name, where, raw, devices):
         "schedule": schedule, "start": start, "continue": keep,
         "limits": limits, "dry_run_check": dry,
         "absolute_max_run": absolute, "state_file": state_file,
+        # The node's battery floor, the one the camera branches have. A
+        # cell under it stops irrigation and the inverter however the pack
+        # voltage and the charge read.
+        "floor": _floor(where + " floor", need(where, raw, "floor"),
+                        devices),
         # Not timed by the minimum run and off times: the sequence times
         # itself.
         "min_run": 0.0, "min_off": 0.0,
