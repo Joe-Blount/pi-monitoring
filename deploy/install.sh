@@ -561,6 +561,10 @@ echo "==> load controller"
 if [[ -f "$REPO/deploy/monitoring-control.service" ]]; then
     install -m 0644 "$REPO/deploy/monitoring-control.service" \
         /etc/systemd/system/monitoring-control.service
+    # The override page, started by its socket on the first visit.
+    for unit in monitoring-control-page.socket monitoring-control-page.service; do
+        install -m 0644 "$REPO/deploy/$unit" "/etc/systemd/system/$unit"
+    done
     install -d -m 0755 /etc/tmpfiles.d
     install -m 0644 "$REPO/deploy/tmpfiles-monitoring.conf" \
         /etc/tmpfiles.d/monitoring.conf
@@ -640,6 +644,12 @@ WANTS
             echo "    monitoring-control did NOT start. Loads are at their" >&2
             echo "    fail-safe. Check: journalctl -u monitoring-control -n 30" >&2
         fi
+        # Restarted, not only enabled, so a page process left from the last
+        # install exits and the next visit runs the code just installed.
+        systemctl stop monitoring-control-page.service >/dev/null 2>&1 || true
+        systemctl enable monitoring-control-page.socket >/dev/null 2>&1 || true
+        systemctl restart monitoring-control-page.socket || true
+        echo "    override page on port 8088"
         ;;
     no)
         # Stopped as well as left disabled. A node whose control block was
@@ -647,6 +657,9 @@ WANTS
         # driving relays from the block it started with.
         systemctl disable monitoring-control >/dev/null 2>&1 || true
         systemctl stop monitoring-control >/dev/null 2>&1 || true
+        # No controller, so no page: a force would change nothing.
+        systemctl disable --now monitoring-control-page.socket >/dev/null 2>&1 || true
+        systemctl stop monitoring-control-page.service >/dev/null 2>&1 || true
         echo "    installed, not started: this node file has control disabled"
         ;;
     *)

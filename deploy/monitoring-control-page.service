@@ -1,0 +1,24 @@
+# The override page. Started by its socket, and gone two minutes after the
+# last request. See monitoring/control/page.py.
+
+[Unit]
+Description=Pi monitoring override page
+Requires=monitoring-control-page.socket
+
+[Service]
+# The controller's own user. It owns /var/lib/monitoring, so it can replace
+# the switches file, and it can read the published document and the readings
+# in /run/monitoring. Root is not needed.
+User=telegraf
+ExecStart=/opt/monitoring/bin/control-page --node /etc/monitoring/node.yaml
+
+# The page writes only the switches file and its lock, both in
+# /var/lib/monitoring. Everything else is read only to it.
+NoNewPrivileges=true
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=/var/lib/monitoring
+PrivateTmp=true
+
+# A crash leaves the socket listening, and the next visit starts it again.
+Restart=no

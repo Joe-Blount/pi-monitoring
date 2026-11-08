@@ -49,6 +49,25 @@ sensor. The full explanation, and the kernel version that fixes it, is in
 
 ---
 
+## Force a load from a phone
+
+A node that runs load control serves a page on port 8088. Open it from a
+phone on the tailnet, or from a device on the site Wi-Fi:
+
+```
+http://<the node's tailnet address>:8088/
+```
+
+The page shows each load, whether it is powered and why, any force in effect,
+and the readings the loads decide on. Each load has buttons to force it on or
+off for 5 minutes up to 12 hours, or until a local time. Every force ends on
+its own. The page also turns shedding on and off.
+
+The page changes the same file as the commands below, so the two always
+agree. It answers only the tailnet and the site network. If the page says the
+controller has not published recently, a force has no effect until the
+controller runs again.
+
 ## Force the cameras on right now
 
 Each camera group is its own load: `cameras_near`, `cameras_far`, and the

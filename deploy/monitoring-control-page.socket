@@ -1,0 +1,18 @@
+# The override page: systemd listens, and starts the page on the first
+# connection. Between uses nothing runs, so the page costs no memory.
+#
+# Every address, because the tailnet and site addresses are not known when
+# this file is written and can arrive after boot. The page itself answers
+# only loopback, private, link-local and tailnet addresses, and refuses a
+# global one, so a node that ever gets a public address still keeps the page
+# off the internet.
+
+[Unit]
+Description=Pi monitoring override page (socket)
+
+[Socket]
+ListenStream=8088
+Accept=no
+
+[Install]
+WantedBy=sockets.target

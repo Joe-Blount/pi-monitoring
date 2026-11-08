@@ -250,3 +250,40 @@ def test_the_writable_paths_cover_everything_the_code_writes():
                  control_files.SWITCHES, control_files.HIGH_WATER):
         assert any(path.startswith(root + "/") for root in allowed), (
             "%s is not under any writable path" % path)
+
+
+# -- the override page --------------------------------------------------------
+
+PAGE_UNIT = _strip_comments(
+    (REPO / "deploy" / "monitoring-control-page.service").read_text())
+PAGE_SOCKET = _strip_comments(
+    (REPO / "deploy" / "monitoring-control-page.socket").read_text())
+INSTALL = (REPO / "deploy" / "install.sh").read_text()
+
+
+def test_the_page_listens_on_port_8088():
+    assert _value("ListenStream", PAGE_SOCKET) == "8088"
+
+
+def test_the_page_runs_the_installed_path_as_the_controllers_user():
+    assert _value("ExecStart", PAGE_UNIT).startswith(
+        "/opt/monitoring/bin/control-page ")
+    assert _value("User", PAGE_UNIT) == "telegraf"
+
+
+def test_the_page_may_write_only_where_the_switches_file_lives():
+    assert _value("ProtectSystem", PAGE_UNIT) == "strict"
+    assert _value("ReadWritePaths", PAGE_UNIT) == control_files.PERSIST_DIR
+
+
+def _install_case(branch):
+    case = INSTALL[INSTALL.index('case "$CONTROL_WANTED" in'):]
+    start = case.index("    %s)" % branch)
+    return case[start:case.index(";;", start)]
+
+
+def test_the_installer_starts_the_page_only_where_control_is_enabled():
+    assert "enable monitoring-control-page.socket" in _install_case("yes")
+    assert "disable --now monitoring-control-page.socket" in _install_case(
+        "no")
+    assert "enable monitoring-control-page" not in _install_case("no")
