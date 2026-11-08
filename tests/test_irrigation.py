@@ -371,6 +371,9 @@ def test_a_restart_during_a_run_ends_it():
     pump, inverter = site.step()
     assert not pump.connected and not inverter.connected
     assert "restarted" in pump.reason
+    for _ in range(3):
+        pump, inverter = site.step()
+        assert not pump.connected and not inverter.connected
 
 
 # -- start conditions -----------------------------------------------------------
@@ -743,3 +746,24 @@ def test_a_late_scheduled_start_runs_its_whole_length():
     site.step()
     run = site.state["irrigation"]["run"]
     assert run["ends_epoch"] - site.now.timestamp() == 20 * 60
+
+
+def test_a_run_that_lost_the_clock_still_starts_the_cooldown():
+    site = Site()
+    checked_run(site)
+    site.trusted = False
+    site.step()
+    site.step()
+    assert site.persist.get("active_run"), "the run's end was dropped"
+    site.trusted = True
+    site.step()
+    assert "active_run" not in site.persist
+    assert site.persist["last_run_end_epoch"] == site.now.timestamp()
+
+
+def test_a_run_whose_time_ends_while_starting_never_starts_the_pump():
+    site = Site()
+    site.force("irrigation", "on", 0.25)
+    for _ in range(4):
+        pump, _ = site.step()
+        assert not pump.connected

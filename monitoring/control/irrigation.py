@@ -227,8 +227,11 @@ def _remember(persist, request_id):
 def _close_run(state, persist, local_now, clock_trusted):
     """Record the end of a run, whatever ended it."""
     run = state.pop("run", None) or {}
-    persist.pop("active_run", None)
+    # The end is recorded against a trusted clock only. Until there is one
+    # the run stays marked active, and the first trusted pass closes it, so
+    # the cooldown still counts from it.
     if clock_trusted:
+        persist.pop("active_run", None)
         persist["last_run_end_epoch"] = local_now.timestamp()
     if run.get("checked"):
         persist["last_run_day"] = local_now.date().isoformat()
@@ -368,11 +371,12 @@ def irrigation_decision(name, spec, readings, local_now, mono_now, suns,
     restarted = state.pop("restarted", False)
     if inverter_state.pop("restarted", False) or restarted:
         if phase != IDLE:
-            phase = IDLE
+            state["phase"] = phase = IDLE
             state["stop_reason"] = "the controller restarted during a run"
             _close_run(state, persist, local_now, clock_trusted)
     if phase == IDLE and persist.get("active_run") and clock_trusted:
-        state["stop_reason"] = "a restart ended the last run"
+        state["stop_reason"] = ("the last run ended by a restart or without a "
+                                "trusted clock")
         _close_run(state, persist, local_now, clock_trusted)
 
     inverter_force = _force(inverter_name(name), switches, local_now,
@@ -450,6 +454,8 @@ def irrigation_decision(name, spec, readings, local_now, mono_now, suns,
             stop = "the inverter is forced off"
         elif not live:
             stop = "the request ended"
+        elif local_now.timestamp() >= run["ends_epoch"]:
+            stop = "the run time ended"
         else:
             stop = _keep_fails(spec, readings, floor_reason)
         if stop is None and not run["armed"]:
