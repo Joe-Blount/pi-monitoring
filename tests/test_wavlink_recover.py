@@ -546,3 +546,10 @@ def test_the_installer_refuses_the_timer_without_networkmanager():
 def test_the_service_outlasts_the_longest_repair():
     text = (REPO / "deploy" / "monitoring-wavlink-recover.service").read_text()
     assert "TimeoutStartSec=20min" in text
+
+
+def test_the_state_directory_is_readable_by_the_collector(tmp_path):
+    path = tmp_path / "wr" / "state.json"
+    (tmp_path / "wr").mkdir(mode=0o700)
+    wr.save_state({"sightings": 0, "attempts": []}, str(path))
+    assert (path.parent.stat().st_mode & 0o777) == 0o755

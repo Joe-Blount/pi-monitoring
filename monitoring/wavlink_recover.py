@@ -129,8 +129,11 @@ def current_boot():
 
 
 def save_state(state, path=STATE_PATH):
+    # Readable by everyone, so the collector can report the attempts. The
+    # record holds times and results and nothing secret.
     directory = os.path.dirname(path)
-    os.makedirs(directory, mode=0o700, exist_ok=True)
+    os.makedirs(directory, mode=0o755, exist_ok=True)
+    os.chmod(directory, 0o755)
     temp = "%s.tmp" % path
     with open(temp, "w") as f:
         json.dump(state, f, indent=1)

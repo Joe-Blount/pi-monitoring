@@ -134,6 +134,15 @@ devices:
     interval: 30s
     tags: {location: pi}
 
+  # The Wavlink repair's record: when it last ran, how it ended, and how
+  # many attempts in the last day.
+  - name: wavlink_repair
+    driver: wavlink_repair
+    mode: poll
+    interval: 5m
+    params: {path: /var/lib/wavlink-recover/state.json}
+    tags: {location: network}
+
   # The load controller, read as though it were a device.
   #
   # The controller is a separate service, not a collector. What it decided
