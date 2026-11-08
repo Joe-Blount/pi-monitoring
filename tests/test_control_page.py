@@ -27,10 +27,12 @@ def served(tmp_path, monkeypatch):
     server.server_close()
 
 
-def request(server, method, path, form=None, origin=True):
+def request(server, method, path, form=None, origin=True, host_header=None):
     host, port = server.server_address[:2]
     connection = http.client.HTTPConnection(host, port, timeout=5)
     headers = {}
+    if host_header:
+        headers["Host"] = host_header
     body = None
     if form is not None:
         body = urllib.parse.urlencode(form)
@@ -163,7 +165,8 @@ def test_a_duration_the_page_does_not_offer_is_refused(served):
 @pytest.mark.parametrize("address,allowed", [
     ("127.0.0.1", True), ("192.168.50.20", True), ("100.64.0.1", True),
     ("fd7a:115c:a1e0::1", True), ("::ffff:192.168.1.5", True),
-    ("8.8.8.8", False), ("2001:4860:4860::8888", False), ("junk", False)])
+    ("8.8.8.8", False), ("2001:4860:4860::8888", False),
+    ("2001:0:4136:e378::1", False), ("junk", False)])
 def test_only_the_tailnet_and_the_site_network_may_use_the_page(
         address, allowed):
     assert page.allowed_client(address) is allowed
@@ -178,3 +181,42 @@ def test_the_server_exits_after_a_quiet_spell(tmp_path, monkeypatch):
     thread.join(timeout=5)
     server.server_close()
     assert not thread.is_alive()
+
+
+def test_a_request_naming_a_foreign_host_is_refused(served):
+    """A name that resolves to this machine but belongs to another site."""
+    server, paths = served
+    origin = "http://evil.example:%d" % server.server_address[1]
+    status, _ = request(server, "POST", "/shedding", {"state": "off"},
+                        origin=origin, host_header=origin[7:])
+    assert status == 403
+    assert files.read_switches(paths.switches)["shedding_enabled"] is True
+
+
+@pytest.mark.parametrize("host,allowed", [
+    ("100.64.0.1:8088", True), ("[fd7a:115c:a1e0::1]:8088", True),
+    ("blind1pi.tail1234.ts.net:8088", True), ("evil.example:8088", False),
+    ("8.8.8.8:8088", False), ("", False)])
+def test_only_this_machines_own_names_are_answered(host, allowed):
+    assert page.allowed_host(host) is allowed
+
+
+def test_a_force_past_its_expiry_can_still_be_cleared(served):
+    server, paths = served
+    files.write_switches({"loads": {"cameras": {
+        "force": "off", "expires_epoch": 1.0}}}, paths.switches)
+    _, text = request(server, "GET", "/")
+    assert "Forced <b>off</b> expired" in text
+    assert "action=/clear" in text
+
+
+def test_a_silent_connection_does_not_hold_the_page(served, monkeypatch):
+    import socket
+    server, _ = served
+    monkeypatch.setattr(page.Handler, "timeout", 0.3)
+    idle = socket.create_connection(server.server_address[:2])
+    try:
+        status, _ = request(server, "GET", "/")
+        assert status == 200
+    finally:
+        idle.close()

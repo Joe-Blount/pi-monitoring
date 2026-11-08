@@ -864,3 +864,11 @@ def test_a_dry_run_is_not_refused_on_a_kernel_that_keeps_outputs_driven(
         tmp_path, "dry-run", "--node", str(node),
         extra_env={"MONITORING_PERSIST_PARAMETER": str(setting)})
     assert result.returncode == 0, result.stderr
+
+
+def test_override_until_accepts_only_the_documented_form(tmp_path):
+    result = run_switches(tmp_path, "override", "cameras", "off",
+                          "--until", "2099-01-01T12:00")
+    assert result.returncode == 2
+    assert "YYYY-MM-DD HH:MM" in result.stderr
+    assert not switches_path(tmp_path).exists()

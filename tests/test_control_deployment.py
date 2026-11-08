@@ -284,6 +284,8 @@ def _install_case(branch):
 
 def test_the_installer_starts_the_page_only_where_control_is_enabled():
     assert "enable monitoring-control-page.socket" in _install_case("yes")
+    # Enabled alone, a socket waits for the next boot to listen.
+    assert "restart monitoring-control-page.socket" in _install_case("yes")
     assert "disable --now monitoring-control-page.socket" in _install_case(
         "no")
     assert "enable monitoring-control-page" not in _install_case("no")

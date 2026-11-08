@@ -66,19 +66,50 @@ class Paths:
         self.boot = boot
 
 
-def allowed_client(address):
-    """Whether a client address may use the page.
+#: The client ranges the page answers: loopback, the private ranges of a
+#: site network, link-local, and the tailnet. Named one by one, because a
+#: test such as "not global" also passes ranges that reach the internet
+#: through a relay.
+ALLOWED_NETWORKS = tuple(ipaddress.ip_network(net) for net in (
+    "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+    "169.254.0.0/16", "100.64.0.0/10", "::1/128", "fc00::/7", "fe80::/10"))
 
-    Loopback, the private ranges of the site's network, link-local, and the
-    tailnet's shared range all pass. A global address never does.
-    """
+#: How long one connection may take to send its request.
+REQUEST_SECONDS = 10
+
+
+def _address(text):
     try:
-        ip = ipaddress.ip_address(address.split("%", 1)[0])
+        ip = ipaddress.ip_address(text.split("%", 1)[0])
     except ValueError:
-        return False
+        return None
     if ip.version == 6 and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
-    return not ip.is_global
+    return ip
+
+
+def allowed_client(address):
+    """Whether a client address may use the page."""
+    ip = _address(address)
+    return ip is not None and any(ip in net for net in ALLOWED_NETWORKS)
+
+
+def allowed_host(host):
+    """Whether the Host a browser sent names this machine.
+
+    An address the page answers, this machine's own name, or a tailnet name.
+    Any other name can be a site that points its name at this machine after
+    the browser has loaded it, and then its own page would pass the check
+    that a change comes from the same host.
+    """
+    if not host:
+        return False
+    name = urllib.parse.urlsplit("//" + host).hostname or ""
+    if allowed_client(name):
+        return True
+    own = socket.gethostname().lower().split(".")[0]
+    return (name in (own, own + ".local", "localhost")
+            or name.endswith(".ts.net"))
 
 
 def _age_text(seconds):
@@ -93,7 +124,7 @@ def _age_text(seconds):
 
 def _local(epoch, zone):
     if zone is None:
-        return "in %d min" % max(0, (epoch - time.time()) // 60)
+        return "at an hour this machine cannot place"
     return datetime.datetime.fromtimestamp(epoch, zone).strftime(
         "%Y-%m-%d %H:%M")
 
@@ -220,15 +251,22 @@ def render(view, message=None):
             parts.append("<div class=muted>%s</div>"
                          % esc(str(published["reason"])))
         entry = view.switches["loads"].get(name)
-        if (isinstance(entry, dict) and entry.get("force") in override.STATES
-                and isinstance(entry.get("expires_epoch"), (int, float))
-                and entry["expires_epoch"] > now):
+        # Clear is offered for every stored force, past its expiry too. A
+        # controller whose clock it does not trust can still hold one.
+        if isinstance(entry, dict) and entry.get("force") in override.STATES:
+            expires = entry.get("expires_epoch")
+            if isinstance(expires, bool) or not isinstance(
+                    expires, (int, float)):
+                when = "with no readable expiry"
+            elif expires > now:
+                when = "until %s" % _local(expires, view.zone)
+            else:
+                when = "expired %s" % _local(expires, view.zone)
             parts.append(
                 "<form method=post action=/clear><input type=hidden name=load"
-                " value='%s'>Forced <b>%s</b> until %s "
+                " value='%s'>Forced <b>%s</b> %s "
                 "<button>Clear</button></form>"
-                % (esc(name, quote=True), esc(entry["force"]),
-                   esc(_local(entry["expires_epoch"], view.zone))))
+                % (esc(name, quote=True), esc(entry["force"]), esc(when)))
         parts.append(
             "<form method=post action=/force><input type=hidden name=load "
             "value='%s'><select name=for>%s<option value=until>until</option>"
@@ -246,16 +284,23 @@ def render(view, message=None):
 class Handler(http.server.BaseHTTPRequestHandler):
     server_version = "control-page"
     paths = None
+    # Server is one request at a time, so a client that connects and sends
+    # nothing must not hold it.
+    timeout = REQUEST_SECONDS
 
     def log_message(self, form, *args):
         pass
 
     def _refuse_client(self):
-        if allowed_client(self.client_address[0]):
-            return False
-        self._send(403, "text/plain", "This page answers only the tailnet "
-                                      "and the site network.\n")
-        return True
+        if not allowed_client(self.client_address[0]):
+            self._send(403, "text/plain", "This page answers only the "
+                                          "tailnet and the site network.\n")
+            return True
+        if not allowed_host(self.headers.get("Host")):
+            self._send(403, "text/plain", "Open this page by the machine's "
+                                          "address or tailnet name.\n")
+            return True
+        return False
 
     def _send(self, status, kind, body):
         data = body.encode("utf-8")

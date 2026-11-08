@@ -46,10 +46,25 @@ def _locked(path):
     # line runs as root and the page does not.
     descriptor = os.open(path + ".lock", os.O_RDONLY | os.O_CREAT, 0o644)
     try:
+        _readable_by_all(descriptor)
         fcntl.flock(descriptor, fcntl.LOCK_EX)
         yield
     finally:
         os.close(descriptor)
+
+
+def _readable_by_all(descriptor):
+    """Make a file every writer can open, whatever the creator's umask.
+
+    Root under a strict umask would otherwise make a file only root can read,
+    and the controller and the page, which run as telegraf, would then see no
+    switches at all. Only the owner can change the mode, so a file another
+    user made is left as it is.
+    """
+    try:
+        os.fchmod(descriptor, 0o644)
+    except OSError:
+        pass
 
 
 def _change(path, change):
@@ -57,6 +72,14 @@ def _change(path, change):
     with _locked(path):
         switches = files.read_switches(path)
         files.write_switches(change(switches), path)
+        try:
+            descriptor = os.open(path, os.O_RDONLY)
+        except OSError:
+            return
+        try:
+            _readable_by_all(descriptor)
+        finally:
+            os.close(descriptor)
 
 
 def force(name, state, expires_epoch, path=None, known=None):
@@ -99,21 +122,21 @@ def set_shedding(enabled, path=None):
                                         shedding_enabled=bool(enabled)))
 
 
-def expiry_for(text, now):
+def expiry_for(text, now, what="the duration"):
     """The wall time a duration such as 15m from `now` reaches."""
     try:
-        return now + duration.seconds(text, "the duration")
+        return now + duration.seconds(text, what)
     except duration.DurationError as exc:
         raise OverrideError(str(exc))
 
 
-def expiry_until(text, zone):
+def expiry_until(text, zone, forms=LOCAL_TIME_FORMATS):
     """The wall time a local time at the site names.
 
     Read in the site's zone, never the machine's. A Pi left at the default
     zone runs in UTC, hours away from the site.
     """
-    for form in LOCAL_TIME_FORMATS:
+    for form in forms:
         try:
             when = datetime.datetime.strptime(text, form)
         except (TypeError, ValueError):

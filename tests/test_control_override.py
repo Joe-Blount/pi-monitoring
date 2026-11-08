@@ -112,3 +112,16 @@ def test_two_writers_at_once_keep_both_changes(tmp_path):
     for thread in threads:
         thread.join()
     assert set(read(path)["loads"]) == set(names)
+
+
+def test_the_files_stay_readable_by_others_under_a_strict_umask(tmp_path):
+    import os
+    import stat
+    path = str(tmp_path / "switches.json")
+    old = os.umask(0o077)
+    try:
+        override.force("cameras", "on", 1000.0, path=path)
+    finally:
+        os.umask(old)
+    for name in (path, path + ".lock"):
+        assert stat.S_IMODE(os.stat(name).st_mode) & 0o044 == 0o044

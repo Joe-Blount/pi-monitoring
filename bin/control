@@ -468,16 +468,22 @@ def cmd_override(args, override_parser):
         sys.stderr.write("%s\n" % exc)
         return 2
 
-    try:
-        if args.for_:
-            expires = override.expiry_for(args.for_, time.time())
-        else:
-            # Read as the site's own local time -- the zone the control
-            # loop's schedules run in, not whatever zone this machine's clock
-            # happens to be set to.
-            expires = override.expiry_until(args.until, zone)
-    except override.OverrideError as exc:
-        override_parser.error(str(exc))
+    if args.for_:
+        try:
+            expires = override.expiry_for(args.for_, time.time(), "--for")
+        except override.OverrideError as exc:
+            override_parser.error(str(exc))
+    else:
+        # Read as the site's own local time -- the zone the control loop's
+        # schedules run in, not whatever zone this machine's clock happens
+        # to be set to. Only the form this command documents.
+        try:
+            expires = override.expiry_until(args.until, zone,
+                                            forms=("%Y-%m-%d %H:%M",))
+        except override.OverrideError:
+            override_parser.error(
+                "--until needs a timestamp written as "
+                "\"YYYY-MM-DD HH:MM\", found %r" % args.until)
 
     override.force(name, state, expires, path=_switches_path())
     # The same formatter the status listing uses, so the line confirming an
