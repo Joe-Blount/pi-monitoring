@@ -110,12 +110,13 @@ def read_json(path):
     return value if isinstance(value, dict) else None
 
 
-def write_json(path, data):
+def write_json(path, data, mode=None):
     """Write a JSON file so a reader never sees it half written.
 
     Temp file in the same directory, flushed, then renamed. Rename within a
     directory is atomic, so a reader opening the path gets the whole of one
-    version or the whole of the other.
+    version or the whole of the other. A `mode` is set before the rename, so
+    no reader ever sees the file with the creator's umask instead.
     """
     directory = os.path.dirname(path) or "."
     os.makedirs(directory, exist_ok=True)
@@ -123,6 +124,8 @@ def write_json(path, data):
     try:
         with open(temporary, "w") as handle:
             json.dump(data, handle)
+            if mode is not None:
+                os.fchmod(handle.fileno(), mode)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
@@ -310,7 +313,9 @@ def read_switches(path=None):
 
 
 def write_switches(switches, path=None):
+    # Readable by all: the command line writes as root, and the controller
+    # and the override page read as telegraf.
     write_json(SWITCHES if path is None else path, {
         "shedding_enabled": bool(switches.get("shedding_enabled", True)),
         "loads": switches.get("loads") or {},
-    })
+    }, mode=0o644)

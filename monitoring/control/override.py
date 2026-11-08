@@ -44,7 +44,10 @@ def _locked(path):
     # Read only is enough to hold the lock. A lock file made by one user can
     # then still be opened by another, which matters because the command
     # line runs as root and the page does not.
-    descriptor = os.open(path + ".lock", os.O_RDONLY | os.O_CREAT, 0o644)
+    # Never through a link: root changing the mode of whatever a link
+    # pointed at would expose that file instead.
+    descriptor = os.open(path + ".lock",
+                         os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW, 0o644)
     try:
         _readable_by_all(descriptor)
         fcntl.flock(descriptor, fcntl.LOCK_EX)
@@ -72,14 +75,6 @@ def _change(path, change):
     with _locked(path):
         switches = files.read_switches(path)
         files.write_switches(change(switches), path)
-        try:
-            descriptor = os.open(path, os.O_RDONLY)
-        except OSError:
-            return
-        try:
-            _readable_by_all(descriptor)
-        finally:
-            os.close(descriptor)
 
 
 def force(name, state, expires_epoch, path=None, known=None):

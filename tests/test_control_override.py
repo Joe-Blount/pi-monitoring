@@ -125,3 +125,15 @@ def test_the_files_stay_readable_by_others_under_a_strict_umask(tmp_path):
         os.umask(old)
     for name in (path, path + ".lock"):
         assert stat.S_IMODE(os.stat(name).st_mode) & 0o044 == 0o044
+
+
+def test_the_lock_is_never_taken_through_a_link(tmp_path):
+    import os
+    target = tmp_path / "elsewhere"
+    target.write_text("")
+    os.chmod(target, 0o600)
+    path = str(tmp_path / "switches.json")
+    os.symlink(target, path + ".lock")
+    with pytest.raises(OSError):
+        override.force("cameras", "on", 1000.0, path=path)
+    assert oct(os.stat(target).st_mode & 0o777) == oct(0o600)
