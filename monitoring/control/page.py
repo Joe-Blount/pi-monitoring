@@ -34,6 +34,10 @@ from monitoring.control import files, location, override, spec
 #: set stays as small as what it shows.
 DURATIONS = ("5m", "15m", "1h", "4h", "12h")
 
+#: The run lengths offered for irrigation. The load's own limits cut a run
+#: shorter whatever is asked.
+RUN_DURATIONS = ("5m", "15m", "30m", "45m")
+
 #: How long the process waits for a request before it exits.
 IDLE_SECONDS = 120.0
 
@@ -137,10 +141,22 @@ class View:
         self.problems = []
         self.node = None
         self.loads = {}
+        #: Each relay a person can force, and how the page offers it: "run"
+        #: for an irrigation load, "inverter" for its inverter alone, and
+        #: "plain" for every other load.
+        self.rows = {}
         try:
             self.node = config.load(paths.node,
                                     known_drivers=driver_registry.names())
             self.loads = spec.load_control(self.node)
+            for load in self.loads.values():
+                for output, _, _ in spec.outputs(load):
+                    if load["type"] != "sequenced_ac":
+                        self.rows[output] = "plain"
+                    elif output == load["name"]:
+                        self.rows[output] = "run"
+                    else:
+                        self.rows[output] = "inverter"
         except (config.ConfigError, spec.SpecError) as exc:
             self.problems.append("The node file cannot be read: %s" % exc)
         try:
@@ -183,8 +199,11 @@ class View:
             block = raw.get(name) or {}
             # A fan names its source at the top; a shed load names it in
             # its ladder.
-            for source in (block.get("source"),
-                           (block.get("shed_ladder") or {}).get("source")):
+            sources = [block.get("source"),
+                       (block.get("shed_ladder") or {}).get("source")]
+            if isinstance(block.get("sources"), dict):
+                sources.extend(block["sources"].values())
+            for source in sources:
                 if isinstance(source, dict) and source.get("device"):
                     pair = (source["device"], source.get("field"))
                     if pair not in wanted:
@@ -238,9 +257,20 @@ def render(view, message=None):
         % ("on" if shedding else "off", "off" if shedding else "on",
            "off" if shedding else "on"))
 
-    options = "".join("<option>%s</option>" % d for d in DURATIONS)
+    def choices(durations):
+        return "".join("<option>%s</option>" % d for d in durations) + (
+            "<option value=until>until</option>")
+
+    def force_form(name, durations, state, label):
+        return ("<form method=post action=/force><input type=hidden "
+                "name=load value='%s'><select name=for>%s</select> "
+                "<input type=datetime-local name=until> <button name=state "
+                "value=%s>%s</button></form>"
+                % (esc(name, quote=True), choices(durations), state, label))
+
     now = time.time()
-    for name in sorted(view.loads):
+    for name in sorted(view.rows):
+        kind = view.rows[name]
         published = view.published.get(name) or {}
         powered = published.get("powered")
         state = ("unknown" if powered is None
@@ -250,6 +280,17 @@ def render(view, message=None):
         if published.get("reason"):
             parts.append("<div class=muted>%s</div>"
                          % esc(str(published["reason"])))
+        if kind == "run" and "amp_hours_today" in published:
+            parts.append("<div class=muted>Today: %.1f Ah, %d failed "
+                         "starts</div>" % (
+                             published["amp_hours_today"],
+                             published.get("failed_starts_today", 0)))
+        if kind == "run" and published.get("locked_out"):
+            parts.append(
+                "<form method=post action=/clear-lockout><input type=hidden "
+                "name=load value='%s'><b>Locked out</b> "
+                "<button>Clear lockout</button></form>"
+                % esc(name, quote=True))
         entry = view.switches["loads"].get(name)
         # Clear is offered for every stored force, past its expiry too. A
         # controller whose clock it does not trust can still hold one.
@@ -265,15 +306,20 @@ def render(view, message=None):
             parts.append(
                 "<form method=post action=/clear><input type=hidden name=load"
                 " value='%s'>Forced <b>%s</b> %s "
-                "<button>Clear</button></form>"
-                % (esc(name, quote=True), esc(entry["force"]), esc(when)))
-        parts.append(
-            "<form method=post action=/force><input type=hidden name=load "
-            "value='%s'><select name=for>%s<option value=until>until</option>"
-            "</select> <input type=datetime-local name=until> "
-            "<button name=state value=on>Force on</button> "
-            "<button name=state value=off>Force off</button></form></div>"
-            % (esc(name, quote=True), options))
+                "<button>%s</button></form>"
+                % (esc(name, quote=True), esc(entry["force"]), esc(when),
+                   "Stop" if kind == "run" and entry["force"] == "on"
+                   else "Clear"))
+        if kind == "run":
+            parts.append(force_form(name, RUN_DURATIONS, "on", "Run"))
+            parts.append(force_form(name, DURATIONS, "off", "Keep off"))
+            parts.append("<div class=muted>A run still stops at every "
+                         "safety limit: a dry or stalled pump, the battery, "
+                         "the run limit.</div>")
+        else:
+            parts.append(force_form(name, DURATIONS, "on", "Force on"))
+            parts.append(force_form(name, DURATIONS, "off", "Force off"))
+        parts.append("</div>")
     if view.zone is None:
         parts.append("<p class=muted>The location file cannot be read, so a "
                      "local time cannot be placed.</p>")
@@ -370,14 +416,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
             override.set_shedding(field("state") == "on", path=path)
             return
         view = View(self.paths)
+        name = field("load")
+        if name not in view.rows:
+            raise override.OverrideError("%r is not a load on this node"
+                                         % name)
         if action == "/clear":
-            if field("load") not in view.loads:
-                raise override.OverrideError(
-                    "%r is not a load on this node" % field("load"))
-            override.clear(field("load"), path=path)
+            override.clear(name, path=path)
+            return
+        if action == "/clear-lockout":
+            if view.rows[name] != "run":
+                raise override.OverrideError("%r has no lockout" % name)
+            override.clear_lockout(name, time.time(), path=path)
             return
         if action != "/force":
             raise LookupError(action)
+        offered = (RUN_DURATIONS if view.rows[name] == "run"
+                   and field("state") == "on" else DURATIONS)
         choice = field("for")
         if choice == "until":
             if view.zone is None:
@@ -387,13 +441,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             expires = override.expiry_until(field("until"), view.zone)
             if expires <= time.time():
                 raise override.OverrideError("that time has already passed")
-        elif choice in DURATIONS:
+        elif choice in offered:
             expires = override.expiry_for(choice, time.time())
         else:
             raise override.OverrideError(
-                "choose one of %s, or until" % ", ".join(DURATIONS))
-        override.force(field("load"), field("state"), expires, path=path,
-                       known=set(view.loads))
+                "choose one of %s, or until" % ", ".join(offered))
+        override.force(name, field("state"), expires, path=path,
+                       known=set(view.rows))
 
 
 class Server(http.server.HTTPServer):

@@ -67,9 +67,9 @@ class Loop:
         self.zone = zone
 
         self._relays = relays if relays is not None else {
-            name: relay.Relay(load["control_pin"], load["polarity"],
-                              load["trigger"])
-            for name, load in self.specs.items()}
+            output: relay.Relay(pin, polarity, load["trigger"])
+            for load in self.specs.values()
+            for output, pin, polarity in spec.outputs(load)}
 
         self._now = now or (lambda: datetime.datetime.now(self.zone))
         self._monotonic = monotonic or files.monotonic
@@ -88,6 +88,20 @@ class Loop:
         for held in self.state.values():
             if isinstance(held, dict) and held.get("commanded") is True:
                 held["restarted"] = True
+        # What an irrigation load keeps across a reboot: the day's amp-hours,
+        # its failed starts, its lockout, the last day it watered. The state
+        # file above is in tmpfs and gone after a reboot, so this comes back
+        # from the card when the state does not have it.
+        self._persisted = {}
+        for name, load in self.specs.items():
+            if load["type"] != "sequenced_ac":
+                continue
+            held = self.state.setdefault(name, {})
+            if not isinstance(held.get("persist"), dict):
+                record = files.read_json(load["state_file"])
+                if record is not None:
+                    held["persist"] = record
+            self._persisted[name] = held.get("persist")
         self.started = self._monotonic()
         self.passes = 0
         #: The level this process has driven on each pin. Not the stored
@@ -167,8 +181,40 @@ class Loop:
         self.passes += 1
         if persist:
             files.write_state(self.state, self._state_path, boot=self._boot)
+            self._save_persisted()
             self._publish_state(decisions, local_now, mono_now, verdict)
         return decisions
+
+    #: The amp-hours an irrigation run may add before its record is written
+    #: again. Every other change is written at once. A run then writes a few
+    #: times rather than once a shunt reading.
+    PERSIST_AMP_HOURS_STEP = 5.0
+
+    def _save_persisted(self):
+        for name in self._persisted:
+            record = (self.state.get(name) or {}).get("persist")
+            if not isinstance(record, dict):
+                continue
+            last = self._persisted[name] or {}
+
+            def rest(value):
+                return {k: v for k, v in value.items()
+                        if k != "amp_hours_today"}
+            moved = abs(record.get("amp_hours_today", 0.0)
+                        - last.get("amp_hours_today", 0.0))
+            idle = (self.state.get(name) or {}).get("phase") == "idle"
+            if rest(record) == rest(last) and (
+                    moved < self.PERSIST_AMP_HOURS_STEP
+                    and not (idle and moved)):
+                continue
+            try:
+                files.write_json(self.specs[name]["state_file"], record,
+                                 mode=0o644)
+            except OSError:
+                # Controlling is the job. The record is written again on
+                # the next change.
+                continue
+            self._persisted[name] = dict(record)
 
     def _apply(self, decisions, driven):
         """Drive each pin, and record the level that actually went out.
@@ -286,6 +332,10 @@ class Loop:
                 load["decided_on"] = float(decision.decided_on)
             if held.get("floor_latched") and held.get("floor_latched_by"):
                 load["floor_latched_by"] = str(held["floor_latched_by"])
+            # Fields a load type adds of its own, such as an irrigation
+            # load's amp-hours today.
+            for key, value in (held.get("published_extra") or {}).items():
+                load[key] = float(value)
             loads[name] = load
 
         try:

@@ -28,6 +28,12 @@
 site: blind1
 node: downstairs
 measurement: blind1
+
+# The pack and the shunt every minute rather than every three. The irrigation
+# load checks the pump on the shunt, and a dry pump runs until a reading
+# shows it. The cost is the phone applications finding the devices busy more
+# often.
+slow_poll_interval: 60s
 tags:
   node: downstairs
 
@@ -415,15 +421,11 @@ control:
     irrigation:
       type: sequenced_ac
 
-      # Declared, specified, and not driven. The controller refuses an
-      # enabled load of a type it does not drive, rather than skipping it at
-      # run time: a file saying a load is on with nothing driving it reads
-      # exactly like a load that works.
-      #
-      # Three reasons it waits. Every threshold below is a placeholder until
-      # the pump is characterized. It is the only load here that can cause
-      # physical damage, through a pump drawing 90 to 180 A behind an
-      # inverter sequence. And it is seasonal, so nothing is lost by waiting.
+      # The pump runs only through the inverter. The controller starts the
+      # inverter, then the pump, and stops them in the other order. A force
+      # on "irrigation" asks for a run until the force expires; a force on
+      # "irrigation.inverter" turns on the inverter alone, for AC power.
+      # Neither gets past a safety stop. See monitoring/control/irrigation.py.
       enabled: false
       on_stale_data: deny
 
@@ -432,11 +434,6 @@ control:
                                       # the inverter's own panel switch
         polarity: energize_to_connect
         settle_after_on: 10s
-        readback:
-          source: load                # a standing idle draw while commanded
-                                      # off means the panel switch was left on
-          pin: null
-          expect_amps: {min: 0.3, max: 3.0}   # measured idle about 0.8 A
 
       pump:
         control_pin: 22               # physical 15
@@ -448,13 +445,31 @@ control:
           # Measured at the shunt as the rise in battery discharge over the
           # current just before the pump starts, with the inverter already
           # on: about 44.7 A pumping water and 16.1 A running dry. Below the
-          # minimum means a dry pump or a lost prime.
+          # minimum means a dry pump or a lost prime; above the maximum, a
+          # stalled pump.
           expect_amps: {min: 30, max: 60}
 
-      schedule: []                    # none yet; manual requests only at first
-      request_file: /var/lib/monitoring/blind1-irrigation-request.json
-      request_max_age: 2h
+      sources:
+        soc: {device: bms, field: state_of_charge_pct}
+        volts: {device: mppt, field: battery_volts}
+        shunt: {device: shunt, field: shunt_amps}
+        charge_state: {device: mppt, field: charge_state_code}
+      stale_after: 10m
+      # The shunt is read every minute on this node, so two and a half
+      # minutes is two missed reads.
+      shunt_stale_after: 150s
 
+      # None yet. When it is set: every_days, and a list of daily starts,
+      # each a clock time or an event and offset, and a run length:
+      #
+      #   schedule:
+      #     every_days: 2
+      #     starts:
+      #       - {at: [sunrise, 1h], run: 20m}
+      schedule: null
+
+      # A scheduled run must pass all of these. A run an operator asks for
+      # skips the charge state, and the cooldown below.
       start_conditions:
         charge_state_was_in: [float, absorption]
         within: 6h
@@ -469,18 +484,15 @@ control:
       limits:
         cooldown: 2h
         max_amp_hours_per_day: 160    # about 31 percent of the bank
+        # Failed starts in one day before irrigation locks out until the
+        # next day. A dry start costs about 15 s to a minute of dry running.
         failed_start_lockout: 3
-        lockout_until: next_day
 
+      # The first shunt reading at least `settle` after the pump starts is
+      # the check. No reading within `deadline` after that stops the run.
       dry_run_check:
-        enabled: true
-        expected_delta_amps: {min: 90, max: 180}   # placeholder until the
-                                                   # load is characterized
         settle: 15s
-        on_stale_shunt: skip
+        deadline: 150s
 
-      guard:
-        absolute_max_run: 60m
-        input: state_file
-        pin: null
-        stale_after: 60s
+      absolute_max_run: 60m
+      state_file: /var/lib/monitoring/blind1-irrigation.json

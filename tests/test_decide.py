@@ -1544,7 +1544,7 @@ def test_a_load_type_this_does_not_drive_is_refused_rather_than_ignored():
     decisions, _ = decide.decide(
         at(12), 0.0, True, reading(50.0),
         {"shedding_enabled": True, "loads": {}},
-        {"irrigation": {"type": "sequenced_ac", "min_run": 0.0,
+        {"irrigation": {"type": "hot_tub", "min_run": 0.0,
                         "min_off": 0.0}},
         {}, SUNS)
     assert not decisions["irrigation"].connected

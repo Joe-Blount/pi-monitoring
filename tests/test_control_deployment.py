@@ -289,3 +289,16 @@ def test_the_installer_starts_the_page_only_where_control_is_enabled():
     assert "disable --now monitoring-control-page.socket" in _install_case(
         "no")
     assert "enable monitoring-control-page" not in _install_case("no")
+
+
+def test_the_controller_has_a_watchdog_it_can_feed():
+    assert int(_value("WatchdogSec", UNIT)) > 0
+    assert _value("NotifyAccess", UNIT) == "main"
+    control = (REPO / "bin" / "control").read_text()
+    assert 'b"WATCHDOG=1"' in control
+
+
+def test_a_node_can_read_its_slow_devices_more_often():
+    assert "slow_poll_interval" in INSTALL
+    assert 'interval = "180s"' in (
+        REPO / "deploy" / "telegraf.d" / "monitoring-slow.conf").read_text()

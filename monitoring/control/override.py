@@ -111,6 +111,20 @@ def clear(name, path=None):
     _change(path, change)
 
 
+def clear_lockout(name, now, path=None):
+    """End an irrigation load's lockout.
+
+    Written as the moment it was asked for. The loop ends a lockout set
+    before that moment, and a lockout set after it, by later failed starts,
+    stands.
+    """
+    def change(switches):
+        loads = dict(switches["loads"])
+        loads[name + ".clear_lockout"] = {"at": float(now)}
+        return dict(switches, loads=loads)
+    _change(path, change)
+
+
 def set_shedding(enabled, path=None):
     """Let tiers shed loads, or hold every shed load on."""
     _change(path, lambda switches: dict(switches,

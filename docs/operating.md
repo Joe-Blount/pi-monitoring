@@ -68,6 +68,38 @@ agree. It answers only the tailnet and the site network. If the page says the
 controller has not published recently, a force has no effect until the
 controller runs again.
 
+## Run the irrigation, or the inverter alone
+
+The irrigation load has two rows on the page. **irrigation** runs the pump:
+the controller turns on the inverter, waits for it to settle, then starts the
+pump. **irrigation.inverter** turns on the inverter alone, for AC power, and
+the pump stays off. From the command line:
+
+```
+sudo control override irrigation on --for 20m
+sudo control override irrigation.inverter on --for 4h
+```
+
+A run stops at the first of these, whatever was asked:
+
+- the time asked for, the 45 minute run limit, or the 60 minute hard limit
+- charge at or below 30 percent, or the battery at or below 12.6 V
+- a pump that draws less than 30 A or more than 60 A, checked on the first
+  shunt reading 15 s after it starts: dry, lost its prime, or stalled
+- no fresh shunt reading
+- 160 Ah used in the day
+
+A pump that fails its check counts as a failed start. After three in one
+day, irrigation locks out until the next day. Clear the lockout from the page
+or with:
+
+```
+sudo control clear-lockout irrigation
+```
+
+The inverter alone stops at the same battery limits, and it comes back on
+only when the charge is above 40 percent and the battery above 13.0 V.
+
 ## Force the cameras on right now
 
 Each camera group is its own load: `cameras_near`, `cameras_far`, and the

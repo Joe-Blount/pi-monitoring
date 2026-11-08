@@ -11,6 +11,7 @@
     control shedding on
     control shedding off
     control shedding status
+    control clear-lockout <load>
 
 `run` is the long-running service a systemd unit starts. `once` is a single
 pass of the same thing, for a person standing at the machine. `dry-run` is
@@ -30,6 +31,7 @@ import argparse
 import datetime
 import os
 import signal
+import socket
 import sys
 import time
 
@@ -165,9 +167,9 @@ def _pretend_relays(node):
     nothing in it moved.
     """
     specs = spec.load_control(node)
-    return {name: relay.Pretend(load["control_pin"], load["polarity"],
-                                load["trigger"])
-            for name, load in specs.items()}
+    return {output: relay.Pretend(pin, polarity, load["trigger"])
+            for load in specs.values()
+            for output, pin, polarity in spec.outputs(load)}
 
 
 # -- printing what a pass decided --------------------------------------------
@@ -305,9 +307,31 @@ def _run(machine, interval, should_stop, sleep=time.sleep):
     try:
         while not should_stop():
             machine.once()
+            _tell_systemd(b"WATCHDOG=1")
             _wait(interval, should_stop, sleep=sleep)
     finally:
         machine.close()
+
+
+def _tell_systemd(message):
+    """Tell systemd this loop is alive, when it runs under systemd.
+
+    The unit has a watchdog. If passes stop, because the loop hangs rather
+    than ends, systemd kills the process, the pins are released, and every
+    load falls to its wired fail-safe. A pump left running by a hung loop is
+    the case this covers.
+    """
+    address = os.environ.get("NOTIFY_SOCKET")
+    if not address:
+        return
+    if address.startswith("@"):
+        address = "\0" + address[1:]
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as link:
+            link.connect(address)
+            link.sendall(message)
+    except OSError:
+        pass
 
 
 def cmd_run(args):
@@ -496,6 +520,12 @@ def cmd_override(args, override_parser):
     return 0
 
 
+def cmd_clear_lockout(args):
+    override.clear_lockout(args.load, time.time(), path=_switches_path())
+    sys.stdout.write("%s: lockout cleared\n" % args.load)
+    return 0
+
+
 def cmd_shedding(args):
     switches = _read_switches()
 
@@ -580,6 +610,11 @@ def build_parser():
              "a local time written as \"YYYY-MM-DD HH:MM\"")
     override_p.set_defaults(override_parser=override_p)
 
+    lockout_p = subparsers.add_parser(
+        "clear-lockout",
+        help="let an irrigation load that failed to start try again today")
+    lockout_p.add_argument("load", help="the irrigation load's name")
+
     shedding_p = subparsers.add_parser(
         "shedding", help="enable, disable, or report the shedding switch")
     shedding_sub = shedding_p.add_subparsers(
@@ -608,6 +643,8 @@ def main(argv=None):
         return cmd_override(args, args.override_parser)
     if args.command == "shedding":
         return cmd_shedding(args)
+    if args.command == "clear-lockout":
+        return cmd_clear_lockout(args)
     parser.error("unknown command %r" % args.command)  # pragma: no cover
 
 

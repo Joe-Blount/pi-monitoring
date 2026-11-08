@@ -503,35 +503,8 @@ def test_a_load_with_no_ladder_is_refused():
 
 # -- types ------------------------------------------------------------------
 
-def test_an_enabled_deferred_load_is_refused_rather_than_skipped():
-    """Skipping it at run time leaves a file saying the load is enabled and
-    nothing driving it, which reads exactly like a load that works."""
-    message = refused(type="sequenced_ac")
-    assert "enabled: false" in message
-    assert "indistinguishable" in message
-
-
-def test_a_deferred_load_that_does_not_say_enabled_is_refused():
-    """Absent reads as enabled, the way it does for every load, so a
-    deferred load has to say false in so many words."""
-    message = refused({"type": "sequenced_ac"})
-    assert "enabled: false" in message
-
-
-def test_a_disabled_deferred_load_is_accepted_and_not_driven():
-    assert spec.load_spec("irrigation",
-                          {"type": "sequenced_ac", "enabled": False},
-                          {"bms"}) is None
-
-
 def test_a_load_type_nothing_drives_is_refused():
     assert "not a type this controller drives" in refused(type="hot_tub")
-
-
-def test_a_deferred_type_is_specified_and_not_driven():
-    assert spec.load_spec("pump", {"type": "sequenced_ac", "enabled": False,
-                                       "inside": {}}, {"box"}) is None
-    assert "enabled: false" in refused({"type": "sequenced_ac"})
 
 
 # -- a CPU fan --------------------------------------------------------------
@@ -825,21 +798,6 @@ def test_a_floor_present_but_empty_is_refused():
     """The likeliest cause is a half-deleted floor, and silently dropping
     the only rule with nothing above it is the wrong way to resolve that."""
     assert refused(shed_ladder=dict(LADDER, floor={}))
-
-
-def test_a_disabled_deferred_load_keeps_its_specification():
-    """The whole point of deferring rather than deleting. Checking keys
-    before the type would refuse the irrigation block for declaring an
-    inverter and a pump, and the only accepted form would be two lines,
-    which deletes the work."""
-    assert spec.load_spec("irrigation", {
-        "type": "sequenced_ac",
-        "enabled": False,
-        "inverter": {"control_pin": 25, "polarity": "energize_to_connect"},
-        "pump": {"control_pin": 22, "polarity": "energize_to_connect"},
-        "guard": {"absolute_max_run": "60m"},
-        "limits": {"cooldown": "2h"},
-    }, {"bms"}) is None
 
 
 # -- the whole block --------------------------------------------------------

@@ -230,6 +230,8 @@ def known_driver_fields():
     from monitoring.drivers.host import HostDriver
     from monitoring.drivers.rain_gauge import RainCounter
     from monitoring.drivers import abc_bms, eg4_modbus, jbd, open_meteo, pi30
+    from monitoring.drivers import qinglan
+    from tests import qinglan_fixtures as shunt_fx
     from monitoring.drivers import vedirect
     from tests import open_meteo_fixtures as forecast
     from tests import vedirect_fixtures as fx
@@ -255,6 +257,9 @@ def known_driver_fields():
         # camera ladder reads its state of charge and its cell minimum from,
         # which makes it the one fixture those two references depend on.
         "jbd": jbd.parse(jbd_fx.real_messages()),
+        # From frames a real shunt sent. The irrigation load reads its
+        # current.
+        "qinglan": qinglan.parse(shunt_fx.real_messages()),
         # From a register block captured off the inverter, so a
         # control block naming a field it does not emit fails here.
         "eg4_modbus": eg4_modbus.parse(eg4.PV_ON_RECHARGING),

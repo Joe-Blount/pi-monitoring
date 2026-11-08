@@ -23,13 +23,12 @@ from . import relay
 #: Load types a controller will drive. Anything else declared is refused at
 #: load time rather than skipped at run time, because a load the file says is
 #: enabled and nothing drives is indistinguishable from one that works.
-DRIVEN_TYPES = ("dc_branch", "cpu_fan", "vent_fan", "battery_heating")
+DRIVEN_TYPES = ("dc_branch", "cpu_fan", "vent_fan", "battery_heating",
+                "sequenced_ac")
 
 #: Declared, specified, and deliberately not driven yet. An enabled load of
-#: one of these types is refused. The irrigation sequence waits on thresholds
-#: that are placeholders pending measurement, and it is the only load here
-#: that can flood a field.
-DEFERRED_TYPES = ("sequenced_ac",)
+#: one of these types is refused.
+DEFERRED_TYPES = ()
 
 SCHEDULE_TYPES = ("clock", "solar", "never")
 
@@ -126,6 +125,25 @@ LADDER_KEYS = {"source", "stale_after", "release_margin_pct",
 FLOOR_KEYS = {"sources"}
 FLOOR_SOURCE_KEYS = {"device", "field", "shed_below", "restore_above"}
 SOURCE_KEYS = {"device", "field"}
+
+#: Keys an irrigation load may carry, and the keys of each of its blocks.
+IRRIGATION_KEYS = {"type", "enabled", "on_stale_data", "inverter", "pump",
+                   "sources", "stale_after", "shunt_stale_after", "schedule",
+                   "start_conditions", "continue_conditions", "limits",
+                   "dry_run_check", "absolute_max_run", "state_file"}
+IRRIGATION_INVERTER_KEYS = {"control_pin", "polarity", "settle_after_on"}
+IRRIGATION_PUMP_KEYS = {"control_pin", "polarity",
+                        "settle_before_inverter_off", "readback"}
+IRRIGATION_READBACK_KEYS = {"source", "pin", "expect_amps"}
+IRRIGATION_SOURCES = ("soc", "volts", "shunt", "charge_state")
+IRRIGATION_SCHEDULE_KEYS = {"every_days", "starts"}
+IRRIGATION_START_KEYS = {"at", "run"}
+IRRIGATION_START_CONDITION_KEYS = {"charge_state_was_in", "within",
+                                   "soc_above_pct", "battery_volts_above"}
+IRRIGATION_CONTINUE_KEYS = {"max_run", "soc_above_pct", "battery_volts_above"}
+IRRIGATION_LIMIT_KEYS = {"cooldown", "max_amp_hours_per_day",
+                         "failed_start_lockout"}
+IRRIGATION_DRY_KEYS = {"settle", "deadline"}
 TIER_KEYS = {"below_pct", "schedule"}
 SCHEDULE_KEYS = {"type", "on_from", "on_to", "on_windows"}
 WINDOW_KEYS = {"from", "to"}
@@ -661,6 +679,184 @@ def _battery_heater(where, raw, devices):
     }
 
 
+def _relay_part(where, raw, keys):
+    _only(where, raw, keys)
+    pin = raw.get("control_pin")
+    if isinstance(pin, bool) or not isinstance(pin, int):
+        _fail(where, "needs a control_pin, found %r" % (pin,))
+    if raw.get("polarity") != "energize_to_connect":
+        # A dead controller must leave the pump and the inverter off.
+        _fail(where, "polarity must be energize_to_connect, so a dead "
+                     "controller leaves it off")
+    return {"control_pin": pin, "polarity": raw["polarity"]}
+
+
+def _irrigation_start_at(where, value):
+    if isinstance(value, str):
+        return ("clock", _minutes(where, value, "at"))
+    if (isinstance(value, list) and len(value) == 2
+            and value[0] in SOLAR_EVENTS):
+        return ("solar", value[0], datetime.timedelta(seconds=_duration(
+            where, value[1], "at offset", allow_negative=True)))
+    _fail(where, "at must be a time written as HH:MM, or an event and an "
+                 "offset such as [sunrise, 1h], found %r" % (value,))
+
+
+def _sequenced_ac(name, where, raw, devices):
+    """An irrigation load: an inverter, a pump behind it, and its rules."""
+    from monitoring.drivers import vedirect
+    if raw.get("on_stale_data", "deny") != "deny":
+        _fail(where, "on_stale_data must be deny: irrigation does not run "
+                     "on a reading it cannot trust")
+
+    def block(key, keys):
+        value = raw.get(key)
+        if not isinstance(value, dict):
+            _fail(where, "needs a %s block" % key)
+        _only("%s %s" % (where, key), value, keys)
+        return value
+
+    def need(at, mapping, key):
+        if key not in mapping:
+            _fail(at, "needs %s" % key)
+        return mapping[key]
+
+    inverter_raw = block("inverter", IRRIGATION_INVERTER_KEYS)
+    inverter = _relay_part(where + " inverter", inverter_raw,
+                           IRRIGATION_INVERTER_KEYS)
+    inverter["settle"] = _duration(where + " inverter", need(
+        where + " inverter", inverter_raw, "settle_after_on"),
+        "settle_after_on")
+
+    pump_raw = block("pump", IRRIGATION_PUMP_KEYS)
+    pump = _relay_part(where + " pump", pump_raw, IRRIGATION_PUMP_KEYS)
+    pump["settle_off"] = _duration(where + " pump", need(
+        where + " pump", pump_raw, "settle_before_inverter_off"),
+        "settle_before_inverter_off")
+    readback = pump_raw.get("readback")
+    at = where + " pump readback"
+    _only(at, readback, IRRIGATION_READBACK_KEYS)
+    if readback.get("source") != "load" or readback.get("pin") is not None:
+        _fail(at, "source must be load and pin null: the pump is checked on "
+                  "the battery current the shunt measures")
+    expect = need(at, readback, "expect_amps")
+    _only(at + " expect_amps", expect, {"min", "max"})
+    low = _number(at, need(at, expect, "min"), "expect_amps min")
+    high = _number(at, need(at, expect, "max"), "expect_amps max")
+    if not 0 < low < high:
+        _fail(at, "expect_amps needs 0 < min < max")
+    pump["expect_amps"] = (low, high)
+
+    sources_raw = block("sources", set(IRRIGATION_SOURCES))
+    sources = {}
+    for key in IRRIGATION_SOURCES:
+        sources[key] = _source("%s sources %s" % (where, key),
+                               need(where + " sources", sources_raw, key),
+                               devices)
+
+    schedule = None
+    schedule_raw = raw.get("schedule")
+    if schedule_raw not in (None, [], {}):
+        at = where + " schedule"
+        _only(at, schedule_raw, IRRIGATION_SCHEDULE_KEYS)
+        every = need(at, schedule_raw, "every_days")
+        if isinstance(every, bool) or not isinstance(every, int) or every < 1:
+            _fail(at, "every_days must be a whole number of days, 1 or more")
+        starts = need(at, schedule_raw, "starts")
+        if not isinstance(starts, list) or not starts:
+            _fail(at, "needs at least one start")
+        parsed = []
+        for index, entry in enumerate(starts):
+            here = "%s start %d" % (at, index)
+            _only(here, entry, IRRIGATION_START_KEYS)
+            parsed.append({
+                "at": _irrigation_start_at(here, need(here, entry, "at")),
+                "run": _duration(here, need(here, entry, "run"), "run",
+                                 allow_zero=False)})
+        schedule = {"every_days": every, "starts": parsed}
+
+    start_raw = block("start_conditions", IRRIGATION_START_CONDITION_KEYS)
+    at = where + " start_conditions"
+    states = need(at, start_raw, "charge_state_was_in")
+    codes = {label: code for code, label in vedirect.CHARGE_STATE.items()}
+    if not isinstance(states, list) or not states or any(
+            state not in codes for state in states):
+        _fail(at, "charge_state_was_in must list charge states from: %s"
+                  % ", ".join(sorted(codes)))
+    start = {
+        "charge_state_names": list(states),
+        "charge_state_codes": {codes[state] for state in states},
+        "charge_state_within": _duration(at, need(at, start_raw, "within"),
+                                         "within", allow_zero=False),
+        "soc_above": _number(at, need(at, start_raw, "soc_above_pct"),
+                             "soc_above_pct"),
+        "volts_above": _number(at, need(at, start_raw,
+                                        "battery_volts_above"),
+                               "battery_volts_above"),
+    }
+
+    keep_raw = block("continue_conditions", IRRIGATION_CONTINUE_KEYS)
+    at = where + " continue_conditions"
+    keep = {
+        "max_run": _duration(at, need(at, keep_raw, "max_run"), "max_run",
+                             allow_zero=False),
+        "soc_above": _number(at, need(at, keep_raw, "soc_above_pct"),
+                             "soc_above_pct"),
+        "volts_above": _number(at, need(at, keep_raw, "battery_volts_above"),
+                               "battery_volts_above"),
+    }
+    if keep["soc_above"] >= start["soc_above"] or (
+            keep["volts_above"] >= start["volts_above"]):
+        # The start minimums are also where an inverter held off by the
+        # battery comes back on, so they must sit above the stops.
+        _fail(at, "the continue minimums must be below the start minimums")
+
+    limits_raw = block("limits", IRRIGATION_LIMIT_KEYS)
+    at = where + " limits"
+    lockout = need(at, limits_raw, "failed_start_lockout")
+    if isinstance(lockout, bool) or not isinstance(lockout, int) or \
+            lockout < 1:
+        _fail(at, "failed_start_lockout must be a whole number, 1 or more")
+    limits = {
+        "cooldown": _duration(at, need(at, limits_raw, "cooldown"),
+                              "cooldown"),
+        "max_amp_hours": _number(at, need(at, limits_raw,
+                                          "max_amp_hours_per_day"),
+                                 "max_amp_hours_per_day"),
+        "failed_start_lockout": lockout,
+    }
+
+    dry_raw = block("dry_run_check", IRRIGATION_DRY_KEYS)
+    at = where + " dry_run_check"
+    dry = {"settle": _duration(at, need(at, dry_raw, "settle"), "settle"),
+           "deadline": _duration(at, need(at, dry_raw, "deadline"),
+                                 "deadline", allow_zero=False)}
+
+    absolute = _duration(where, need(where, raw, "absolute_max_run"),
+                         "absolute_max_run", allow_zero=False)
+    if keep["max_run"] > absolute:
+        _fail(where, "max_run cannot be longer than absolute_max_run")
+    state_file = raw.get("state_file")
+    if not isinstance(state_file, str) or not state_file.startswith("/"):
+        _fail(where, "state_file must be an absolute path")
+
+    return {
+        "name": name, "type": "sequenced_ac",
+        "inverter": inverter, "pump": pump, "sources": sources,
+        "stale_after": _duration(where, need(where, raw, "stale_after"),
+                                 "stale_after", allow_zero=False),
+        "shunt_stale_after": _duration(
+            where, need(where, raw, "shunt_stale_after"),
+            "shunt_stale_after", allow_zero=False),
+        "schedule": schedule, "start": start, "continue": keep,
+        "limits": limits, "dry_run_check": dry,
+        "absolute_max_run": absolute, "state_file": state_file,
+        # Not timed by the minimum run and off times: the sequence times
+        # itself.
+        "min_run": 0.0, "min_off": 0.0,
+    }
+
+
 def load_spec(name, raw, devices):
     """Parse one load. Returns the spec a decision can act on."""
     where = "load %s" % name
@@ -684,6 +880,11 @@ def load_spec(name, raw, devices):
     if kind not in DRIVEN_TYPES:
         _fail(where, "type %r is not a type this controller drives; known: %s"
                      % (kind, ", ".join(DRIVEN_TYPES + DEFERRED_TYPES)))
+    if kind == "sequenced_ac":
+        _only(where, raw, IRRIGATION_KEYS)
+        if not _enabled(where, raw.get("enabled", True)):
+            return None
+        return _sequenced_ac(name, where, raw, devices)
 
     _only(where, raw, {"cpu_fan": CPU_FAN_KEYS,
                        "vent_fan": VENT_FAN_KEYS,
@@ -754,3 +955,17 @@ def load_control(node):
         for spec in loads.values():
             spec["trigger"] = trigger
     return loads
+
+
+def outputs(load):
+    """The relays one load drives, as (relay name, pin, polarity).
+
+    One for most loads. Two for an irrigation load: its inverter, under the
+    load's name with ".inverter" added, and its pump, under the load's name.
+    """
+    if load["type"] == "sequenced_ac":
+        return [(load["name"] + ".inverter", load["inverter"]["control_pin"],
+                 load["inverter"]["polarity"]),
+                (load["name"], load["pump"]["control_pin"],
+                 load["pump"]["polarity"])]
+    return [(load["name"], load["control_pin"], load["polarity"])]

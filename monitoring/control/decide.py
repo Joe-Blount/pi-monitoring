@@ -1005,6 +1005,9 @@ FAN_TYPES = ("cpu_fan", "vent_fan")
 #: one that is working.
 HEATING_TYPES = ("battery_heating",)
 
+#: Load types of two relays switched in order.
+SEQUENCED_TYPES = ("sequenced_ac",)
+
 
 def decide(local_now, mono_now, clock_trusted, readings, switches,
            specs, state, suns):
@@ -1031,6 +1034,21 @@ def decide(local_now, mono_now, clock_trusted, readings, switches,
         spec = specs[name]
         prior = state.get(name) or {}
         operator = urgent = False
+
+        if spec["type"] in SEQUENCED_TYPES:
+            from monitoring.control import irrigation
+            second = irrigation.inverter_name(name)
+            pump, inverter, load_state, inverter_state = (
+                irrigation.irrigation_decision(
+                    name, spec, readings, local_now, mono_now, suns,
+                    clock_trusted, switches, prior, state.get(second) or {}))
+            # The sequence times itself, so neither relay goes through the
+            # minimum run and off times.
+            decisions[name] = pump
+            decisions[second] = inverter
+            new_state[name] = load_state
+            new_state[second] = inverter_state
+            continue
 
         if spec["type"] in LADDER_TYPES:
             decision, load_state = ladder_decision(

@@ -220,3 +220,77 @@ def test_a_silent_connection_does_not_hold_the_page(served, monkeypatch):
         assert status == 200
     finally:
         idle.close()
+
+
+# -- an irrigation load -----------------------------------------------------
+
+IRRIGATION_NODE = """\
+site: test
+node: test
+measurement: test
+devices:
+  - {name: bms, driver: jbd, mode: poll, params: {address: "AA:BB:CC:DD:EE:FF"}}
+  - {name: shunt, driver: qinglan, mode: poll, params: {address: "AA:BB:CC:DD:EE:00"}}
+  - {name: mppt, driver: vedirect, mode: resident, params: {port: /dev/null}}
+control:
+  enabled: true
+  relay_trigger: low
+  loads:
+    irrigation:
+%s
+"""
+
+
+@pytest.fixture
+def irrigated(tmp_path, monkeypatch):
+    import yaml
+    from tests.test_irrigation import BLOCK
+    monkeypatch.setenv("MONITORING_LOCATION", str(location_file(tmp_path)))
+    block = yaml.safe_dump(BLOCK, default_flow_style=False)
+    node = tmp_path / "node.yaml"
+    node.write_text(IRRIGATION_NODE % "\n".join(
+        "      " + line for line in block.splitlines()))
+    paths = page.Paths(str(node), switches=str(tmp_path / "switches.json"),
+                       published=str(tmp_path / "control.json"),
+                       readings=str(tmp_path / "readings"), boot=BOOT)
+    server = page.Server(("127.0.0.1", 0), page.handler_for(paths))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield server, paths
+    server.shutdown()
+    server.server_close()
+
+
+def test_an_irrigation_load_shows_a_run_row_and_an_inverter_row(irrigated):
+    server, _ = irrigated
+    status, text = request(server, "GET", "/")
+    assert status == 200
+    assert "<b>irrigation</b>" in text and "<b>irrigation.inverter</b>" in text
+    assert ">Run</button>" in text and ">Keep off</button>" in text
+
+
+def test_a_run_takes_only_the_run_lengths(irrigated):
+    server, paths = irrigated
+    status, _ = request(server, "POST", "/force",
+                        {"load": "irrigation", "state": "on", "for": "4h"})
+    assert status == 400
+    status, _ = request(server, "POST", "/force",
+                        {"load": "irrigation", "state": "on", "for": "30m"})
+    assert status == 303
+    status, _ = request(server, "POST", "/force",
+                        {"load": "irrigation.inverter", "state": "on",
+                         "for": "4h"})
+    assert status == 303
+    assert set(switches(paths)["loads"]) == {"irrigation",
+                                             "irrigation.inverter"}
+
+
+def test_the_lockout_can_be_cleared_from_the_page(irrigated):
+    server, paths = irrigated
+    status, _ = request(server, "POST", "/clear-lockout",
+                        {"load": "irrigation"})
+    assert status == 303
+    assert "at" in switches(paths)["loads"]["irrigation.clear_lockout"]
+    status, _ = request(server, "POST", "/clear-lockout",
+                        {"load": "irrigation.inverter"})
+    assert status == 400

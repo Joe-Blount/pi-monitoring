@@ -80,6 +80,14 @@ Environment=GPIOZERO_PIN_FACTORY=lgpio
 Restart=always
 RestartSec=10
 
+# The loop tells systemd after every pass. A loop that hangs, rather than
+# ends, holds its relays where they are, and a pump is the load that cannot
+# be left that way. Two minutes with no pass and systemd kills the process,
+# which releases every pin. A pass takes seconds; a slow one is far inside
+# this.
+WatchdogSec=120
+NotifyAccess=main
+
 # Deliberately not RuntimeDirectory=monitoring. That option is systemd
 # creating and owning /run/monitoring: it deletes the directory the moment
 # this unit stops, restarts or fails, which would also delete

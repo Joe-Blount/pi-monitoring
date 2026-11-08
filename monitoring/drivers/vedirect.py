@@ -169,6 +169,9 @@ def normalize(raw):
         "pv_volts": scaled("VPV", 0.001),
         "pv_watts": whole("PPV"),
         "charge_state": CHARGE_STATE.get(whole("CS"), "cs_%s" % raw.get("CS")),
+        # The same, as its number. A controller reads numbers only, and
+        # this is the one a rule about the charge state can name.
+        "charge_state_code": whole("CS"),
         "tracker": TRACKER.get(whole("MPPT"), "mppt_%s" % raw.get("MPPT")),
         "error": whole("ERR"),
         "yield_total_kwh": scaled("H19", 0.01),

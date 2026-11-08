@@ -872,3 +872,46 @@ def test_override_until_accepts_only_the_documented_form(tmp_path):
     assert result.returncode == 2
     assert "YYYY-MM-DD HH:MM" in result.stderr
     assert not switches_path(tmp_path).exists()
+
+
+def test_clear_lockout_writes_the_moment_it_was_asked(tmp_path):
+    result = run_switches(tmp_path, "clear-lockout", "irrigation")
+    assert result.returncode == 0, result.stderr
+    with open(switches_path(tmp_path)) as handle:
+        entry = json.load(handle)["loads"]["irrigation.clear_lockout"]
+    assert abs(entry["at"] - time.time()) < 60
+
+
+def test_each_pass_tells_systemd_the_loop_is_alive(tmp_path, monkeypatch):
+    import importlib.machinery
+    import importlib.util
+    import socket
+    loader = importlib.machinery.SourceFileLoader("control_bin", str(CONTROL))
+    module = importlib.util.module_from_spec(
+        importlib.util.spec_from_loader("control_bin", loader))
+    loader.exec_module(module)
+    import tempfile
+    # A short path: a socket address has a length limit that a test's
+    # temporary directory can pass.
+    address = tempfile.mktemp(prefix="n", dir="/tmp")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as listener:
+        listener.bind(address)
+        listener.settimeout(2)
+        monkeypatch.setenv("NOTIFY_SOCKET", address)
+
+        class Machine:
+            passes = 0
+
+            def once(self):
+                self.passes += 1
+
+            def close(self):
+                pass
+
+        machine = Machine()
+        try:
+            module._run(machine, 0, lambda: machine.passes >= 1,
+                        sleep=lambda _s: None)
+            assert listener.recv(64) == b"WATCHDOG=1"
+        finally:
+            os.unlink(address)

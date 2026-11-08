@@ -446,7 +446,24 @@ PYEOF
 if has_slow_devices; then
     install -m 0644 "$REPO/deploy/telegraf.d/monitoring-slow.conf" \
         /etc/telegraf/telegraf.d/pi-monitoring-slow.conf
-    echo "    installed the slow-device collector"
+    # A node can read its slow devices more often than the default, at the
+    # cost of the phone applications finding them busy more often. The blind
+    # does, because its irrigation load checks the pump on the shunt.
+    SLOW_INTERVAL=$(
+        cd "$REPO" && python3 - "$NODE_FILE" <<'SLOWEOF' 2>/dev/null
+import sys
+from monitoring import config, drivers, duration
+node = config.load(sys.argv[1], drivers.names())
+value = node.raw.get("slow_poll_interval")
+if value is not None:
+    print("%ds" % duration.seconds(value, "slow_poll_interval"))
+SLOWEOF
+    )
+    if [[ -n "$SLOW_INTERVAL" ]]; then
+        sed -i "s/^  interval = \"180s\"/  interval = \"$SLOW_INTERVAL\"/" \
+            /etc/telegraf/telegraf.d/pi-monitoring-slow.conf
+    fi
+    echo "    installed the slow-device collector${SLOW_INTERVAL:+, every $SLOW_INTERVAL}"
 elif [ $? -ne 1 ]; then
     echo "    WARNING: could not tell whether this node has slow devices."
     echo "             Not installing the slow collector. If a Bluetooth"
