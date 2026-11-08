@@ -755,10 +755,14 @@ def test_a_run_that_lost_the_clock_still_starts_the_cooldown():
     site.step()
     site.step()
     assert site.persist.get("active_run"), "the run's end was dropped"
+    site.now -= datetime.timedelta(days=7)     # the clock it fell back to
+    site.step()
+    site.now += datetime.timedelta(days=7)
     site.trusted = True
     site.step()
     assert "active_run" not in site.persist
     assert site.persist["last_run_end_epoch"] == site.now.timestamp()
+    assert site.persist["last_run_day"] == site.now.date().isoformat()
 
 
 def test_a_run_whose_time_ends_while_starting_never_starts_the_pump():

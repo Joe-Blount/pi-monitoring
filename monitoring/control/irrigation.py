@@ -230,11 +230,13 @@ def _close_run(state, persist, local_now, clock_trusted):
     # The end is recorded against a trusted clock only. Until there is one
     # the run stays marked active, and the first trusted pass closes it, so
     # the cooldown still counts from it.
+    if run.get("checked"):
+        persist["active_run_watered"] = True
     if clock_trusted:
         persist.pop("active_run", None)
         persist["last_run_end_epoch"] = local_now.timestamp()
-    if run.get("checked"):
-        persist["last_run_day"] = local_now.date().isoformat()
+        if persist.pop("active_run_watered", False):
+            persist["last_run_day"] = local_now.date().isoformat()
 
 
 def _fail_start(spec, persist):
