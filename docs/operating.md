@@ -318,6 +318,23 @@ never be the reason a site stays dark.
 
 ---
 
+## Irrigation draw
+
+Measured at the shunt as the change in battery current, with the inverter on
+and everything else steady. The shunt sees the whole bank, so each figure is
+the step from the reading just before, not a reading of its own.
+
+| State | Step in battery current | About |
+|---|---|---|
+| Inverter on, idle | 0.8 A | 10 W |
+| Pump moving water | 44.7 A, steady | 600 W |
+| Pump start | 56 A for one reading | |
+| Pump running dry | 16.1 A, steady | 215 W |
+
+Dry is about a third of wet, so a step under 30 A once the pump has started
+means a dry pump or a lost prime. The pump drew nothing for its first few
+seconds on one run, so a check waits for that before it judges.
+
 ## Which GPIO pin drives which load
 
 | Machine | Load | GPIO | Physical pin | With no signal at all |

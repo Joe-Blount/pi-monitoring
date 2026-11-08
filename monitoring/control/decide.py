@@ -388,9 +388,19 @@ def ladder_decision(name, spec, readings, now, mono_now, suns, clock_trusted,
     active = [tier for index, tier in enumerate(ladder["tiers"])
               if latched.get(str(index))]
     if not active:
-        reason = ("%s=%.1f above every threshold" % (
-            ladder["source"]["field"], value) if value is not None
-            else "no threshold latched")
+        field = ladder["source"]["field"]
+        pending = [(index, tier) for index, tier in enumerate(ladder["tiers"])
+                   if value is not None and value < tier["below_pct"]]
+        if value is None:
+            reason = "no threshold latched"
+        elif pending:
+            index, tier = pending[-1]
+            reason = ("%s=%.1f below %g%%; %d of %d readings needed to "
+                      "confirm" % (field, value, tier["below_pct"],
+                                   counts.get(str(index), 0),
+                                   ladder["enter_after_readings"]))
+        else:
+            reason = "%s=%.1f above every threshold" % (field, value)
         return (Decision(name, True, 0, NONE if value is not None
                          else HOLDING_STALE, reason, value),
                 new_state)

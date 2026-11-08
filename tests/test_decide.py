@@ -137,6 +137,13 @@ def test_a_tier_needs_consecutive_readings_before_it_latches():
     assert not decision.connected
 
 
+def test_a_reading_below_a_tier_not_yet_confirmed_says_so():
+    decision, _ = run(45.0, now=at(23))
+    assert "below" in decision.reason
+    assert "1 of 2 readings" in decision.reason
+    assert "above every threshold" not in decision.reason
+
+
 def test_a_reading_back_above_the_entry_resets_the_count():
     """Two readings below must mean two in a row, or a sensor flickering
     around the threshold latches on the second flicker."""

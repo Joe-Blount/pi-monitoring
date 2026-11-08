@@ -398,8 +398,9 @@ echo "    lgpio pin backend"
 
 echo "==> group membership"
 # Reading a GPIO, an I2C bus or a serial port needs the group, and the failure
-# without it is a permission error that reads like a missing device.
-for group in gpio i2c dialout bluetooth; do
+# without it is a permission error that reads like a missing device. Some
+# releases give a USB serial adapter to plugdev rather than dialout.
+for group in gpio i2c dialout plugdev bluetooth; do
     if getent group "$group" >/dev/null; then
         usermod -aG "$group" telegraf 2>/dev/null && echo "    telegraf added to $group" || true
     fi
