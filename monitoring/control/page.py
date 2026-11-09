@@ -28,7 +28,7 @@ import urllib.parse
 
 from monitoring import config, duration
 from monitoring import drivers as driver_registry
-from monitoring.control import files, location, override, spec
+from monitoring.control import decide, files, location, modes, override, spec
 
 #: The durations the page offers. The page refuses any other, so what it can
 #: set stays as small as what it shows.
@@ -126,11 +126,15 @@ def _age_text(seconds):
     return "%.1f h old" % (seconds / 3600)
 
 
-def _local(epoch, zone):
+def _local(epoch, zone, now=None):
+    """A local time, with only the hour when it falls on today's date."""
     if zone is None:
         return "at an hour this machine cannot place"
-    return datetime.datetime.fromtimestamp(epoch, zone).strftime(
-        "%Y-%m-%d %H:%M")
+    when = datetime.datetime.fromtimestamp(epoch, zone)
+    if (now is not None and when.date()
+            == datetime.datetime.fromtimestamp(now, zone).date()):
+        return when.strftime("%H:%M")
+    return when.strftime("%a %Y-%m-%d %H:%M")
 
 
 class View:
@@ -145,18 +149,28 @@ class View:
         #: for an irrigation load, "inverter" for its inverter alone, and
         #: "plain" for every other load.
         self.rows = {}
+        #: The load each relay belongs to, by relay name.
+        self.row_load = {}
+        #: Loads the node file declares but turns off, shown without buttons.
+        self.disabled = []
         try:
             self.node = config.load(paths.node,
                                     known_drivers=driver_registry.names())
             self.loads = spec.load_control(self.node)
             for load in self.loads.values():
                 for output, _, _ in spec.outputs(load):
+                    self.row_load[output] = load
                     if load["type"] != "sequenced_ac":
                         self.rows[output] = "plain"
                     elif output == load["name"]:
                         self.rows[output] = "run"
                     else:
                         self.rows[output] = "inverter"
+            raw = self.node.control.get("loads") or {}
+            self.disabled = sorted(
+                name for name in raw
+                if isinstance(raw[name], dict) and name not in self.loads
+                and raw[name].get("enabled", True) is False)
         except (config.ConfigError, spec.SpecError) as exc:
             self.problems.append("The node file cannot be read: %s" % exc)
         try:
@@ -277,9 +291,9 @@ def render(view, message=None):
                  else "on" if powered else "off")
         parts.append("<div class=load><b>%s</b>: <span class=%s>%s</span>"
                      % (esc(name), state, state))
-        if published.get("reason"):
-            parts.append("<div class=muted>%s</div>"
-                         % esc(str(published["reason"])))
+        mode, plan = modes.describe(
+            view.row_load[name], name, view.published, view.readings,
+            view.switches["shedding_enabled"])
         if kind == "run" and "amp_hours_today" in published:
             parts.append("<div class=muted>Today: %.1f Ah, %d failed "
                          "starts</div>" % (
@@ -300,9 +314,9 @@ def render(view, message=None):
                     expires, (int, float)):
                 when = "with no readable expiry"
             elif expires > now:
-                when = "until %s" % _local(expires, view.zone)
+                when = "until %s" % _local(expires, view.zone, now)
             else:
-                when = "expired %s" % _local(expires, view.zone)
+                when = "expired %s" % _local(expires, view.zone, now)
             parts.append(
                 "<form method=post action=/clear><input type=hidden name=load"
                 " value='%s'>Forced <b>%s</b> %s "
@@ -310,16 +324,25 @@ def render(view, message=None):
                 % (esc(name, quote=True), esc(entry["force"]), esc(when),
                    "Stop" if kind == "run" and entry["force"] == "on"
                    else "Clear"))
+            plan = "Then: %s. %s" % (mode[:1].lower() + mode[1:], plan)
+        else:
+            parts.append("<div><b>%s</b></div>" % esc(mode))
+        parts.append("<div class=muted>%s</div>" % esc(plan))
+        if (kind == "run" and published.get("reason") and published.get(
+                "reason_code") in (decide.RUN_REFUSED, decide.FAILED_START)):
+            parts.append("<div class=muted>%s</div>"
+                         % esc(str(published["reason"])))
         if kind == "run":
             parts.append(force_form(name, RUN_DURATIONS, "on", "Run"))
             parts.append(force_form(name, DURATIONS, "off", "Keep off"))
-            parts.append("<div class=muted>A run still stops at every "
-                         "safety limit: a dry or stalled pump, the battery, "
-                         "the run limit.</div>")
         else:
             parts.append(force_form(name, DURATIONS, "on", "Force on"))
             parts.append(force_form(name, DURATIONS, "off", "Force off"))
         parts.append("</div>")
+    for name in view.disabled:
+        parts.append("<div class=load><b>%s</b>: <span class=off>off</span>"
+                     "<div><b>Off: turned off in settings</b></div></div>"
+                     % esc(name))
     if view.zone is None:
         parts.append("<p class=muted>The location file cannot be read, so a "
                      "local time cannot be placed.</p>")

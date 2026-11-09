@@ -48,11 +48,13 @@ def request(server, method, path, form=None, origin=True, host_header=None):
     return response.status, text
 
 
-def publish(paths, powered=1.0, reason="all tiers clear"):
+def publish(paths, powered=1.0, reason="all tiers clear", **fields):
+    entry = {"powered": powered, "reason": reason}
+    entry.update(fields)
     files.write_json(paths.published, {
         "fields": {"passes": 1.0}, "boot_id": BOOT,
         "monotonic": files.monotonic(),
-        "loads": {"cameras": {"powered": powered, "reason": reason}}})
+        "loads": {"cameras": entry}})
 
 
 def switches(paths):
@@ -62,11 +64,42 @@ def switches(paths):
 
 def test_the_page_shows_each_load_with_its_published_state(served):
     server, paths = served
-    publish(paths, reason="soc=50.0 above every threshold")
+    publish(paths, reason="soc=50.0 above every threshold", shed_level=1.0,
+            reason_code=1.0)
     status, text = request(server, "GET", "/")
     assert status == 200
-    assert "cameras" in text and "above every threshold" in text
+    assert "cameras" in text
+    assert "Day only (on 05:00 to 22:00, off at night)" in text
+    assert "Below 50%: day only. Below 10%: off." in text
+    assert "above every threshold" not in text
     assert "has not published in the last" not in text
+
+
+def test_a_forced_load_shows_the_mode_it_goes_back_to(served):
+    server, paths = served
+    publish(paths, shed_level=0.0, reason_code=4.0)
+    status, _ = request(server, "POST", "/force",
+                        {"load": "cameras", "state": "off", "for": "1h"})
+    assert status in (200, 303)
+    _, text = request(server, "GET", "/")
+    assert "Forced <b>off</b> until" in text
+    assert "Then: always on. Battery" in text
+
+
+def test_a_load_turned_off_in_the_node_file_is_listed_without_buttons(
+        tmp_path, monkeypatch):
+    node = controlled_node(tmp_path)
+    node.write_text(node.read_text() + "    spare:\n      type: dc_branch\n"
+                    "      enabled: false\n")
+    view = page.View(page.Paths(str(node),
+                                switches=str(tmp_path / "switches.json"),
+                                published=str(tmp_path / "control.json"),
+                                readings=str(tmp_path / "readings"),
+                                boot=BOOT))
+    text = page.render(view)
+    assert "<b>spare</b>" in text
+    assert "Off: turned off in settings" in text
+    assert "value='spare'" not in text
 
 
 def test_the_page_warns_when_the_controller_has_published_nothing(served):
