@@ -946,6 +946,9 @@ def load_control(node):
     # ladder naming it would wait forever on a reading that cannot come.
     devices = {device.name for device in node.devices if device.enabled}
     loads = {}
+    for name in (node.control.get("loads") or {}):
+        if not isinstance(name, str):
+            _fail("load %r" % (name,), "a load name must be text; quote it")
     for name in sorted((node.control.get("loads") or {})):
         spec = load_spec(name, node.control["loads"][name], devices)
         if spec is not None:

@@ -163,7 +163,7 @@ def test_the_cpu_fan_shows_its_temperature_and_thresholds(downstairs):
     lines = modes.describe(load, "cpu_fan", {"cpu_fan": {"powered": 1.0}},
                            readings(host__cpu_temp_f=168.4), True)
     assert lines.mode == "By temperature, running, 168 F"
-    assert lines.plan == "Runs above 165 F, stops below 145 F."
+    assert lines.plan == "Runs at 165 F or above, stops at 145 F or below."
     lines = modes.describe(load, "cpu_fan", {"cpu_fan": {"powered": 0.0}},
                            {}, True)
     assert lines.mode == "By temperature, idle, no reading"
@@ -186,7 +186,7 @@ def test_the_vent_fan_shows_both_temperatures():
     lines = modes.describe(load, "vent_fan", {"vent_fan": {"powered": 1.0}},
                            values, True)
     assert lines.mode == "By temperature, running, inside 91 F, outside 70 F"
-    assert lines.plan.startswith("Runs when inside is above %g F"
+    assert lines.plan.startswith("Runs when inside is at %g F or above"
                                  % load["inside_above_f"])
 
 
@@ -199,7 +199,7 @@ def test_the_heater_shows_its_coldest_sensor_and_its_reason(example):
         {load["name"]: {"powered": 0.0, "reason": "no production"}}, values,
         True)
     assert lines.mode == "By temperature, idle, coldest sensor 30 F"
-    assert lines.plan.startswith("Heats below %g F, stops above %g F" % (
+    assert lines.plan.startswith("Heats at %g F or below, stops at %g F or above" % (
         load["coldest_below_f"], load["coldest_above_f"]))
     assert lines.why == "no production"
     forced = modes.describe(load, load["name"],
@@ -229,7 +229,7 @@ def test_each_irrigation_phase_has_its_words(example):
     assert run_mode(load, irrigation.IDLE, inverter=1.0).mode == (
         "Inverter only")
     assert run_mode(load, irrigation.IDLE, locked_out=1.0).mode == (
-        "Locked out: too many dry starts")
+        "Locked out: too many failed starts")
     assert run_mode(load).mode == "Mode unknown: nothing published yet"
     assert run_mode(load).plan.startswith("Runs every 2 days.")
 
@@ -281,3 +281,11 @@ def test_an_entry_that_is_not_a_mapping_reads_as_unknown(example):
                             irrigation.inverter_name(load["name"]): "x"},
                            {}, True)
     assert lines.mode == "Mode unknown: nothing published yet"
+
+
+def test_the_floor_holds_against_a_force(downstairs):
+    lines = ladder_mode(downstairs["nvr"], shed_level=0.0, floor_latched=1.0,
+                        reason_code=float(decide.FLOOR))
+    assert lines.mode == "Off: battery at its floor"
+    assert lines.beats_force
+    assert not ladder_mode(downstairs["nvr"], shed_level=0.0).beats_force

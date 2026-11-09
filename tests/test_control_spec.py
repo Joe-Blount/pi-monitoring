@@ -501,6 +501,14 @@ def test_a_load_with_no_ladder_is_refused():
     assert "needs a shed_ladder" in str(raised.value)
 
 
+def test_a_load_name_that_is_not_text_is_refused():
+    node = FakeNode({"cameras": dict(CAMERAS),
+                     123: {"type": "dc_branch", "enabled": False}})
+    with pytest.raises(spec.SpecError) as raised:
+        spec.load_control(node)
+    assert "a load name must be text" in str(raised.value)
+
+
 # -- types ------------------------------------------------------------------
 
 def test_a_load_type_nothing_drives_is_refused():

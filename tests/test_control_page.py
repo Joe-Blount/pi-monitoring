@@ -98,7 +98,7 @@ def test_a_load_turned_off_in_the_node_file_is_listed_without_buttons(
                                 boot=BOOT))
     text = page.render(view)
     assert "<b>spare</b>" in text
-    assert "Off: turned off in settings" in text
+    assert "Turned off in settings" in text
     assert "value='spare'" not in text
 
 

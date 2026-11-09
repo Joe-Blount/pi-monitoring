@@ -333,7 +333,7 @@ def render(view, message=None):
                 % (esc(name, quote=True), esc(entry["force"]), esc(when),
                    "Stop" if kind == "run" and entry["force"] == "on"
                    else "Clear"))
-        if forced:
+        if forced and not lines.beats_force:
             plan = "Then: %s. %s" % (lines.mode[:1].lower() + lines.mode[1:],
                                      plan)
         else:
@@ -349,8 +349,10 @@ def render(view, message=None):
             parts.append(force_form(name, DURATIONS, "off", "Force off"))
         parts.append("</div>")
     for name in view.disabled:
-        parts.append("<div class=load><b>%s</b>: <span class=off>off</span>"
-                     "<div><b>Off: turned off in settings</b></div></div>"
+        parts.append("<div class=load><b>%s</b>: not controlled"
+                     "<div><b>Turned off in settings</b></div>"
+                     "<div class=muted>The controller leaves this relay "
+                     "released.</div></div>"
                      % esc(name))
     if view.zone is None:
         parts.append("<p class=muted>The location file cannot be read, so a "

@@ -26,10 +26,13 @@ UNEXPLAINED = (decide.HOLDING_STALE, decide.NO_READING, decide.REFUSED,
 class Mode:
     """The lines one relay's row shows."""
 
-    def __init__(self, mode, plan, why=None):
+    def __init__(self, mode, plan, why=None, beats_force=False):
         self.mode = mode
         self.plan = plan
         self.why = why
+        #: Whether the mode holds even against a force, as the battery floor
+        #: does, so the page shows it as now and not as what comes next.
+        self.beats_force = beats_force
 
 
 def _number(value):
@@ -161,8 +164,9 @@ def _ladder(load, own, readings, shedding):
     code = own.get("reason_code")
     level = _number(own.get("shed_level"))
     if code == decide.FLOOR or own.get("floor_latched"):
-        mode = "Off: battery at its floor"
-    elif not shedding:
+        return Mode("Off: battery at its floor", plan, _why(own),
+                    beats_force=True)
+    if not shedding:
         mode = "Always on: shedding paused"
     elif level is None:
         mode = "Mode unknown: nothing published yet"
@@ -215,21 +219,22 @@ def _cpu_fan(load, own, readings, forced):
     value = _reading(readings, load["source"], load["stale_after"])
     return Mode(_join("By temperature", _state(own, "running", forced),
                       _temperature(value)),
-                "Runs above %g F, stops below %g F." % (load["run_above_f"],
-                                                        load["stop_below_f"]),
+                "Runs at %g F or above, stops at %g F or below." % (
+                    load["run_above_f"], load["stop_below_f"]),
                 _why(own))
 
 
 def _vent_fan(load, own, readings, forced):
     inside = _reading(readings, load["inside"], load["stale_after"])
     outside = _reading(readings, load["outside"], load["stale_after"])
-    plan = ("Runs when inside is above %g F and outside is %g F cooler. "
-            "Stops when inside is below %g F or outside is less than %g F "
-            "cooler." % (load["inside_above_f"], load["outside_cooler_by_f"],
+    plan = ("Runs when inside is at %g F or above and outside is at least "
+            "%g F cooler. Stops when inside is at %g F or below or outside "
+            "is %g F cooler or less." % (load["inside_above_f"], load["outside_cooler_by_f"],
                          load["inside_below_f"],
                          load["outside_cooler_by_less_than_f"]))
     if load.get("outside_below_f") is not None:
-        plan += " Stops when outside is below %g F." % load["outside_below_f"]
+        plan += " Stops when outside is at %g F or below." % (
+            load["outside_below_f"])
     return Mode(_join("By temperature", _state(own, "running", forced),
                       "inside " + _temperature(inside),
                       "outside " + _temperature(outside)), plan, _why(own))
@@ -242,8 +247,8 @@ def _heater(load, own, readings, forced):
     coldest = min(known) if known else None
     return Mode(_join("By temperature", _state(own, "heating", forced),
                       "coldest sensor " + _temperature(coldest)),
-                "Heats below %g F, stops above %g F, within its power and "
-                "daily limits." % (load["coldest_below_f"],
+                "Heats at %g F or below, stops at %g F or above, within its "
+                "power and daily limits." % (load["coldest_below_f"],
                                    load["coldest_above_f"]),
                 _why(own, always=not forced))
 
@@ -258,7 +263,7 @@ def _run(load, own, inverter, forced):
     plan += (" A run stops at every safety limit: a dry or stalled pump, "
              "the battery, the run limit.")
     if own.get("locked_out"):
-        return Mode("Locked out: too many dry starts", plan, _why(own, True))
+        return Mode("Locked out: too many failed starts", plan, _why(own, True))
     if forced:
         return Mode(idle, plan)
     phase = PHASES.get(_number(own.get("phase")))
@@ -274,7 +279,7 @@ def _run(load, own, inverter, forced):
 
 def _inverter(own, pump, forced):
     plan = ("Turns on with each irrigation run, or alone when forced on. "
-            "Alone, it stops at the battery floor.")
+            "Alone, it stops when the battery falls to its limits.")
     if forced:
         return Mode("Off unless irrigation runs", plan)
     if own.get("powered") is None:
