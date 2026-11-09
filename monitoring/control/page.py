@@ -28,7 +28,7 @@ import urllib.parse
 
 from monitoring import config, duration
 from monitoring import drivers as driver_registry
-from monitoring.control import decide, files, location, modes, override, spec
+from monitoring.control import files, location, modes, override, spec
 
 #: The durations the page offers. The page refuses any other, so what it can
 #: set stays as small as what it shows.
@@ -168,7 +168,7 @@ class View:
                         self.rows[output] = "inverter"
             raw = self.node.control.get("loads") or {}
             self.disabled = sorted(
-                name for name in raw
+                str(name) for name in raw
                 if isinstance(raw[name], dict) and name not in self.loads
                 and raw[name].get("enabled", True) is False)
         except (config.ConfigError, spec.SpecError) as exc:
@@ -285,15 +285,25 @@ def render(view, message=None):
     now = time.time()
     for name in sorted(view.rows):
         kind = view.rows[name]
-        published = view.published.get(name) or {}
+        published = view.published.get(name)
+        if not isinstance(published, dict):
+            published = {}
         powered = published.get("powered")
         state = ("unknown" if powered is None
                  else "on" if powered else "off")
         parts.append("<div class=load><b>%s</b>: <span class=%s>%s</span>"
                      % (esc(name), state, state))
-        mode, plan = modes.describe(
+        entry = view.switches["loads"].get(name)
+        expires = (entry.get("expires_epoch") if isinstance(entry, dict)
+                   else None)
+        forced = (isinstance(entry, dict)
+                  and entry.get("force") in override.STATES
+                  and not isinstance(expires, bool)
+                  and isinstance(expires, (int, float)) and expires > now)
+        lines = modes.describe(
             view.row_load[name], name, view.published, view.readings,
-            view.switches["shedding_enabled"])
+            view.switches["shedding_enabled"], forced=forced)
+        plan = lines.plan
         if kind == "run" and "amp_hours_today" in published:
             parts.append("<div class=muted>Today: %.1f Ah, %d failed "
                          "starts</div>" % (
@@ -305,7 +315,6 @@ def render(view, message=None):
                 "name=load value='%s'><b>Locked out</b> "
                 "<button>Clear lockout</button></form>"
                 % esc(name, quote=True))
-        entry = view.switches["loads"].get(name)
         # Clear is offered for every stored force, past its expiry too. A
         # controller whose clock it does not trust can still hold one.
         if isinstance(entry, dict) and entry.get("force") in override.STATES:
@@ -324,14 +333,14 @@ def render(view, message=None):
                 % (esc(name, quote=True), esc(entry["force"]), esc(when),
                    "Stop" if kind == "run" and entry["force"] == "on"
                    else "Clear"))
-            plan = "Then: %s. %s" % (mode[:1].lower() + mode[1:], plan)
+        if forced:
+            plan = "Then: %s. %s" % (lines.mode[:1].lower() + lines.mode[1:],
+                                     plan)
         else:
-            parts.append("<div><b>%s</b></div>" % esc(mode))
+            parts.append("<div><b>%s</b></div>" % esc(lines.mode))
         parts.append("<div class=muted>%s</div>" % esc(plan))
-        if (kind == "run" and published.get("reason") and published.get(
-                "reason_code") in (decide.RUN_REFUSED, decide.FAILED_START)):
-            parts.append("<div class=muted>%s</div>"
-                         % esc(str(published["reason"])))
+        if lines.why:
+            parts.append("<div class=muted>Why: %s</div>" % esc(lines.why))
         if kind == "run":
             parts.append(force_form(name, RUN_DURATIONS, "on", "Run"))
             parts.append(force_form(name, DURATIONS, "off", "Keep off"))

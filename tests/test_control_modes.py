@@ -1,5 +1,6 @@
 """The words the override page shows for each load's mode and plan."""
 
+import datetime
 import os
 
 import pytest
@@ -38,11 +39,20 @@ def example():
             if raw[name].get("type") in ("battery_heating", "sequenced_ac")}
 
 
-def readings(**values):
+def readings(age=5.0, **values):
     out = {}
     for key, value in values.items():
         device, field = key.split("__")
-        out.setdefault(device, {"fields": {}})["fields"][field] = value
+        out.setdefault(device, {"fields": {}, "age_seconds": age})[
+            "fields"][field] = value
+    return out
+
+
+def source_readings(sources, values, age=5.0):
+    out = {}
+    for source, value in zip(sources, values):
+        out.setdefault(source["device"], {"fields": {}, "age_seconds": age})[
+            "fields"][source["field"]] = value
     return out
 
 
@@ -53,138 +63,221 @@ def ladder_mode(load, shedding=True, battery=42.0, **published):
 
 
 def test_a_ladder_load_above_every_step_is_always_on(downstairs):
-    mode, plan = ladder_mode(downstairs["cameras_near"], shed_level=0.0,
-                             reason_code=0.0)
-    assert mode == "Always on"
-    assert plan == ("Battery 42%. Below 50%: day only. Below 25%: dawn and "
-                    "dusk. Below 10%: off.")
+    lines = ladder_mode(downstairs["cameras_near"], shed_level=0.0,
+                        reason_code=0.0)
+    assert lines.mode == "Always on"
+    assert lines.plan == ("Battery 42%. Below 50%: day only. Below 25%: dawn "
+                          "and dusk. Below 10%: off.")
+    assert lines.why is None
 
 
-def test_each_ladder_step_names_its_schedule(downstairs):
+def test_each_ladder_step_names_its_schedule_and_the_hours_above_it(
+        downstairs):
     load = downstairs["cameras_near"]
-    assert ladder_mode(load, shed_level=1.0)[0] == (
+    assert ladder_mode(load, shed_level=1.0).mode == (
         "Day only (on 05:00 to 22:00, off at night)")
-    assert ladder_mode(load, shed_level=2.0)[0] == (
+    assert ladder_mode(load, shed_level=2.0).mode == (
         "Dawn and dusk only (on from 1 h before sunrise to 2 h after "
-        "sunrise, and from 2 h before sunset to 1 h after sunset)")
-    assert ladder_mode(load, shed_level=3.0)[0] == "Off to save battery"
+        "sunrise, and from 2 h before sunset to 1 h after sunset), and only "
+        "while 05:00 to 22:00")
+    assert ladder_mode(load, shed_level=3.0).mode == "Off to save battery"
+
+
+def test_steps_whose_hours_never_meet_are_both_named():
+    day = {"type": "clock", "on_from": 5 * 60, "on_to": 22 * 60}
+    night = {"type": "clock", "on_from": 22 * 60, "on_to": 5 * 60}
+    mode = modes._latched_mode([{"schedule": day}, {"schedule": night}])
+    assert mode == ("Night only (on 22:00 to 05:00, off by day), and only "
+                    "while 05:00 to 22:00")
 
 
 def test_the_floor_wins_over_the_step_and_the_shedding_switch(downstairs):
-    load = downstairs["nvr"]
-    mode, plan = ladder_mode(load, shedding=False, shed_level=1.0,
-                             reason_code=float(decide.FLOOR))
-    assert mode == "Off: battery at its floor"
-    assert plan == "Battery 42%. Below 5%: off."
+    lines = ladder_mode(downstairs["nvr"], shedding=False, shed_level=1.0,
+                        reason_code=float(decide.FLOOR))
+    assert lines.mode == "Off: battery at its floor"
+    assert lines.plan == "Battery 42%. Below 5%: off."
+
+
+def test_a_load_held_by_its_minimum_time_says_so_and_why(downstairs):
+    lines = ladder_mode(
+        downstairs["cameras_near"], shed_level=0.0, powered=0.0,
+        reason_code=float(decide.HELD_BY_TIMER),
+        reason="above every threshold; held for another 900s by the minimum "
+               "off time")
+    assert lines.mode == "Always on. Held off for now"
+    assert "minimum off time" in lines.why
 
 
 def test_shedding_switched_off_reads_as_always_on(downstairs):
-    mode, _ = ladder_mode(downstairs["cameras_far"], shedding=False,
-                          shed_level=2.0)
-    assert mode == "Always on: shedding paused"
+    lines = ladder_mode(downstairs["cameras_far"], shedding=False,
+                        shed_level=2.0)
+    assert lines.mode == "Always on: shedding paused"
 
 
 def test_a_step_held_on_by_an_untrusted_clock_says_so(downstairs):
-    mode, _ = ladder_mode(downstairs["cameras_far"], shed_level=1.0,
-                          reason_code=float(decide.SCHEDULE_SUSPENDED))
-    assert mode.endswith("Held on: the clock is not trusted")
+    lines = ladder_mode(downstairs["cameras_far"], shed_level=1.0,
+                        reason_code=float(decide.SCHEDULE_SUSPENDED))
+    assert lines.mode.endswith("Held on: the clock is not trusted")
 
 
 def test_a_ladder_load_with_nothing_published_says_so(downstairs):
-    mode, plan = modes.describe(downstairs["nvr"], "nvr", {}, {}, True)
-    assert mode == "Mode unknown: nothing published yet"
-    assert plan == "Battery no reading. Below 5%: off."
+    lines = modes.describe(downstairs["nvr"], "nvr", {}, {}, True)
+    assert lines.mode == "Mode unknown: nothing published yet"
+    assert lines.plan == "Battery no reading. Below 5%: off."
 
 
-def test_a_night_window_and_an_odd_window_read_as_such():
+@pytest.mark.parametrize("level", [float("nan"), float("inf"), "2", True])
+def test_a_damaged_shed_level_reads_as_unknown(downstairs, level):
+    assert ladder_mode(downstairs["nvr"], shed_level=level).mode == (
+        "Mode unknown: nothing published yet")
+
+
+def test_a_reading_the_controller_counts_as_stale_is_not_shown(downstairs):
+    load = downstairs["cameras_near"]
+    old = load["shed_ladder"]["stale_after"] + 1
+    lines = modes.describe(load, load["name"], {},
+                           readings(age=old, bms__state_of_charge_pct=42.0),
+                           True)
+    assert lines.plan.startswith("Battery no reading.")
+    lines = modes.describe(load, load["name"], {},
+                           readings(age=float("inf"),
+                                    bms__state_of_charge_pct=42.0), True)
+    assert lines.plan.startswith("Battery no reading.")
+
+
+def test_clock_and_solar_windows_are_named_by_their_shape():
     night = {"type": "clock", "on_from": 22 * 60, "on_to": 5 * 60}
     odd = {"type": "clock", "on_from": 0, "on_to": 13 * 60}
+    zero = datetime.timedelta(0)
+    daylight = {"type": "solar", "on_windows": [
+        {"from": ("sunrise", zero), "to": ("sunset", zero)}]}
     assert modes.schedule_mode(night) == (
         "Night only (on 22:00 to 05:00, off by day)")
     assert modes.schedule_mode(odd) == "Set hours only (on 00:00 to 13:00)"
+    assert modes.schedule_mode(daylight) == (
+        "Daylight only (on from sunrise to sunset)")
 
 
 def test_the_cpu_fan_shows_its_temperature_and_thresholds(downstairs):
     load = downstairs["cpu_fan"]
-    mode, plan = modes.describe(load, "cpu_fan",
-                                {"cpu_fan": {"powered": 1.0}},
-                                readings(host__cpu_temp_f=168.4), True)
-    assert mode == "By temperature, running, 168 F"
-    assert plan == "Runs above 165 F, stops below 145 F."
-    mode, _ = modes.describe(load, "cpu_fan", {"cpu_fan": {"powered": 0.0}},
-                             {}, True)
-    assert mode == "By temperature, idle, no reading"
+    lines = modes.describe(load, "cpu_fan", {"cpu_fan": {"powered": 1.0}},
+                           readings(host__cpu_temp_f=168.4), True)
+    assert lines.mode == "By temperature, running, 168 F"
+    assert lines.plan == "Runs above 165 F, stops below 145 F."
+    lines = modes.describe(load, "cpu_fan", {"cpu_fan": {"powered": 0.0}},
+                           {}, True)
+    assert lines.mode == "By temperature, idle, no reading"
+
+
+def test_a_forced_fan_does_not_read_the_force_as_its_own_state(downstairs):
+    load = downstairs["cpu_fan"]
+    lines = modes.describe(
+        load, "cpu_fan",
+        {"cpu_fan": {"powered": 1.0, "reason_code": float(decide.OVERRIDE),
+                     "reason": "forced on by an operator"}},
+        readings(host__cpu_temp_f=120.0), True, forced=True)
+    assert lines.mode == "By temperature, 120 F"
+    assert lines.why is None
 
 
 def test_the_vent_fan_shows_both_temperatures():
     load = loads("blind1", "upstairs.yaml")["vent_fan"]
-    inside, outside = load["inside"], load["outside"]
-    values = {inside["device"]: {"fields": {inside["field"]: 91.0}},
-              outside["device"]: {"fields": {outside["field"]: 70.0}}}
-    mode, plan = modes.describe(load, "vent_fan",
-                                {"vent_fan": {"powered": 1.0}}, values, True)
-    assert mode == "By temperature, running, inside 91 F, outside 70 F"
-    assert plan.startswith("Runs when inside is above %g F"
-                           % load["inside_above_f"])
+    values = source_readings([load["inside"], load["outside"]], [91.0, 70.0])
+    lines = modes.describe(load, "vent_fan", {"vent_fan": {"powered": 1.0}},
+                           values, True)
+    assert lines.mode == "By temperature, running, inside 91 F, outside 70 F"
+    assert lines.plan.startswith("Runs when inside is above %g F"
+                                 % load["inside_above_f"])
 
 
-def test_the_heater_shows_its_coldest_sensor(example):
+def test_the_heater_shows_its_coldest_sensor_and_its_reason(example):
     load = example["battery_heating"]
-    values = {}
-    for index, source in enumerate(load["sources"]):
-        values.setdefault(source["device"], {"fields": {}})["fields"][
-            source["field"]] = 30.0 + index
-    mode, plan = modes.describe(load, load["name"],
-                                {load["name"]: {"powered": 1.0}}, values,
-                                True)
-    assert mode == "By temperature, heating, coldest 30 F"
-    assert plan == "Heats below %g F, stops above %g F." % (
-        load["coldest_below_f"], load["coldest_above_f"])
+    values = source_readings(load["sources"],
+                             [30.0 + i for i in range(len(load["sources"]))])
+    lines = modes.describe(
+        load, load["name"],
+        {load["name"]: {"powered": 0.0, "reason": "no production"}}, values,
+        True)
+    assert lines.mode == "By temperature, idle, coldest sensor 30 F"
+    assert lines.plan.startswith("Heats below %g F, stops above %g F" % (
+        load["coldest_below_f"], load["coldest_above_f"]))
+    assert lines.why == "no production"
+    forced = modes.describe(load, load["name"],
+                            {load["name"]: {"powered": 1.0}}, values, True,
+                            forced=True)
+    assert forced.mode == "By temperature, coldest sensor 30 F"
 
 
-def run_mode(load, phase=None, inverter=0.0, **published):
+def run_mode(load, phase=None, inverter=0.0, forced=False, **published):
     if phase is not None:
         published["phase"] = irrigation.PHASE_CODES[phase]
     return modes.describe(
         load, load["name"],
         {load["name"]: published,
          irrigation.inverter_name(load["name"]): {"powered": inverter}},
-        {}, True)
+        {}, True, forced=forced)
 
 
 def test_each_irrigation_phase_has_its_words(example):
     load = example["irrigation"]
-    assert run_mode(load, irrigation.IDLE)[0] == (
-        "Idle: waiting for the next scheduled day")
-    assert run_mode(load, irrigation.STARTING)[0] == "Starting"
-    assert run_mode(load, irrigation.RUNNING)[0] == "Running"
-    assert run_mode(load, irrigation.STOPPING)[0] == (
+    assert run_mode(load, irrigation.IDLE).mode == (
+        "Idle: waiting for the next scheduled start")
+    assert run_mode(load, irrigation.STARTING).mode == "Starting"
+    assert run_mode(load, irrigation.RUNNING).mode == "Running"
+    assert run_mode(load, irrigation.STOPPING).mode == (
         "Stopping: inverter stays on to settle")
-    assert run_mode(load, irrigation.IDLE, inverter=1.0)[0] == "Inverter only"
-    assert run_mode(load, irrigation.IDLE, locked_out=1.0)[0] == (
+    assert run_mode(load, irrigation.IDLE, inverter=1.0).mode == (
+        "Inverter only")
+    assert run_mode(load, irrigation.IDLE, locked_out=1.0).mode == (
         "Locked out: too many dry starts")
-    assert run_mode(load)[0] == "Mode unknown: nothing published yet"
-    assert run_mode(load)[1].startswith("Runs every 2 days.")
+    assert run_mode(load).mode == "Mode unknown: nothing published yet"
+    assert run_mode(load).plan.startswith("Runs every 2 days.")
+
+
+def test_an_irrigation_reason_stays_shown_after_its_pass(example):
+    lines = run_mode(example["irrigation"], irrigation.IDLE,
+                     reason_code=float(decide.NONE),
+                     reason="skipped: the battery is too low")
+    assert lines.why == "skipped: the battery is too low"
+
+
+def test_a_manual_run_goes_back_to_idle(example):
+    lines = run_mode(example["irrigation"], irrigation.RUNNING, inverter=1.0,
+                     forced=True)
+    assert lines.mode == "Idle: waiting for the next scheduled start"
 
 
 def test_irrigation_with_no_schedule_is_manual_only(example):
     load = dict(example["irrigation"], schedule=None)
-    mode, plan = run_mode(load, irrigation.IDLE)
-    assert mode == "Idle: manual only"
-    assert plan.startswith("Runs only when started here.")
+    lines = run_mode(load, irrigation.IDLE)
+    assert lines.mode == "Idle: manual only"
+    assert lines.plan.startswith("Runs only when started here.")
 
 
 def test_the_inverter_says_whether_it_is_on_for_a_run_or_alone(example):
     load = example["irrigation"]
     name = irrigation.inverter_name(load["name"])
 
-    def inverter_mode(powered, phase):
+    def inverter(powered, phase, forced=False, reason=None):
         return modes.describe(
             load, name,
-            {name: {"powered": powered},
+            {name: {"powered": powered, "reason": reason},
              load["name"]: {"phase": irrigation.PHASE_CODES[phase]}},
-            {}, True)[0]
+            {}, True, forced=forced)
 
-    assert inverter_mode(1.0, irrigation.RUNNING) == "On for irrigation"
-    assert inverter_mode(1.0, irrigation.IDLE) == "On alone for AC power"
-    assert inverter_mode(0.0, irrigation.IDLE) == "Off"
+    assert inverter(1.0, irrigation.RUNNING).mode == "On for irrigation"
+    assert inverter(1.0, irrigation.IDLE).mode == "On alone for AC power"
+    held = inverter(0.0, irrigation.IDLE, reason="held off by the battery")
+    assert held.mode == "Off"
+    assert held.why == "held off by the battery"
+    assert inverter(1.0, irrigation.IDLE, forced=True).mode == (
+        "Off unless irrigation runs")
+
+
+def test_an_entry_that_is_not_a_mapping_reads_as_unknown(example):
+    load = example["irrigation"]
+    lines = modes.describe(load, load["name"],
+                           {load["name"]: [],
+                            irrigation.inverter_name(load["name"]): "x"},
+                           {}, True)
+    assert lines.mode == "Mode unknown: nothing published yet"
