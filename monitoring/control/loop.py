@@ -98,17 +98,9 @@ class Loop:
             if load["type"] != "sequenced_ac":
                 continue
             held = self.state.setdefault(name, {})
-            if not isinstance(held.get("persist"), dict):
-                record = files.read_json(load["state_file"])
-                if record is not None:
-                    held["persist"] = record
-                    held.pop("record_unreadable", None)
-                elif os.path.exists(load["state_file"]):
-                    # There and not readable is not the same as never
-                    # written. Starting from nothing would give back the
-                    # day's limits and any lockout, so no run starts until
-                    # somebody moves the file aside.
-                    held["record_unreadable"] = True
+            if not isinstance(held.get("persist"), dict) or held.get(
+                    "record_unreadable"):
+                self._read_record(name)
             self._persisted[name] = held.get("persist")
         self.started = self._monotonic()
         self.passes = 0
@@ -172,6 +164,10 @@ class Loop:
             suns, verdict = [], clock.Trust(
                 False, "the sun does not rise or set here on this date")
 
+        for name in self._persisted:
+            if (self.state.get(name) or {}).get("record_unreadable"):
+                self._read_record(name)
+
         prior = self.state
         decisions, self.state = decide.decide(
             local_now, mono_now, verdict.trusted,
@@ -193,6 +189,29 @@ class Loop:
             self._publish_state(decisions, local_now, mono_now, verdict)
         return decisions
 
+    def _read_record(self, name):
+        """Load an irrigation record from the card into the state.
+
+        There and not readable is not the same as never written. Starting
+        from nothing would give back the day's limits and any lockout, so a
+        record that cannot be read is marked, nothing is written over it, and
+        no run starts until it reads again or somebody moves it aside.
+        """
+        held = self.state.setdefault(name, {})
+        path = self.specs[name]["state_file"]
+        record = files.read_json(path)
+        if record is not None:
+            held["persist"] = record
+            held.pop("record_unreadable", None)
+        elif os.path.exists(path):
+            held.pop("persist", None)
+            held["record_unreadable"] = True
+        else:
+            if held.pop("record_unreadable", False):
+                # Moved aside: start a fresh one.
+                held.pop("persist", None)
+        self._persisted[name] = held.get("persist")
+
     #: The amp-hours an irrigation run may add before its record is written
     #: again. Every other change is written at once. A run then writes a few
     #: times rather than once a shunt reading.
@@ -212,6 +231,11 @@ class Loop:
                         - last.get("amp_hours_today", 0.0))
             idle = (self.state.get(name) or {}).get("phase") == "idle"
             held = self.state[name]
+            if held.get("record_unreadable"):
+                # Never written over: the record there is the only copy of
+                # the day's limits.
+                held["persist_saved"] = False
+                continue
             if rest(record) == rest(last) and (
                     moved < self.PERSIST_AMP_HOURS_STEP
                     and not (idle and moved)):

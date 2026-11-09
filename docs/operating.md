@@ -64,9 +64,9 @@ off for 5 minutes up to 12 hours, or until a local time. Every force ends on
 its own. The page also turns shedding on and off.
 
 The page changes the same file as the commands below, so the two always
-agree. It answers only the tailnet and the site network. If the page says the
-controller has not published recently, a force has no effect until the
-controller runs again.
+agree. It answers only the tailnet and the site network. If the page warns that
+the controller has not published, a force has no effect until the controller
+runs again.
 
 ## Run the irrigation, or the inverter alone
 

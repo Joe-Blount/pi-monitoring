@@ -794,3 +794,30 @@ def test_a_run_that_stops_between_readings_still_counts_its_draw():
     site.step(5)
     # Ten seconds at the most the pump may draw, with no reading to say less.
     assert site.persist["amp_hours_today"] == pytest.approx(60 * 10 / 3600)
+
+
+def test_an_unreadable_record_is_never_written_over(tmp_path):
+    site = Site()
+    path = tmp_path / "irrigation.json"
+    path.write_text("{torn")
+    machine, _, _ = irrigation_loop(tmp_path, site)
+    site.force("irrigation", "on", 20)
+    for _ in range(3):
+        machine.once()
+        site.mono += 10
+    assert path.read_text() == "{torn"
+
+
+def test_moving_an_unreadable_record_aside_lets_irrigation_start(tmp_path):
+    site = Site()
+    path = tmp_path / "irrigation.json"
+    path.write_text("{torn")
+    machine, pins, _ = irrigation_loop(tmp_path, site)
+    site.force("irrigation", "on", 20)
+    machine.once()
+    path.unlink()
+    for _ in range(3):
+        site.mono += 10
+        site.now += datetime.timedelta(seconds=10)
+        machine.once()
+    assert True in pins["irrigation.inverter"].levels
