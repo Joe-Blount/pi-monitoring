@@ -289,3 +289,22 @@ def test_the_floor_holds_against_a_force(downstairs):
     assert lines.mode == "Off: battery at its floor"
     assert lines.beats_force
     assert not ladder_mode(downstairs["nvr"], shed_level=0.0).beats_force
+
+
+def test_a_force_the_controller_refuses_shows_why(example):
+    lines = run_mode(example["irrigation"], irrigation.IDLE, forced=True,
+                     reason_code=float(decide.RUN_REFUSED),
+                     reason="a manual run cannot start: state of charge 40%")
+    assert lines.why == "a manual run cannot start: state of charge 40%"
+    plain = run_mode(example["irrigation"], irrigation.RUNNING, forced=True,
+                     reason="forced on by an operator")
+    assert plain.why is None
+
+
+def test_a_reason_that_repeats_the_mode_is_not_shown(example):
+    load = example["irrigation"]
+    assert run_mode(load, irrigation.IDLE, reason="idle").why is None
+    name = irrigation.inverter_name(load["name"])
+    lines = modes.describe(load, name, {name: {"powered": 0.0,
+                                               "reason": "off"}}, {}, True)
+    assert lines.mode == "Off" and lines.why is None

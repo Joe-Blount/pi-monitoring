@@ -303,6 +303,21 @@ def describe(load, row, published, readings, shedding, forced=False):
     ends. The published state then shows the force, not the load's own
     choice, so nothing here reads it as the load's own.
     """
+    lines = _describe(load, row, published, readings, shedding, forced)
+    own = _entry(published, row)
+    reason = own.get("reason")
+    if forced and isinstance(reason, str) and reason and not (
+            reason.startswith("forced ") and reason.endswith(
+                " by an operator")):
+        # The force is stored but the controller did something else, and
+        # its reason is the only place that says why.
+        lines.why = reason
+    if lines.why and lines.mode.lower().startswith(lines.why.lower()):
+        lines.why = None
+    return lines
+
+
+def _describe(load, row, published, readings, shedding, forced):
     own = _entry(published, row)
     kind = load["type"]
     if kind == "sequenced_ac":
