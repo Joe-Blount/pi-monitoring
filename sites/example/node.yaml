@@ -396,31 +396,25 @@ control:
         exit_above_soc_pct: 60
 
     # -- Sequenced AC: inverter and pump ------------------------------------
+    #
+    # The pump runs only through the inverter. The controller turns on the
+    # inverter, then the pump once the inverter settles, and stops them in
+    # the other order. A force on "irrigation" asks for a run until the force
+    # expires; a force on "irrigation.inverter" turns on the inverter alone,
+    # for AC power. Neither gets past a safety stop.
     irrigation:
       type: sequenced_ac
-      enabled: true           # the seasonal off switch. Set false when the
-                              # creek is dry; this is the manual dry-run
-                              # protection, and it is visible rather than
-                              # inferred from nothing happening
+      enabled: true           # the seasonal off switch: false when the creek
+                              # is dry
       on_stale_data: deny     # never start something on ignorance
 
+      # The inverter's own panel switch, wired in parallel with this relay,
+      # is not watched. Its idle draw cannot be told from the other loads on
+      # the shunt, so leaving that switch on is not reported.
       inverter:
         control_pin: 25
         polarity: energize_to_connect
         settle_after_on: 10s  # let the inverter stabilize before any load
-        # Worth having in some form, because the relay is wired in parallel
-        # with the inverter's own panel switch, so the Pi cannot command it off
-        # while that switch is on. Derived from load, a standing idle draw
-        # while commanded off reveals exactly that, which is the drain this
-        # whole design exists to remove.
-        #
-        # As a pin this is not an auxiliary contact: it senses whether AC is
-        # really present. A small pilot relay with a 120 VAC coil across the
-        # output, dry contacts to the GPIO. Mains never reaches a GPIO pin.
-        readback:
-          source: load
-          pin: null
-          expect_amps: {min: 0.8, max: 3.0}
 
       pump:
         control_pin: 22
@@ -429,38 +423,41 @@ control:
         readback:
           source: load
           pin: null
-          expect_amps: {min: 90, max: 180}
+          # The rise in battery discharge when the pump starts. Below the
+          # range is a dry pump or a lost prime; above it, a stalled pump.
+          # Measure it on the real pump, with water and without.
+          expect_amps: {min: 30, max: 60}
 
-      # Where a request comes from. A decision may not depend on the network,
-      # but a request is not a decision: the file is read locally like any
-      # other input.
+      sources:
+        soc: {device: bms, field: state_of_charge_pct}
+        volts: {device: mppt, field: battery_volts}
+        shunt: {device: shunt, field: shunt_amps}
+        charge_state: {device: mppt, field: charge_state_code}
+      stale_after: 10m
+      shunt_stale_after: 150s   # two missed reads at a one minute poll
+
       schedule:
-        - {days: [mon, wed, fri], at: "18:30", duration: 45m}
-      request_file: /var/lib/monitoring/example-irrigation-request.json
-      request_max_age: 2h     # a forgotten manual request must expire
+        every_days: 2
+        starts:
+          - {at: "18:30", run: 45m}
+          - {at: [sunrise, 1h], run: 20m}
 
       start_conditions:
         # Charge state is drift-free, unlike any coulomb counter. But the
         # Victron reports off or bulk after sunset however full the bank is,
-        # so requiring it RIGHT NOW would make evening watering impossible.
-        # "Was full within the window" keeps the drift-free property and
-        # allows an evening run.
+        # so requiring it at the moment of starting would make evening
+        # watering impossible. "Was full within the window" keeps the
+        # drift-free property and allows an evening run. A run an operator
+        # asks for skips this condition, and the cooldown.
         charge_state_was_in: [float, absorption]
         within: 6h
         soc_above_pct: 40
-        battery_volts_above: 13.0   # checked at the moment of starting: a
-                                    # sagging bank plus motor inrush is how an
-                                    # inverter trips mid-start
-
-        # Deliberately NOT a production threshold. In float the charge
-        # controller curtails, so production falls to whatever the loads draw.
-        # A PV-watts gate would therefore fail hardest on the sunniest day.
+        battery_volts_above: 13.0
 
       continue_conditions:
         # Separate from the start conditions on purpose. The pump itself
-        # changes the conditions that allowed it to start: at 130 A the bank
-        # sags and the controller leaves float within seconds, so re-checking
-        # the start conditions would stop every cycle it began.
+        # changes the conditions that allowed it to start, so re-checking the
+        # start conditions would stop every run it began.
         max_run: 45m
         soc_above_pct: 30
         battery_volts_above: 12.6
@@ -468,44 +465,22 @@ control:
       limits:
         cooldown: 2h
         max_amp_hours_per_day: 160
-        failed_start_lockout: 3     # consecutive failed starts before giving
-                                    # up for the day. This is what brakes the
-                                    # loop where a converter brownout during
-                                    # inrush reboots the Pi, the bank recovers
-                                    # unloaded, and the criteria pass again
-                                    # immediately.
-        lockout_until: next_day
+        failed_start_lockout: 3     # failed starts in a day before it locks
+                                    # out until the next day
 
       dry_run_check:
-        # A centrifugal pump running dry draws noticeably LESS current than a
-        # loaded one, so the current step at start says whether it is really
-        # pumping. Catches a dry creek, a seized pump, an airlock, a tripped
-        # breaker. Real dry protection is still manual: disable irrigation
-        # when the creek is dry.
-        enabled: true
-        expected_delta_amps: {min: 90, max: 180}   # measure, do not guess
         settle: 15s
-        on_stale_shunt: skip        # skip | abort. Refusing to irrigate on a
-                                    # stale Bluetooth reading would mean a
-                                    # flaky radio stops the watering.
+        deadline: 150s
 
-      guard:
-        # A separate systemd unit that stops the controller when the pump has
-        # run too long. Stopping releases the output pins, which drops the
-        # contactor. The cap is deliberately longer than max_run so the two
-        # limits do not share a failure mode.
-        absolute_max_run: 60m
+      # A check on the node file rather than a second limit: max_run may not
+      # be set longer than this.
+      absolute_max_run: 60m
+      state_file: /var/lib/monitoring/example-irrigation.json
 
-        # What the guard watches:
-        #
-        #   state_file  the file the controller rewrites each loop. Catches a
-        #               hung controller and a controller that is simply wrong,
-        #               which is what the guard is for. Cannot see a welded
-        #               contactor. Needs no hardware.
-        #   pin         a dry contact. Fully independent of the controller.
-        input: state_file
-        pin: null
-        stale_after: 60s      # state file older than this counts as hung
+      floor:
+        sources:
+          - {device: bms, field: cell_min_volts, shed_below: 3.15,
+             restore_above: 3.25}
 
     # -- Battery heating ----------------------------------------------------
     #

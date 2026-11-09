@@ -85,6 +85,13 @@ REFUSED = 9
 #: would see a powered one. Only the free text explained it.
 HELD_BY_TIMER = 10
 
+#: An irrigation run that its start conditions refused, or a lockout.
+RUN_REFUSED = 11
+
+#: An irrigation run stopped as a failed start: the pump drew outside its
+#: range, or no reading came to check it.
+FAILED_START = 12
+
 
 def _reading(readings, source, stale_after):
     """One field's value, or None when it cannot be trusted.

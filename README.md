@@ -263,26 +263,27 @@ block including the charge setpoints is unmapped. Each driver's docstring
 separates what was confirmed against an independent reading from what is
 inferred, which is worth reading before trusting a field.
 
-Control: written and tested for four load types. One is a DC branch shed on
+Control: written and tested for five load types. One is a DC branch shed on
 the battery's state of charge with a floor beneath it. Another is a fan aimed
 at the Pi, run on the chip temperature with a band between on and off. The
 third is a vent fan, run when the inside is warm and the outside air is cooler.
 The fourth is a battery heater, run on the coldest pack sensor when the panels
 are producing or a good morning is coming, with a hard stop, a daily cap and a
 fallback to production alone when no temperature can be trusted. Its relay is
-not wired yet, so it is disabled in the node file.
-The controller is installed at both sites, disabled. The pump sequence is
-specified in the node files and refused by the controller until a decision
-for it is written. It is
-commissioned in place rather than on a bench, with its run-time cap and its
-guard in force from the first live run, so that a relay which sticks on is
-bounded rather than unbounded.
+not wired yet, so it is disabled in the node file. The fifth is irrigation:
+an inverter and a pump behind it, switched in order, with a dry-run check on
+the shunt, run limits, battery limits and a daily lockout after failed
+starts.
+The controller runs on the blind's downstairs node, and its node file says
+which loads it drives. The irrigation sequence is written and tested, and it
+stays disabled in the node file until a supervised wet and dry run on site.
+The controller unit has a watchdog: if passes stop, systemd kills the process,
+every pin is released, and every load falls to its wired fail-safe.
 
-Two preconditions are settled before then, and both are software rather than
-hardware. Whether killing a process releases the GPIO line, which depends on
-the gpiozero backend and is what the fail-safe story rests on. And whether two
-processes can hold one input line, which decides whether the guard needs a pin
-of its own.
+Two preconditions are settled before a node drives anything, and both are
+software rather than hardware. Whether killing a process releases the GPIO
+line, which depends on the gpiozero backend and is what the fail-safe story
+rests on. And whether two processes can hold one input line.
 
 `bin/gpio-probe` answers both on the machine that will run the control, with
 the operating system it will run, and needs nothing wired:

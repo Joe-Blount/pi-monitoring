@@ -429,9 +429,11 @@ control:
       enabled: false
       on_stale_data: deny
 
+      # The relay is wired in parallel with the inverter's own panel switch.
+      # That switch is not watched: its idle draw cannot be told from the
+      # other loads on the shunt, so leaving it on is not reported.
       inverter:
-        control_pin: 25               # physical 22, relay in parallel with
-                                      # the inverter's own panel switch
+        control_pin: 25               # physical 22
         polarity: energize_to_connect
         settle_after_on: 10s
 
@@ -494,6 +496,8 @@ control:
         settle: 15s
         deadline: 150s
 
+      # A check on this file rather than a second limit: max_run may not be
+      # set longer than this.
       absolute_max_run: 60m
       state_file: /var/lib/monitoring/blind1-irrigation.json
 

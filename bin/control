@@ -51,6 +51,10 @@ from monitoring.control import (                            # noqa: E402
 
 DEFAULT_NODE = "/etc/monitoring/node.yaml"
 
+#: The longest loop interval a node file may set. Half the controller unit's
+#: WatchdogSec, so one slow pass does not get a healthy controller killed.
+MAX_LOOP_INTERVAL = 60
+
 #: Four paths the control package accepts as explicit arguments for exactly
 #: this reason: their defaults are real, fixed system paths (/run/monitoring,
 #: /var/lib/monitoring) that do not exist on every machine this runs on,
@@ -98,9 +102,18 @@ def _loop_interval(node):
     """
     value = node.control.get("loop_interval", 30)
     try:
-        return duration.seconds(value, "control.loop_interval")
+        seconds = duration.seconds(value, "control.loop_interval")
     except duration.DurationError as exc:
         raise config.ConfigError("%s: %s" % (node.path, exc))
+    if not 0 < seconds <= MAX_LOOP_INTERVAL:
+        # The loop tells the unit's watchdog it is alive once a pass. A
+        # longer interval would have systemd kill a healthy controller, and
+        # every kill drops every load to its fail-safe.
+        raise config.ConfigError(
+            "%s: control.loop_interval must be more than 0 and at most %ds, "
+            "well inside the controller unit's watchdog, found %r"
+            % (node.path, MAX_LOOP_INTERVAL, value))
+    return seconds
 
 
 def _readings_reader(boot):
@@ -540,6 +553,18 @@ def _load_names(path):
 
 
 def cmd_clear_lockout(args):
+    try:
+        node = config.load(args.node, known_drivers=driver_registry.names())
+        loads = {name for name, load in spec.load_control(node).items()
+                 if load["type"] == "sequenced_ac"}
+    except (config.ConfigError, spec.SpecError) as exc:
+        sys.stderr.write("%s\n" % exc)
+        return 2
+    if args.load not in loads:
+        sys.stderr.write("%r is not an irrigation load on this node; those "
+                         "are: %s\n" % (args.load,
+                                        ", ".join(sorted(loads)) or "none"))
+        return 2
     override.clear_lockout(args.load, time.time(), path=_switches_path())
     sys.stdout.write("%s: lockout cleared\n" % args.load)
     return 0
@@ -634,6 +659,7 @@ def build_parser():
         "clear-lockout",
         help="let an irrigation load that failed to start try again today")
     lockout_p.add_argument("load", help="the irrigation load's name")
+    _add_node_argument(lockout_p)
 
     shedding_p = subparsers.add_parser(
         "shedding", help="enable, disable, or report the shedding switch")

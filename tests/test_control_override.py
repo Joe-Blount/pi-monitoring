@@ -76,7 +76,7 @@ def test_a_force_without_a_finite_expiry_is_refused(tmp_path):
                            path=str(tmp_path / "s.json"))
 
 
-def test_expiry_for_a_duration_counts_from_now():
+def test_expiry_for_a_duration_counts_from_the_time_given():
     assert override.expiry_for("15m", now=100.0) == 1000.0
 
 

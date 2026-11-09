@@ -237,9 +237,9 @@ def render(view, message=None):
 
     if view.published_age is None or view.published_age > view.stale_after():
         parts.append(
-            "<p class=warn>The controller has not published recently. It is "
+            "<p class=warn>The controller has not published in the last %d s. It is "
             "possibly not running. A force has no effect until it runs, and "
-            "every load stays at its fail-safe.</p>")
+            "every load stays at its fail-safe.</p>" % view.stale_after())
     else:
         parts.append("<p class=muted>Controller published %s.</p>"
                      % _age_text(view.published_age))
@@ -465,6 +465,11 @@ class Server(http.server.HTTPServer):
 
     def handle_timeout(self):
         self.idle = True
+
+    def verify_request(self, request, client_address):
+        # Closed before a byte is read, so a client the page does not answer
+        # cannot hold the one handler by sending slowly.
+        return allowed_client(client_address[0])
 
     def serve_until_idle(self):
         while not self.idle:

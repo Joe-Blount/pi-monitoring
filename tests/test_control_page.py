@@ -66,14 +66,14 @@ def test_the_page_shows_each_load_with_its_published_state(served):
     status, text = request(server, "GET", "/")
     assert status == 200
     assert "cameras" in text and "above every threshold" in text
-    assert "has not published recently" not in text
+    assert "has not published in the last" not in text
 
 
 def test_the_page_warns_when_the_controller_has_published_nothing(served):
     server, _ = served
     status, text = request(server, "GET", "/")
     assert status == 200
-    assert "has not published recently" in text
+    assert "has not published in the last" in text
 
 
 def test_the_page_shows_the_reading_a_load_decides_on(served):
@@ -294,3 +294,12 @@ def test_the_lockout_can_be_cleared_from_the_page(irrigated):
     status, _ = request(server, "POST", "/clear-lockout",
                         {"load": "irrigation.inverter"})
     assert status == 400
+
+
+def test_a_client_the_page_does_not_answer_is_closed_before_it_is_read():
+    server = page.Server(("127.0.0.1", 0), page.Handler)
+    try:
+        assert not server.verify_request(None, ("8.8.8.8", 5000))
+        assert server.verify_request(None, ("100.70.1.2", 5000))
+    finally:
+        server.server_close()

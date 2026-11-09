@@ -110,13 +110,16 @@ def read_json(path):
     return value if isinstance(value, dict) else None
 
 
-def write_json(path, data, mode=None):
+def write_json(path, data, mode=None, durable=False):
     """Write a JSON file so a reader never sees it half written.
 
     Temp file in the same directory, flushed, then renamed. Rename within a
     directory is atomic, so a reader opening the path gets the whole of one
     version or the whole of the other. A `mode` is set before the rename, so
     no reader ever sees the file with the creator's umask instead.
+
+    `durable` also syncs the directory, so the rename itself survives a power
+    cut. A record that a decision waits on being saved needs it.
     """
     directory = os.path.dirname(path) or "."
     os.makedirs(directory, exist_ok=True)
@@ -129,6 +132,12 @@ def write_json(path, data, mode=None):
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
+        if durable:
+            descriptor = os.open(directory, os.O_RDONLY)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
     finally:
         try:
             os.unlink(temporary)

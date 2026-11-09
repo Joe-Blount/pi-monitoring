@@ -879,7 +879,27 @@ def test_override_until_accepts_only_the_documented_form(tmp_path):
     assert not switches_path(tmp_path).exists()
 
 
+def irrigation_node(tmp_path):
+    import yaml
+    from tests.test_control_page import IRRIGATION_NODE
+    from tests.test_irrigation import BLOCK
+    block = yaml.safe_dump(BLOCK, default_flow_style=False)
+    path = tmp_path / "node.yaml"
+    path.write_text(IRRIGATION_NODE % "\n".join(
+        "      " + line for line in block.splitlines()))
+    return path
+
+
+def test_clear_lockout_refuses_a_load_that_is_not_irrigation(tmp_path):
+    irrigation_node(tmp_path)
+    result = run_switches(tmp_path, "clear-lockout", "irigation")
+    assert result.returncode == 2
+    assert "irigation" in result.stderr
+    assert not switches_path(tmp_path).exists()
+
+
 def test_clear_lockout_writes_the_moment_it_was_asked(tmp_path):
+    irrigation_node(tmp_path)
     result = run_switches(tmp_path, "clear-lockout", "irrigation")
     assert result.returncode == 0, result.stderr
     with open(switches_path(tmp_path)) as handle:
@@ -932,3 +952,10 @@ def test_override_refuses_a_load_the_node_file_does_not_declare(tmp_path):
 def test_override_clear_takes_a_name_the_node_file_does_not_declare(tmp_path):
     result = run_switches(tmp_path, "override", "clear", "retired_load")
     assert result.returncode == 0
+
+
+def test_a_loop_interval_past_the_watchdog_is_refused(tmp_path):
+    node = controlled_node(tmp_path, loop_interval="2m")
+    result = run_control(tmp_path, "run", "--node", str(node))
+    assert result.returncode == 2
+    assert "loop_interval" in result.stderr

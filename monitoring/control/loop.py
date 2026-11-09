@@ -29,6 +29,7 @@ degradation nobody would notice from the data, so it refuses instead.
 """
 
 import datetime
+import os
 
 from . import clock, decide, files, relay, spec, sun
 
@@ -101,6 +102,13 @@ class Loop:
                 record = files.read_json(load["state_file"])
                 if record is not None:
                     held["persist"] = record
+                    held.pop("record_unreadable", None)
+                elif os.path.exists(load["state_file"]):
+                    # There and not readable is not the same as never
+                    # written. Starting from nothing would give back the
+                    # day's limits and any lockout, so no run starts until
+                    # somebody moves the file aside.
+                    held["record_unreadable"] = True
             self._persisted[name] = held.get("persist")
         self.started = self._monotonic()
         self.passes = 0
@@ -211,7 +219,7 @@ class Loop:
                 continue
             try:
                 files.write_json(self.specs[name]["state_file"], record,
-                                 mode=0o644)
+                                 mode=0o644, durable=True)
             except OSError:
                 # Controlling goes on. A run does not start on a record that
                 # did not reach the card, because after a reboot it would

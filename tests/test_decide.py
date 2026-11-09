@@ -2093,7 +2093,7 @@ def test_a_long_loop_interval_counts_the_whole_run_against_the_cap():
     assert not decision.connected
 
 
-def test_a_restart_after_a_new_run_keeps_counting_from_the_restart():
+def test_a_restart_after_a_run_starts_keeps_counting_from_the_restart():
     spec = dict(HEATER, max_run_per_day=3600.0, heat_dwell=0.0)
     _, state = heater(spec=spec, mono=0.0)
     _, state = heater(spec=spec, state=dict(state, restarted=True), mono=1000.0)

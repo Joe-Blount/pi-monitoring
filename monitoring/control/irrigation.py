@@ -30,6 +30,7 @@ lockout, the last day watered, the requests already used) is kept in the
 changes. That is a few writes a day.
 """
 
+import copy
 import datetime
 
 from monitoring.control import decide
@@ -181,6 +182,10 @@ def _scheduled_request(spec, persist, local_now, suns):
 def _start_refusal(spec, request, readings, persist, state, mono_now,
                    local_now, inverter_forced_off, floor_reason):
     """Why a run cannot start now, or None when it can."""
+    if state.get("record_unreadable"):
+        return ("the record at %s cannot be read, so the day's limits are "
+                "unknown; move it aside to start a fresh one"
+                % spec["state_file"])
     if _locked_out(persist):
         return "locked out after %d failed starts today" % (
             persist.get("failed_today", 0))
@@ -254,10 +259,26 @@ def _count_amp_hours(run, persist, amps, stamp):
     if stamp <= pump_on or (last is not None and stamp <= last):
         return
     since = pump_on if last is None else max(last, pump_on)
-    rise = run["baseline_amps"] - amps
+    rise = max(0.0, run["baseline_amps"] - amps)
     persist["amp_hours_today"] = float(persist.get("amp_hours_today", 0.0)) + (
-        max(0.0, rise) * (stamp - since) / 3600.0)
+        rise * (stamp - since) / 3600.0)
     run["last_shunt_at"] = stamp
+    run["last_rise"] = rise
+
+
+def _count_to_stop(spec, run, persist, mono_now):
+    """Add the pump's draw from the last counted reading to the stop.
+
+    At the last rise measured, or at the most the pump is allowed to draw
+    when none was, so short runs that stop between readings still count.
+    """
+    pump_on = run.get("pump_on_mono")
+    if pump_on is None:
+        return
+    since = run.get("last_shunt_at") or pump_on
+    rise = run.get("last_rise", spec["pump"]["expect_amps"][1])
+    persist["amp_hours_today"] = float(persist.get("amp_hours_today", 0.0)) + (
+        rise * max(0.0, mono_now - since) / 3600.0)
 
 
 def _running_stop(spec, run, readings, persist, local_now, mono_now,
@@ -352,8 +373,11 @@ def irrigation_decision(name, spec, readings, local_now, mono_now, suns,
     - stopping: the pump is off and the inverter stays on until the pump has
       spun down, then the inverter follows
     """
-    state = dict(state)
-    inverter_state = dict(inverter_state)
+    # Deep copies. The loop keeps the state from before this pass to fall
+    # back on if a relay cannot be driven, and a nested record changed in
+    # place would change that copy too.
+    state = copy.deepcopy(state)
+    inverter_state = copy.deepcopy(inverter_state)
     today = local_now.date().isoformat()
     persist = _persist_for_today(state.get("persist"), today, clock_trusted)
     state["persist"] = persist
@@ -428,7 +452,7 @@ def irrigation_decision(name, spec, readings, local_now, mono_now, suns,
             else:
                 reason = "a %s run cannot start: %s" % (request["kind"],
                                                         refusal)
-                reason_code = decide.REFUSED
+                reason_code = decide.RUN_REFUSED
                 if request["kind"] == "scheduled":
                     # Skipped for the day, and the reason stays in view
                     # until something else happens.
@@ -441,7 +465,7 @@ def irrigation_decision(name, spec, readings, local_now, mono_now, suns,
         elif _locked_out(persist):
             reason = "locked out after %d failed starts today" % (
                 persist.get("failed_today", 0))
-            reason_code = decide.REFUSED
+            reason_code = decide.RUN_REFUSED
 
     run = state.get("run")
     live = phase in (STARTING, RUNNING) and not pump_forced_off and \
@@ -501,9 +525,10 @@ def irrigation_decision(name, spec, readings, local_now, mono_now, suns,
         else:
             if failed:
                 _fail_start(spec, persist)
+            _count_to_stop(spec, run, persist, mono_now)
             _close_run(state, persist, local_now, clock_trusted)
             state["stop_reason"] = reason = "stopped: " + stop
-            reason_code = decide.REFUSED if failed else decide.NONE
+            reason_code = decide.FAILED_START if failed else decide.NONE
             state["phase"] = phase = STOPPING
             state["phase_since"] = mono_now
             # The inverter stays on this pass, with the pump off.

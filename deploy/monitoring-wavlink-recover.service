@@ -14,7 +14,7 @@ Type=oneshot
 # Root, because changing NetworkManager connections needs it.
 ExecStart=/opt/monitoring/bin/wavlink-recover check
 StateDirectory=wavlink-recover
-StateDirectoryMode=0700
+StateDirectoryMode=0755
 # Longer than one repair's own limits add up to, so systemd only ever stops a
 # repair that has truly hung. The command's stop handler cleans up within the
 # next call it is waiting on, so give it the time that takes.

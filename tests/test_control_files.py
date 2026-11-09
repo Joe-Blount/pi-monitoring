@@ -583,3 +583,17 @@ def test_damaged_yaml_is_refused_rather_than_read_as_nothing(tmp_path):
     with pytest.raises(location.LocationError) as raised:
         location.read(written(tmp_path, "latitude: [37.0\n"))
     assert "not valid YAML" in str(raised.value)
+
+
+def test_a_durable_write_syncs_the_directory(tmp_path, monkeypatch):
+    synced = []
+    real = files.os.fsync
+
+    def spy(descriptor):
+        synced.append(descriptor)
+        real(descriptor)
+    monkeypatch.setattr(files.os, "fsync", spy)
+    files.write_json(str(tmp_path / "a.json"), {"x": 1})
+    plain = len(synced)
+    files.write_json(str(tmp_path / "b.json"), {"x": 1}, durable=True)
+    assert len(synced) == 2 * plain + 1

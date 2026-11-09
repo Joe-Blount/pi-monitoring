@@ -82,7 +82,7 @@ sudo control override irrigation.inverter on --for 4h
 
 A run stops at the first of these, whatever was asked:
 
-- the time asked for, the 45 minute run limit, or the 60 minute hard limit
+- the time asked for, or the 45 minute run limit
 - charge at or below 30 percent, or the battery at or below 12.6 V
 - a pump that draws less than 30 A or more than 60 A, checked on the first
   shunt reading 15 s after it starts: dry, lost its prime, or stalled
@@ -463,6 +463,16 @@ the node file needs no panel edited.
 | `floor_latched_by` | Which source holds the floor, as `device.field`, such as `bms.cell_min_volts`. Only that source can release it, so this is the number to watch. Absent while `floor_latched` is `0.0`. |
 | `level_changes` | How many times the level on this load's pin has changed since the machine booted. A counter, not a state: two changes are one cycle of the load, so "how many times did the recorder cycle today" is half the difference between its values at the two ends of the day. It is kept in tmpfs with the rest of the controller's state, so it survives a restart of the service and starts again at zero on every boot; a reboot inside the day shows as the count dropping back to zero. A drive that energizes the relay counts, and so does one that releases it. A restart of the service while the relay was energized counts twice, because the relay drops when the service stops and is energized again when it starts. A decision that never reached the pin does not count. Not to be confused with a battery's `cycles`, which counts charge cycles. |
 
+An irrigation load is two points: `load=irrigation` for the pump and the run,
+and `load=irrigation.inverter` for the inverter. The first also carries:
+
+| Field | Meaning |
+|---|---|
+| `phase` | `0` idle, `1` starting, `2` running, `3` stopping. |
+| `amp_hours_today` | The pump's draw today, counted from the shunt. |
+| `failed_starts_today` | Failed starts today. Three lock it out until the next day. |
+| `locked_out` | `1.0` while it is locked out. |
+
 A few fields describe the controller itself, not any one load. They are on
 the point with no `load` tag:
 
@@ -495,3 +505,5 @@ a collector fault, never a load with nothing to say.
 | 8 | thermal | A fan or heater decided on its temperatures: at or above its upper bound, at or below its lower bound, or between them and keeping its last state. A heater's hard stop and its preheat are in here too; `reason` tells them apart. |
 | 9 | refused | The node file declares a load type this controller does not drive. |
 | 10 | held by timer | The decision is correct, but a minimum run or minimum off time has not elapsed, so it has not taken effect yet. Also a heater that wants heat with its daily cap used up or its cooldown still running. |
+| 11 | run refused | An irrigation run cannot start: a start condition fails, the day's amp-hours are used, or it is locked out. `reason` says which. |
+| 12 | failed start | An irrigation run stopped because the pump drew outside its range, or no shunt reading came in time to check it. It counts toward the lockout. |

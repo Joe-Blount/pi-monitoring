@@ -771,3 +771,26 @@ def test_a_run_whose_time_ends_while_starting_never_starts_the_pump():
     for _ in range(4):
         pump, _ = site.step()
         assert not pump.connected
+
+
+def test_an_unreadable_record_refuses_every_start(tmp_path):
+    site = Site()
+    (tmp_path / "irrigation.json").write_text("{torn")
+    machine, pins, published = irrigation_loop(tmp_path, site)
+    site.force("irrigation", "on", 20)
+    for _ in range(3):
+        machine.once()
+        site.now += datetime.timedelta(seconds=10)
+        site.mono += 10
+    assert True not in pins["irrigation.inverter"].levels
+    assert "cannot be read" in published["loads"]["irrigation"]["reason"]
+
+
+def test_a_run_that_stops_between_readings_still_counts_its_draw():
+    site = Site()
+    run_to_pump(site)
+    site.step(5)
+    site.switches["loads"].pop("irrigation")
+    site.step(5)
+    # Ten seconds at the most the pump may draw, with no reading to say less.
+    assert site.persist["amp_hours_today"] == pytest.approx(60 * 10 / 3600)
