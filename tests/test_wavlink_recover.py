@@ -407,7 +407,8 @@ RESET_SCAN = "WAVLINK-N:02\\:00\\:00\\:00\\:00\\:01\n"
 
 
 def do_check(config, state_path, machine, **kw):
-    clock = Clock()
+    clock = kw.pop("clock", None) or Clock()
+    kw.setdefault("synced", lambda: False)
     said = []
     code = wr.check(config, state_path=str(state_path), run=machine,
                     sleep=clock.sleep, now=lambda: NOW, clock=clock,
@@ -553,3 +554,41 @@ def test_the_state_directory_is_readable_by_the_collector(tmp_path):
     (tmp_path / "wr").mkdir(mode=0o700)
     wr.save_state({"sightings": 0, "attempts": []}, str(path))
     assert (path.parent.stat().st_mode & 0o777) == 0o755
+
+
+def test_a_repair_on_a_wrong_clock_keeps_what_corrects_it(config, tmp_path):
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps({"sightings": 1, "attempts": [],
+                                      "boot": "boot-a"}))
+    do_check(config, state_path, Machine(scans=[RESET_SCAN, ""]),
+             boot="boot-a")
+    attempt = json.loads(state_path.read_text())["attempts"][0]
+    assert attempt["clock_trusted"] is False
+    assert attempt["boot"] == "boot-a"
+    assert isinstance(attempt["monotonic"], float)
+
+
+def test_a_right_clock_later_in_the_boot_corrects_the_time(config, tmp_path):
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps({"sightings": 0, "attempts": [
+        {"at": 1000.0, "result": "restored", "boot": "boot-a",
+         "monotonic": 50.0, "clock_trusted": False}]}))
+    clock = Clock()
+    clock.t = 650.0
+    do_check(config, state_path, Machine(scans=[""]), boot="boot-a",
+             clock=clock, synced=lambda: True)
+    attempt = json.loads(state_path.read_text())["attempts"][0]
+    assert attempt["at"] == NOW - 600.0
+    assert attempt["clock_trusted"] is True
+
+
+@pytest.mark.parametrize("boot,synced", [("boot-b", True), ("boot-a", False)])
+def test_a_time_is_left_alone_without_a_right_clock_in_the_same_boot(
+        config, tmp_path, boot, synced):
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps({"sightings": 0, "attempts": [
+        {"at": 1000.0, "result": "restored", "boot": "boot-a",
+         "monotonic": 50.0, "clock_trusted": False}]}))
+    do_check(config, state_path, Machine(scans=[""]), boot=boot,
+             synced=lambda: synced)
+    assert json.loads(state_path.read_text())["attempts"][0]["at"] == 1000.0

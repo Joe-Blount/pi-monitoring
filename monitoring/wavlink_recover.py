@@ -194,6 +194,30 @@ def attempts_in_last_day(state, now):
     return [a for a in state["attempts"] if now - a["at"] < DAY]
 
 
+def correct_times(state, boot, now, monotonic):
+    """Move each attempt's time to the right one, once the clock is right.
+
+    The Pi has no battery clock, and a broken network is what keeps it from
+    setting the time, so a repair usually happens with the clock wrong. Each
+    attempt keeps the boot and the monotonic time it happened at. Later in
+    the same boot, on a clock that is right, the attempt's time is the time
+    now less the monotonic time since.
+
+    Call it only on a clock that is right. Returns whether anything moved.
+    """
+    moved = False
+    for attempt in state["attempts"]:
+        stamp = attempt.get("monotonic")
+        if (attempt.get("clock_trusted") is False
+                and attempt.get("boot") == boot and boot is not None
+                and isinstance(stamp, (int, float))
+                and not isinstance(stamp, bool)):
+            attempt["at"] = now - max(0.0, monotonic - stamp)
+            attempt["clock_trusted"] = True
+            moved = True
+    return moved
+
+
 def decide(pairs, state, config, now, boot=None):
     """Say what this check should do. Updates the sighting count in state.
     Returns (action, reason); action is idle, wait, limited or repair.
@@ -410,11 +434,20 @@ def repair(config, run=run_command, sleep=time.sleep, clock=time.monotonic):
 
 def check(config, state_path=STATE_PATH, dry_run=False, run=run_command,
           sleep=time.sleep, now=time.time, clock=time.monotonic, say=print,
-          boot=None):
-    """One timed check. Returns the process exit code."""
+          boot=None, synced=None):
+    """One timed check. Returns the process exit code.
+
+    `synced` says whether the wall clock is right. It defaults to the same
+    test the load controller uses."""
     check_settings(config)
+    if synced is None:
+        from monitoring.control import clock as wall_clock
+        synced = lambda: wall_clock.assess().trusted  # noqa: E731
     state = load_state(state_path)
     before = json.dumps(state, sort_keys=True)
+    trusted = bool(synced())
+    if trusted:
+        correct_times(state, boot, now(), clock())
     if not dry_run:
         remove_leftover_profile(run)
     pairs = scan(config, run)
@@ -428,7 +461,10 @@ def check(config, state_path=STATE_PATH, dry_run=False, run=run_command,
         if json.dumps(state, sort_keys=True) != before:
             save_state(state, state_path)
         return 0
-    attempt = {"at": now(), "result": "started"}
+    # The boot and the monotonic time, so a time taken on a wrong clock can
+    # be corrected later in this boot.
+    attempt = {"at": now(), "result": "started", "boot": boot,
+               "monotonic": clock(), "clock_trusted": trusted}
     state["attempts"].append(attempt)
     save_state(state, state_path)
     try:

@@ -549,9 +549,13 @@ def switches_path(tmp_path):
 
 
 def run_switches(tmp_path, *args, timeout=10):
+    node = tmp_path / "node.yaml"
+    if not node.exists():
+        controlled_node(tmp_path)
     return run_control(
         tmp_path, *args,
-        extra_env={"MONITORING_SWITCHES": str(switches_path(tmp_path))},
+        extra_env={"MONITORING_SWITCHES": str(switches_path(tmp_path)),
+                   "MONITORING_NODE": str(node)},
         timeout=timeout)
 
 
@@ -681,7 +685,8 @@ def test_a_dry_run_reads_the_switches_the_override_command_writes(tmp_path):
     env = {"MONITORING_SWITCHES": str(switches_path(tmp_path))}
 
     set_result = run_control(tmp_path, "override", "cameras", "off",
-                             "--for", "8h", extra_env=env)
+                             "--for", "8h", "--node", str(node),
+                             extra_env=env)
     assert set_result.returncode == 0, set_result.stderr
 
     seen = run_control(tmp_path, "dry-run", "--node", str(node),
@@ -915,3 +920,15 @@ def test_each_pass_tells_systemd_the_loop_is_alive(tmp_path, monkeypatch):
             assert listener.recv(64) == b"WATCHDOG=1"
         finally:
             os.unlink(address)
+
+
+def test_override_refuses_a_load_the_node_file_does_not_declare(tmp_path):
+    result = run_switches(tmp_path, "override", "camras", "on", "--for", "1h")
+    assert result.returncode == 2
+    assert "camras" in result.stderr and "cameras" in result.stderr
+    assert not switches_path(tmp_path).exists()
+
+
+def test_override_clear_takes_a_name_the_node_file_does_not_declare(tmp_path):
+    result = run_switches(tmp_path, "override", "clear", "retired_load")
+    assert result.returncode == 0

@@ -509,7 +509,14 @@ def cmd_override(args, override_parser):
                 "--until needs a timestamp written as "
                 "\"YYYY-MM-DD HH:MM\", found %r" % args.until)
 
-    override.force(name, state, expires, path=_switches_path())
+    try:
+        known = _load_names(args.node)
+        override.force(name, state, expires, path=_switches_path(),
+                       known=known)
+    except (config.ConfigError, spec.SpecError,
+            override.OverrideError) as exc:
+        sys.stderr.write("%s\n" % exc)
+        return 2
     # The same formatter the status listing uses, so the line confirming an
     # override and the line reporting it later cannot disagree about the
     # hour. Two formatters would be two chances to pick a zone, and an
@@ -518,6 +525,18 @@ def cmd_override(args, override_parser):
     sys.stdout.write("%s: forced %s %s\n" % (
         name, state, _expiry_text(expires, time.time(), zone)))
     return 0
+
+
+def _load_names(path):
+    """Every name a force can be written for on this node.
+
+    Read from the node file, so a misspelled name is refused rather than
+    written as a force no load ever reads. Clearing takes any name, so a
+    force left under a name the node file no longer has can still go.
+    """
+    node = config.load(path, known_drivers=driver_registry.names())
+    return {output for load in spec.load_control(node).values()
+            for output, _, _ in spec.outputs(load)}
 
 
 def cmd_clear_lockout(args):
@@ -608,6 +627,7 @@ def build_parser():
         "--until", metavar="TIMESTAMP",
         help="the local time the force lasts until, such as "
              "a local time written as \"YYYY-MM-DD HH:MM\"")
+    _add_node_argument(override_p)
     override_p.set_defaults(override_parser=override_p)
 
     lockout_p = subparsers.add_parser(
