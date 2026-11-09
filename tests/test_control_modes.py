@@ -296,8 +296,11 @@ def test_a_force_the_controller_refuses_shows_why(example):
                      reason_code=float(decide.RUN_REFUSED),
                      reason="a manual run cannot start: state of charge 40%")
     assert lines.why == "a manual run cannot start: state of charge 40%"
-    plain = run_mode(example["irrigation"], irrigation.RUNNING, forced=True,
-                     reason="forced on by an operator")
+    downstairs = loads("blind1", "downstairs.yaml")
+    plain = modes.describe(
+        downstairs["cpu_fan"], "cpu_fan",
+        {"cpu_fan": {"powered": 1.0, "reason": "forced on by an operator"}},
+        {}, True, forced=True)
     assert plain.why is None
 
 

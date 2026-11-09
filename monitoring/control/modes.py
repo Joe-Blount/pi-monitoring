@@ -309,8 +309,8 @@ def describe(load, row, published, readings, shedding, forced=False):
     if forced and isinstance(reason, str) and reason and not (
             reason.startswith("forced ") and reason.endswith(
                 " by an operator")):
-        # The force is stored but the controller did something else, and
-        # its reason is the only place that says why.
+        # The controller's reason says what it did with the stored force,
+        # such as refusing it, holding it back, or running under it.
         lines.why = reason
     if lines.why and lines.mode.lower().startswith(lines.why.lower()):
         lines.why = None
