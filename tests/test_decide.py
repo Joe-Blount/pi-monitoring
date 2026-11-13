@@ -1047,6 +1047,19 @@ def test_a_primary_between_its_bounds_holds_a_fallback_shed():
     assert decision.connected, decision.reason
 
 
+def test_a_primary_that_reads_inside_a_fallback_shed_takes_it_over():
+    """Once the cell has been heard short of its restoring bound, the shed
+    is the cell's to clear. A pack voltage risen only because the load was
+    shed must not release it when the cell goes quiet again."""
+    _, state = _fallback_pass({}, cell=None, pack=12.1)
+    decision, state = _fallback_pass(state, cell=3.20, pack=13.6)
+    assert state["cameras"]["floor_latched_by"] == "bms.cell_min_volts"
+    decision, state = _fallback_pass(state, cell=None, pack=13.6)
+    assert not decision.connected, (
+        "a fallback released a shed the cell had not cleared")
+    assert "nothing readable to clear it" in decision.reason
+
+
 def test_a_fallback_cannot_release_a_shed_the_primary_holds():
     """A pack voltage cannot see one weak cell, and shedding the load raises
     the pack voltage by itself."""
@@ -1067,9 +1080,9 @@ def test_a_fallback_shed_passes_between_fallbacks_only_by_their_own_rules():
     assert decision.connected, decision.reason
 
 
-def test_a_fallback_shed_holds_until_every_primary_clears():
-    """With two primaries, one recovering past its restoring bound is not
-    enough while the other has not."""
+def test_a_fallback_shed_passes_to_the_primary_furthest_from_clear():
+    """With two primaries, the one that has tripped holds the shed. The
+    other recovering past its restoring bound does not release it."""
     ladder = dict(LADDER, floor={"sources": [
         {"device": "a", "field": "v", "shed_below": 3.15,
          "restore_above": 3.25},

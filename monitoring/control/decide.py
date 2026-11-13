@@ -181,31 +181,30 @@ def _step_floor(ladder, readings, was_latched, latched_by):
 
     # A fallback speaks only while no primary can be read. With a primary
     # readable the fallbacks are set aside entirely, and a latch one of them
-    # took while the primaries were quiet becomes the primaries' to judge:
-    # it holds, on the primary's own reading, until every readable primary
-    # is clear of its restoring bound.
-    #
-    # A primary under its shedding bound takes the latch over, since it has
-    # tripped in its own right and only it may clear that. A primary merely
-    # between its bounds does not: handing it the latch would let it release
-    # alone while another primary still sat short of its restoring bound.
-    # The fallback keeps the latch and every primary is asked again on each
-    # pass.
+    # took while the primaries were quiet becomes the primaries' to judge.
+    # It is released when every readable primary is clear of its restoring
+    # bound. Otherwise the primary furthest short of its restoring bound
+    # takes it over, measured in widths of its own band so that sources in
+    # different units compare, and from then on the owner rules below apply
+    # to it as to any latch a primary took. A primary has then been heard
+    # short of clear, so a fallback must not release the latch if the
+    # primary goes quiet again: the pack voltage rises because the load was
+    # shed, not because the cells recovered.
     primaries = {key: entry for key, entry in seen.items()
                  if not entry[0].get("fallback", False)}
     if any(value is not None for _, value in primaries.values()):
         owner = seen.get(latched_by)
         if was_latched and owner is not None and owner[0].get("fallback"):
-            readable = [(key, source, value)
-                        for key, (source, value) in primaries.items()
-                        if value is not None]
-            for key, source, value in readable:
-                if value < source["shed_below"]:
-                    return True, value, source, key
-            for key, source, value in readable:
-                if value <= source["restore_above"]:
-                    return True, value, source, latched_by
-            return False, None, None, None
+            short = [((value - source["restore_above"])
+                      / (source["restore_above"] - source["shed_below"]),
+                      key, source, value)
+                     for key, (source, value) in primaries.items()
+                     if value is not None
+                     and value <= source["restore_above"]]
+            if not short:
+                return False, None, None, None
+            _, key, source, value = min(short, key=lambda item: item[0])
+            return True, value, source, key
         seen = primaries
 
     # Entry: any source below its own bound, and it becomes the source that
