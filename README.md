@@ -291,7 +291,8 @@ stays disabled in the node file until a supervised wet and dry run on site.
 The controller unit has a watchdog: if passes stop, systemd kills the process,
 every pin is released, and every load falls to its wired fail-safe. A small
 page on port 8088 shows each load's mode and lets a phone force one on or
-off for a set time; it answers only private and tailnet addresses.
+off for a set time; it answers only loopback, private, link-local and
+tailnet addresses.
 
 The blind's Wavlink can return to factory settings when its power fails. A
 timer on the downstairs node checks every five minutes and restores its saved
