@@ -1067,6 +1067,43 @@ def test_a_fallback_shed_passes_between_fallbacks_only_by_their_own_rules():
     assert decision.connected, decision.reason
 
 
+def test_a_fallback_shed_holds_until_every_primary_clears():
+    """With two primaries, one recovering past its restoring bound is not
+    enough while the other has not."""
+    ladder = dict(LADDER, floor={"sources": [
+        {"device": "a", "field": "v", "shed_below": 3.15,
+         "restore_above": 3.25},
+        {"device": "b", "field": "v", "shed_below": 3.15,
+         "restore_above": 3.25},
+        {"device": "mppt", "field": "battery_volts", "shed_below": 12.6,
+         "restore_above": 13.0, "fallback": True}]})
+    spec = dict(SPEC, shed_ladder=ladder)
+
+    def pass_through(state, first, second):
+        readings = {"bms": {"fields": {"state_of_charge_pct": 90.0},
+                            "age_seconds": 1.0},
+                    "mppt": {"fields": {"battery_volts": 12.0},
+                             "age_seconds": 1.0}}
+        for device, value in (("a", first), ("b", second)):
+            readings[device] = {"fields": ({} if value is None
+                                           else {"v": value}),
+                                "age_seconds": 1.0}
+        decisions, state = decide.decide(
+            at(12), 0.0, True, readings,
+            {"shedding_enabled": True, "loads": {}}, {"cameras": spec},
+            state, SUNS)
+        return decisions["cameras"], state
+
+    _, state = pass_through({}, None, None)
+    for first, second in ((3.20, 3.10), (3.30, 3.20), (3.20, 3.22),
+                          (3.30, 3.22)):
+        decision, state = pass_through(state, first, second)
+        assert not decision.connected, (
+            "released with the primaries at %s and %s" % (first, second))
+    decision, _ = pass_through(state, 3.30, 3.30)
+    assert decision.connected, decision.reason
+
+
 FALLBACK_SHUNTS = (12.1, 12.8, 13.6, None)
 
 

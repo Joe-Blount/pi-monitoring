@@ -184,14 +184,27 @@ def _step_floor(ladder, readings, was_latched, latched_by):
     # took while the primaries were quiet becomes the primaries' to judge:
     # it holds, on the primary's own reading, until every readable primary
     # is clear of its restoring bound.
+    #
+    # A primary under its shedding bound takes the latch over, since it has
+    # tripped in its own right and only it may clear that. A primary merely
+    # between its bounds does not: handing it the latch would let it release
+    # alone while another primary still sat short of its restoring bound.
+    # The fallback keeps the latch and every primary is asked again on each
+    # pass.
     primaries = {key: entry for key, entry in seen.items()
                  if not entry[0].get("fallback", False)}
     if any(value is not None for _, value in primaries.values()):
         owner = seen.get(latched_by)
         if was_latched and owner is not None and owner[0].get("fallback"):
-            for key, (source, value) in primaries.items():
-                if value is not None and value <= source["restore_above"]:
+            readable = [(key, source, value)
+                        for key, (source, value) in primaries.items()
+                        if value is not None]
+            for key, source, value in readable:
+                if value < source["shed_below"]:
                     return True, value, source, key
+            for key, source, value in readable:
+                if value <= source["restore_above"]:
+                    return True, value, source, latched_by
             return False, None, None, None
         seen = primaries
 
