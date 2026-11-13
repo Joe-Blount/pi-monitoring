@@ -734,12 +734,15 @@ def test_the_shipped_camera_ladder_is_the_one_that_was_agreed():
     ], "the deer movement windows"
 
     floor = ladder["floor"]["sources"]
-    assert [(f["device"], f["field"]) for f in floor] == [
-        ("bms", "cell_min_volts"), ("mppt", "battery_volts")], (
-        "the cell minimum is the real floor and the charge controller is the "
-        "second opinion, because the battery radio goes quiet for minutes")
+    assert [(f["device"], f["field"], f["fallback"]) for f in floor] == [
+        ("bms", "cell_min_volts", False),
+        ("shunt", "shunt_volts", True),
+        ("mppt", "battery_volts", True)], (
+        "the cell minimum is the real floor, and the pack voltages stand in "
+        "only while the battery radio is quiet")
     assert (floor[0]["shed_below"], floor[0]["restore_above"]) == (3.15, 3.25)
-    assert (floor[1]["shed_below"], floor[1]["restore_above"]) == (12.6, 13.0)
+    for pack in floor[1:]:
+        assert (pack["shed_below"], pack["restore_above"]) == (12.6, 13.0)
 
 
 BLIND_NODES = [REPO / "sites" / "blind1" / name

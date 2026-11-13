@@ -248,27 +248,40 @@ control:
         # and it needs no clock, so it keeps working on a machine that has no
         # idea what day it is.
         #
-        # Two sources, in different units, each with its own bounds. The cell
-        # minimum is the real floor: a pack voltage cannot see one weak cell,
-        # since 3.10 V beside three at 3.43 reads as a healthy 13.39 V bank.
-        # The charge controller's figure is the second opinion, because it is
-        # wired, resident, and reports every thirty seconds while the BMS
-        # radio goes quiet for minutes at a time.
+        # The cell minimum is the real floor: a pack voltage cannot see one
+        # weak cell, since 3.10 V beside three at 3.43 reads as a healthy
+        # 13.39 V bank. While the pack can be read it is the only source.
         #
-        # Either source may shed. Only the source that shed may release,
-        # which is what stops the pack voltage clearing a floor the cell
-        # tripped: shedding this branch removes most of the draw, so the pack
-        # voltage rises as a direct result of the shed.
+        # The shunt's and the charge controller's pack voltages are
+        # fallbacks, consulted only while the cell minimum cannot be read.
+        # Both are measured at the far end of the wiring, so they sag with
+        # the load current: a camera start pulls the charge controller's
+        # figure under 12.6 V on a bank whose cells sit at 3.28 V. The shunt
+        # is read over the same radio as the pack and tends to go quiet with
+        # it; the charge controller is wired and reports every thirty
+        # seconds, so it is the fallback most likely to be there.
+        #
+        # Among the fallbacks either may shed and only the one that shed may
+        # release. A shed the cell minimum took is released only by the cell
+        # minimum, since shedding this branch raises the pack voltage by
+        # itself. Once the cell minimum reads again it judges any shed a
+        # fallback took.
         floor:
           sources:
             - device: bms
               field: cell_min_volts
               shed_below: 3.15        # about 5 percent on this chemistry
               restore_above: 3.25     # about 10 percent
+            - device: shunt
+              field: shunt_volts
+              shed_below: 12.6
+              restore_above: 13.0
+              fallback: true
             - device: mppt
               field: battery_volts
               shed_below: 12.6
               restore_above: 13.0
+              fallback: true
 
         # Each tier is a complete schedule, and the load runs only while
         # every latched tier permits it. A deeper tier can then only remove
@@ -330,10 +343,16 @@ control:
               field: cell_min_volts
               shed_below: 3.15
               restore_above: 3.25
+            - device: shunt
+              field: shunt_volts
+              shed_below: 12.6
+              restore_above: 13.0
+              fallback: true
             - device: mppt
               field: battery_volts
               shed_below: 12.6
               restore_above: 13.0
+              fallback: true
 
         tiers:
           - below_pct: 60
@@ -382,10 +401,16 @@ control:
               field: cell_min_volts
               shed_below: 3.15
               restore_above: 3.25
+            - device: shunt
+              field: shunt_volts
+              shed_below: 12.6
+              restore_above: 13.0
+              fallback: true
             - device: mppt
               field: battery_volts
               shed_below: 12.6
               restore_above: 13.0
+              fallback: true
 
         tiers:
           - below_pct: 5
@@ -509,7 +534,13 @@ control:
             field: cell_min_volts
             shed_below: 3.15
             restore_above: 3.25
+          - device: shunt
+            field: shunt_volts
+            shed_below: 12.6
+            restore_above: 13.0
+            fallback: true
           - device: mppt
             field: battery_volts
             shed_below: 12.6
             restore_above: 13.0
+            fallback: true

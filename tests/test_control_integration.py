@@ -66,10 +66,13 @@ def suns():
     return days
 
 
-def reading(soc, cell=3.30, pack=13.4, age=1.0):
-    return {"bms": {"fields": {"state_of_charge_pct": soc,
-                               "cell_min_volts": cell}, "age_seconds": age},
-            "mppt": {"fields": {"battery_volts": pack}, "age_seconds": age}}
+def reading(soc, cell=3.30, pack=13.4, shunt=13.4, age=1.0):
+    """A cell of None is a pack that answered without its cell voltages."""
+    cells = {} if cell is None else {"cell_min_volts": cell}
+    return {"bms": {"fields": dict(state_of_charge_pct=soc, **cells),
+                    "age_seconds": age},
+            "mppt": {"fields": {"battery_volts": pack}, "age_seconds": age},
+            "shunt": {"fields": {"shunt_volts": shunt}, "age_seconds": age}}
 
 
 def settled(loads, suns, soc, when, load="cameras_near", **kwargs):
@@ -248,13 +251,25 @@ def test_the_far_cameras_keep_the_same_windows_at_higher_thresholds(
 
 
 @pytest.mark.parametrize("load", ["cameras_far", "cameras_near", "nvr"])
-def test_every_camera_branch_sheds_on_either_floor_source(loads, suns, load):
+def test_every_camera_branch_sheds_on_any_floor_source_it_may_hear(
+        loads, suns, load):
     for kwargs, field in (({"cell": 3.10}, "cell_min_volts"),
-                          ({"pack": 12.1}, "battery_volts")):
+                          ({"cell": None, "pack": 12.1}, "battery_volts"),
+                          ({"cell": None, "shunt": 12.1}, "shunt_volts")):
         decision = settled(loads, suns, 70.0, at(12), load=load, **kwargs)
         assert not decision.connected, load
         assert decision.reason_code == decide.FLOOR
         assert field in decision.reason
+
+
+@pytest.mark.parametrize("load", ["cameras_near", "cameras_far", "nvr"])
+def test_no_camera_branch_sheds_on_a_pack_sag_the_cells_do_not_share(
+        loads, suns, load):
+    """A load starting pulls the pack voltages down at the far end of the
+    wiring while the cells barely move."""
+    decision = settled(loads, suns, 70.0, at(12), load=load,
+                       cell=3.28, pack=12.5, shunt=12.5)
+    assert decision.connected, decision.reason
 
 
 def test_the_cell_floor_overrides_the_schedule_end_to_end(loads, suns):
@@ -267,8 +282,9 @@ def test_the_cell_floor_overrides_the_schedule_end_to_end(loads, suns):
 
 
 def test_the_pack_voltage_can_shed_on_its_own_end_to_end(loads, suns):
-    """The second floor source, with the bounds the node file gives it."""
-    decision = settled(loads, suns, 60.0, at(12), pack=12.1)
+    """A fallback floor source, with the bounds the node file gives it, while
+    the pack answers without its cell voltages."""
+    decision = settled(loads, suns, 60.0, at(12), cell=None, pack=12.1)
     assert not decision.connected
     assert decision.reason_code == decide.FLOOR
     assert "battery_volts" in decision.reason

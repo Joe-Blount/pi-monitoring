@@ -974,6 +974,135 @@ def test_either_floor_source_can_latch_on_its_own():
     assert "battery_volts" in decisions["cameras"].reason
 
 
+#: A floor that trusts the battery's own cells whenever they can be read, and
+#: falls back to pack voltages only while they cannot. A pack voltage read at
+#: the far end of the wiring sags with the load current, so as a peer of the
+#: cell it sheds a healthy bank every time a load starts.
+FALLBACK = dict(LADDER, floor={"sources": [
+    {"device": "bms", "field": "cell_min_volts",
+     "shed_below": 3.15, "restore_above": 3.25, "fallback": False},
+    {"device": "shunt", "field": "shunt_volts",
+     "shed_below": 12.6, "restore_above": 13.0, "fallback": True},
+    {"device": "mppt", "field": "battery_volts",
+     "shed_below": 12.6, "restore_above": 13.0, "fallback": True},
+]})
+
+
+def _fallback_pass(state, cell, pack, shunt=None, cell_age=1.0):
+    """One pass of the fallback floor. None for a source means unreadable."""
+    readings = {"bms": {"fields": {
+                    "state_of_charge_pct": 90.0,
+                    **({} if cell is None else {"cell_min_volts": cell})},
+                    "age_seconds": cell_age},
+                "mppt": {"fields": (
+                    {} if pack is None else {"battery_volts": pack}),
+                    "age_seconds": 1.0},
+                "shunt": {"fields": (
+                    {} if shunt is None else {"shunt_volts": shunt}),
+                    "age_seconds": 1.0}}
+    decisions, state = decide.decide(
+        at(12), 0.0, True, readings, {"shedding_enabled": True, "loads": {}},
+        {"cameras": dict(SPEC, shed_ladder=FALLBACK)}, state, SUNS)
+    return decisions["cameras"], state
+
+
+def test_a_fallback_source_cannot_shed_while_the_primary_reads():
+    """A pack voltage sagging under a camera start is not a flat battery
+    when the cells say otherwise."""
+    decision, _ = _fallback_pass({}, cell=3.28, pack=12.5, shunt=12.5)
+    assert decision.connected, decision.reason
+
+
+def test_a_fallback_source_sheds_while_the_primary_is_quiet():
+    decision, _ = _fallback_pass({}, cell=None, pack=12.1, shunt=13.1)
+    assert not decision.connected
+    assert decision.reason_code == decide.FLOOR
+    assert "battery_volts" in decision.reason
+
+
+def test_a_stale_primary_counts_as_quiet():
+    decision, _ = _fallback_pass({}, cell=3.28, pack=13.1, shunt=12.1,
+                                 cell_age=100_000.0)
+    assert not decision.connected
+    assert "shunt_volts" in decision.reason
+
+
+def test_a_primary_that_reads_clear_releases_a_fallback_shed():
+    """The cells are the authority once they can be read again, so a shed
+    the pack voltage took while they were quiet ends when they say the bank
+    is healthy, whatever the pack voltage still reads."""
+    _, state = _fallback_pass({}, cell=None, pack=12.1)
+    decision, _ = _fallback_pass(state, cell=3.30, pack=12.1)
+    assert decision.connected, decision.reason
+
+
+def test_a_primary_between_its_bounds_holds_a_fallback_shed():
+    """Returning between its own bounds the primary has not cleared, so the
+    shed holds on the primary's live reading until it does."""
+    _, state = _fallback_pass({}, cell=None, pack=12.1)
+    decision, state = _fallback_pass(state, cell=3.20, pack=13.6)
+    assert not decision.connected
+    assert "cell_min_volts" in decision.reason
+    decision, _ = _fallback_pass(state, cell=3.30, pack=13.6)
+    assert decision.connected, decision.reason
+
+
+def test_a_fallback_cannot_release_a_shed_the_primary_holds():
+    """A pack voltage cannot see one weak cell, and shedding the load raises
+    the pack voltage by itself."""
+    _, state = _fallback_pass({}, cell=3.10, pack=13.2)
+    decision, state = _fallback_pass(state, cell=None, pack=13.6, shunt=13.6)
+    assert not decision.connected
+    assert "nothing readable to clear it" in decision.reason
+
+
+def test_a_fallback_shed_passes_between_fallbacks_only_by_their_own_rules():
+    """While the primary is quiet the fallbacks behave as peers: either may
+    shed, and only the one that shed may release."""
+    _, state = _fallback_pass({}, cell=None, pack=12.1, shunt=13.6)
+    decision, state = _fallback_pass(state, cell=None, pack=None, shunt=13.6)
+    assert not decision.connected, (
+        "the shunt released a shed the charge controller took")
+    decision, _ = _fallback_pass(state, cell=None, pack=13.6, shunt=13.6)
+    assert decision.connected, decision.reason
+
+
+FALLBACK_SHUNTS = (12.1, 12.8, 13.6, None)
+
+
+def test_the_fallback_floor_follows_the_primary_whenever_it_reads():
+    """Every short history of the three sources' meaningful positions.
+
+    While the cell reads, the load runs exactly when no shed is owed to it:
+    never with the cell under its shedding bound, and never held by the
+    floor with the cell clear of its restoring bound. While the cell is
+    quiet, no fallback that reads may sit under its own bound with the load
+    running.
+    """
+    conditions = list(itertools.product(FLOOR_CELLS, FLOOR_PACKS,
+                                        FALLBACK_SHUNTS))
+    for history in itertools.product(conditions, repeat=2):
+        state = {}
+        for cell, pack, shunt in history:
+            for _ in range(2):
+                decision, state = _fallback_pass(state, cell, pack, shunt)
+                if cell is not None:
+                    assert not (decision.connected and cell < 3.15), (
+                        "connected with the cell under its bound, after %s"
+                        % (history,))
+                    assert not (cell > 3.25
+                                and decision.reason_code == decide.FLOOR), (
+                        "floor held with the cell clear, after %s: %s"
+                        % (history, decision.reason))
+                else:
+                    under = [v for v in (pack, shunt)
+                             if v is not None and v < 12.6]
+                    assert not (decision.connected and under), (
+                        "connected with a fallback under its bound and the "
+                        "cell quiet, after %s: %s" % (history,
+                                                      decision.reason))
+
+
 def test_a_value_that_is_not_a_number_is_not_a_reading():
     """Every comparison against a NaN is false, so one arriving at the floor
     would look like a value clear of every bound and release a latched

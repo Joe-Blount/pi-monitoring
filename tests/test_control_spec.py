@@ -1220,3 +1220,32 @@ def test_a_forecast_that_could_be_about_an_earlier_sunrise_is_refused():
 
 def test_a_preheat_enable_that_is_not_a_yes_or_no_is_refused():
     assert "enabled" in heater_refused(**with_preheat(enabled="false"))
+
+
+def test_a_floor_source_is_primary_unless_marked_fallback():
+    floor = parse()["shed_ladder"]["floor"]
+    assert floor["sources"][0]["fallback"] is False
+
+
+def test_a_fallback_floor_source_is_read_as_one():
+    ladder = dict(LADDER, floor={"sources": [
+        LADDER["floor"]["sources"][0],
+        {"device": "mppt", "field": "battery_volts",
+         "shed_below": 12.6, "restore_above": 13.0, "fallback": True}]})
+    sources = parse(shed_ladder=ladder)["shed_ladder"]["floor"]["sources"]
+    assert [s["fallback"] for s in sources] == [False, True]
+
+
+def test_a_fallback_that_is_not_true_or_false_is_refused():
+    broken = dict(LADDER, floor={"sources": [
+        dict(LADDER["floor"]["sources"][0], fallback="yes")]})
+    assert "fallback" in refused(shed_ladder=broken)
+
+
+def test_a_floor_of_only_fallback_sources_is_refused():
+    """A fallback stands in for a source that cannot be read. With nothing
+    to stand in for, the word means nothing and somebody meant something
+    else."""
+    broken = dict(LADDER, floor={"sources": [
+        dict(LADDER["floor"]["sources"][0], fallback=True)]})
+    assert "fallback" in refused(shed_ladder=broken)

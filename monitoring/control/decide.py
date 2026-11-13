@@ -160,6 +160,13 @@ def _step_floor(ladder, readings, was_latched, latched_by):
     rises as a direct result of the shed. The floor would release, the load
     would reconnect onto the weak cell, the cell would sag, and the cycle
     would repeat for as long as the radio stayed quiet.
+
+    **A source marked fallback is consulted only while no primary source can
+    be read.** A pack voltage measured at the far end of the wiring sags
+    with the load current, so as a peer of the cells it sheds a healthy bank
+    each time a load starts. As a fallback it still covers the hours the
+    battery radio is quiet, and among fallbacks the rules above hold as they
+    do among peers.
     """
     floor = ladder.get("floor")
     if not floor:
@@ -170,6 +177,22 @@ def _step_floor(ladder, readings, was_latched, latched_by):
     for source in floor["sources"]:
         seen[_source_key(source)] = (source,
                                      _reading(readings, source, stale_after))
+
+    # A fallback speaks only while no primary can be read. With a primary
+    # readable the fallbacks are set aside entirely, and a latch one of them
+    # took while the primaries were quiet becomes the primaries' to judge:
+    # it holds, on the primary's own reading, until every readable primary
+    # is clear of its restoring bound.
+    primaries = {key: entry for key, entry in seen.items()
+                 if not entry[0].get("fallback", False)}
+    if any(value is not None for _, value in primaries.values()):
+        owner = seen.get(latched_by)
+        if was_latched and owner is not None and owner[0].get("fallback"):
+            for key, (source, value) in primaries.items():
+                if value is not None and value <= source["restore_above"]:
+                    return True, value, source, key
+            return False, None, None, None
+        seen = primaries
 
     # Entry: any source below its own bound, and it becomes the source that
     # has to clear it.

@@ -123,7 +123,8 @@ RETIRED_CONTROL_KEYS = {
 LADDER_KEYS = {"source", "stale_after", "release_margin_pct",
                "enter_after_readings", "restore_dwell", "floor", "tiers"}
 FLOOR_KEYS = {"sources"}
-FLOOR_SOURCE_KEYS = {"device", "field", "shed_below", "restore_above"}
+FLOOR_SOURCE_KEYS = {"device", "field", "shed_below", "restore_above",
+                     "fallback"}
 SOURCE_KEYS = {"device", "field"}
 
 #: Keys an irrigation load may carry, and the keys of each of its blocks.
@@ -294,7 +295,15 @@ def _floor(where, raw, devices):
                       "the floor can never release" % (restore, shed))
         source["shed_below"] = shed
         source["restore_above"] = restore
+        fallback = entry.get("fallback", False)
+        if not isinstance(fallback, bool):
+            _fail(at, "fallback must be true or false, found %r" % (fallback,))
+        source["fallback"] = fallback
         out.append(source)
+    if all(source["fallback"] for source in out):
+        _fail(where, "every source is a fallback, so there is nothing for "
+                     "them to stand in for; mark the source to trust first "
+                     "as fallback: false")
     return {"sources": out}
 
 
