@@ -30,8 +30,9 @@ degradation nobody would notice from the data, so it refuses instead.
 
 import datetime
 import os
+import sys
 
-from . import clock, decide, files, relay, spec, sun
+from . import clock, decide, files, override, relay, spec, sun
 
 
 class LoopError(RuntimeError):
@@ -53,7 +54,7 @@ class Loop:
     def __init__(self, node, location, zone, relays=None, now=None,
                  monotonic=None, trust=None, readings=None, switches=None,
                  state_path=None, high_water_path=None, publish=None,
-                 published_path=None, boot=None):
+                 published_path=None, boot=None, prune=None):
         self.node = node
         self.specs = spec.load_control(node)
 
@@ -81,6 +82,7 @@ class Loop:
         self._published_path = published_path
         self._high_water_path = high_water_path
         self._publish = publish if publish is not None else files.write_json
+        self._prune = prune or override.prune_expired
 
         self.state = files.read_state(self._state_path,
                                       this_boot=self._boot)
@@ -169,9 +171,10 @@ class Loop:
                 self._read_record(name)
 
         prior = self.state
+        switches = self._switches()
         decisions, self.state = decide.decide(
             local_now, mono_now, verdict.trusted,
-            self._readings(), self._switches(), self.specs, self.state, suns)
+            self._readings(), switches, self.specs, self.state, suns)
 
         if apply:
             driven = []
@@ -187,7 +190,25 @@ class Loop:
             files.write_state(self.state, self._state_path, boot=self._boot)
             self._save_persisted()
             self._publish_state(decisions, local_now, mono_now, verdict)
+            if verdict.trusted:
+                self._prune_expired(switches, local_now.timestamp())
         return decisions
+
+    def _prune_expired(self, switches, now_epoch):
+        """Take forces past their expiry out of the switches file.
+
+        A force that has expired no longer binds, but left in the file it
+        reads on the override page as though it still mattered. Only on a
+        trusted clock: while the clock is untrusted a stored force-off still
+        binds whatever its expiry says. A failure here is reported and
+        otherwise ignored, since controlling is the job.
+        """
+        if not override.expired(switches, now_epoch):
+            return
+        try:
+            self._prune(now_epoch)
+        except OSError as exc:
+            sys.stderr.write("could not remove expired forces: %s\n" % exc)
 
     def _read_record(self, name):
         """Load an irrigation record from the card into the state.

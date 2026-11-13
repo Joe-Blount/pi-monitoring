@@ -137,3 +137,69 @@ def test_the_lock_is_never_taken_through_a_link(tmp_path):
     with pytest.raises(OSError):
         override.force("cameras", "on", 1000.0, path=path)
     assert oct(os.stat(target).st_mode & 0o777) == oct(0o600)
+
+
+# -- expired forces ---------------------------------------------------------
+
+def test_an_expired_force_is_removed(tmp_path):
+    path = str(tmp_path / "switches.json")
+    override.force("cameras", "on", 1000.0, path=path)
+    override.prune_expired(1000.0, path=path)
+    assert read(path)["loads"] == {}
+
+
+def test_a_force_still_running_is_kept(tmp_path):
+    path = str(tmp_path / "switches.json")
+    override.force("cameras", "off", 1000.0, path=path)
+    override.prune_expired(999.0, path=path)
+    assert read(path)["loads"]["cameras"]["force"] == "off"
+
+
+def test_a_force_with_no_readable_expiry_is_removed(tmp_path):
+    """The controller already treats one as expired, so it holds nothing."""
+    path = str(tmp_path / "switches.json")
+    files.write_switches({"loads": {"cameras": {"force": "on",
+                                                "expires_epoch": "soon"}}},
+                         path)
+    override.prune_expired(1.0, path=path)
+    assert read(path)["loads"] == {}
+
+
+def test_pruning_keeps_everything_that_is_not_an_expired_force(tmp_path):
+    path = str(tmp_path / "switches.json")
+    files.write_switches({
+        "shedding_enabled": False,
+        "loads": {"cameras": {"force": "on", "expires_epoch": 5.0},
+                  "nvr": {"force": "off", "expires_epoch": 50.0},
+                  "irrigation.clear_lockout": {"at": 1.0}}}, path)
+    override.prune_expired(10.0, path=path)
+    record = read(path)
+    assert record["shedding_enabled"] is False
+    assert record["loads"] == {
+        "nvr": {"force": "off", "expires_epoch": 50.0},
+        "irrigation.clear_lockout": {"at": 1.0}}
+
+
+def test_pruning_with_nothing_expired_leaves_the_file_untouched(tmp_path):
+    path = str(tmp_path / "switches.json")
+    override.force("cameras", "on", 1000.0, path=path)
+    stamp = (tmp_path / "switches.json").stat().st_mtime_ns
+    override.prune_expired(1.0, path=path)
+    assert (tmp_path / "switches.json").stat().st_mtime_ns == stamp
+
+
+def test_an_unreadable_switches_file_is_never_pruned(tmp_path):
+    """Writing over it would replace whatever the operator set with
+    nothing."""
+    path = tmp_path / "switches.json"
+    path.write_text("{not json")
+    override.prune_expired(10.0, path=str(path))
+    assert path.read_text() == "{not json"
+
+
+def test_expired_names_the_forces_past_their_expiry():
+    switches = {"loads": {"a": {"force": "on", "expires_epoch": 5.0},
+                          "b": {"force": "off", "expires_epoch": 50.0},
+                          "c": {"force": "on"},
+                          "d.clear_lockout": {"at": 1.0}}}
+    assert sorted(override.expired(switches, 10.0)) == ["a", "c"]

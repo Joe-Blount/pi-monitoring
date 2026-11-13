@@ -125,6 +125,47 @@ def clear_lockout(name, now, path=None):
     _change(path, change)
 
 
+def expired(switches, now_epoch):
+    """The loads whose stored force no longer binds at `now_epoch`.
+
+    A force with no readable expiry is among them. The controller already
+    treats one as expired, so it holds nothing and only clutters the file.
+    """
+    names = []
+    for name, entry in (switches.get("loads") or {}).items():
+        if not isinstance(entry, dict) or "force" not in entry:
+            continue
+        expires = entry.get("expires_epoch")
+        if (isinstance(expires, bool)
+                or not isinstance(expires, (int, float))
+                or now_epoch >= expires):
+            names.append(name)
+    return names
+
+
+def prune_expired(now_epoch, path=None):
+    """Remove every force that has passed its expiry.
+
+    Only a caller that trusts its clock may ask. While the clock is
+    untrusted a stored force-off still binds whatever its expiry says, so
+    removing one on a wrong clock would release a load somebody held off.
+
+    An unreadable file is left alone, and so is a file with nothing to
+    remove, so a caller can ask on every pass without writing on every pass.
+    """
+    path = _path(path)
+    with _locked(path):
+        switches = files.read_switches(path)
+        if not switches["readable"]:
+            return
+        names = expired(switches, now_epoch)
+        if not names:
+            return
+        loads = {name: entry for name, entry in switches["loads"].items()
+                 if name not in names}
+        files.write_switches(dict(switches, loads=loads), path)
+
+
 def set_shedding(enabled, path=None):
     """Let tiers shed loads, or hold every shed load on."""
     _change(path, lambda switches: dict(switches,

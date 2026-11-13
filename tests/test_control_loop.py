@@ -63,7 +63,7 @@ def reading(soc=60.0, cell=3.30, age=1.0):
 
 
 def build(tmp_path, readings=None, at=None, mono=0.0, trusted=True,
-          switches=None, loads=None, boot=BOOT):
+          switches=None, loads=None, boot=BOOT, prune=None):
     """A loop whose world is entirely under the test's control."""
     pin = relay.Pretend(23, relay.ENERGIZE_TO_SHED, relay.HIGH)
     published = {}
@@ -84,7 +84,7 @@ def build(tmp_path, readings=None, at=None, mono=0.0, trusted=True,
         published_path=str(tmp_path / "published.json"),
         high_water_path=str(tmp_path / "hw.json"),
         publish=lambda _path, data: published.update(data),
-        boot=boot)
+        boot=boot, prune=prune or (lambda _now: None))
     return machine, pin, published, state
 
 
@@ -306,6 +306,59 @@ def test_a_failure_to_publish_does_not_stop_it_controlling(tmp_path):
         publish=explode, boot=BOOT)
     machine.once()
     assert pin.levels == [True], "a publishing failure cost a shed"
+
+
+# -- expired forces -----------------------------------------------------
+
+EXPIRED = {"shedding_enabled": True,
+           "loads": {"cameras": {"force": "on", "expires_epoch": 1.0}}}
+
+
+def test_an_expired_force_is_pruned_on_a_trusted_clock(tmp_path):
+    calls = []
+    machine, _, _, state = build(tmp_path, switches=EXPIRED,
+                                 prune=calls.append)
+    machine.once()
+    assert calls == [state["now"].timestamp()]
+
+
+def test_nothing_is_pruned_on_an_untrusted_clock(tmp_path):
+    """An expiry cannot be judged against a clock that may be wrong, and a
+    force-off still binds while the clock is untrusted."""
+    calls = []
+    machine, _, _, _ = build(tmp_path, switches=EXPIRED, trusted=False,
+                             prune=calls.append)
+    machine.once()
+    assert calls == []
+
+
+def test_nothing_is_pruned_on_a_dry_run(tmp_path):
+    calls = []
+    machine, _, _, _ = build(tmp_path, switches=EXPIRED, prune=calls.append)
+    machine.once(apply=False, persist=False)
+    assert calls == []
+
+
+def test_nothing_is_pruned_while_every_force_is_running(tmp_path):
+    """The switches file is written only when there is something to take
+    out of it."""
+    calls = []
+    running = {"shedding_enabled": True,
+               "loads": {"cameras": {"force": "on",
+                                     "expires_epoch": 4_000_000_000.0}}}
+    machine, _, _, _ = build(tmp_path, switches=running, prune=calls.append)
+    machine.once()
+    assert calls == []
+
+
+def test_a_failure_to_prune_does_not_stop_it_controlling(tmp_path):
+    def explode(_now):
+        raise OSError("read-only file system")
+
+    machine, pin, _, _ = build(tmp_path, switches=EXPIRED, prune=explode,
+                               readings=reading(soc=5.0))
+    machine.once()
+    assert pin.levels == [True], "a pruning failure cost a shed"
 
 
 # -- counting level changes -----------------------------------------------

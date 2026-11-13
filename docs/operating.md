@@ -110,7 +110,9 @@ sudo control override cameras_near on --for 8h
 ```
 
 It runs for the time you gave and then returns to normal control on its own.
-Clear it sooner:
+The controller then removes the expired force from the switches file, so it
+no longer shows on the override page. It does that only while it trusts the
+clock. Clear it sooner:
 
 ```
 sudo control override clear cameras_near
