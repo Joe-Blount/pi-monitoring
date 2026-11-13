@@ -137,7 +137,7 @@ directory works as well as a clone.
 
 Run with no arguments to list the site and node names available.
 
-The script is idempotent, so updating later is `git pull` and run it again.
+The script is idempotent, so updating later is `sudo git pull` and run it again.
 
 A machine that cannot reach GitHub can update from a bundle made on a laptop
 that has the repository. It needs only ssh from that laptop:
@@ -327,7 +327,7 @@ board's own input decides, and only watching it settles that.
 2. If its mode is `resident`, add an `execd` stanza under
    `sites/<site>/telegraf.d/`. A test enforces that these agree, so forgetting
    it fails in CI rather than by the device quietly never reporting.
-3. `git pull` on the machine and run the install script again.
+3. `sudo git pull` on the machine and run the install script again.
 
 To take a device out of service, set `enabled: false` rather than deleting it.
 It keeps its pins and calibration, so restoring it is one word, and it keeps

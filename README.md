@@ -191,7 +191,7 @@ sudo deploy/install.sh <site> <node>
 sudo deploy/install.sh garage garage
 ```
 
-Idempotent, so updating is `git pull` and run it again. A machine with no
+Idempotent, so updating is `sudo git pull` and run it again. A machine with no
 route to GitHub can fetch from a `git bundle` copied to it instead; the
 bring-up guide has the steps. It installs telegraf
 **inputs** only and never touches the output, so a machine that already writes
