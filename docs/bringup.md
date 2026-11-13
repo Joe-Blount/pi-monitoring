@@ -139,6 +139,21 @@ Run with no arguments to list the site and node names available.
 
 The script is idempotent, so updating later is `git pull` and run it again.
 
+A machine with no credentials for the repository can update from a bundle
+made on a laptop that has it:
+
+```
+git bundle create /tmp/update.bundle <branch>
+scp /tmp/update.bundle <user>@<machine>:/tmp/update.bundle
+ssh <user>@<machine> 'cd /opt/monitoring &&
+  sudo git -c safe.directory=/opt/monitoring fetch /tmp/update.bundle <branch> &&
+  sudo git -c safe.directory=/opt/monitoring merge --ff-only FETCH_HEAD &&
+  sudo deploy/install.sh <site> <node>'
+```
+
+`safe.directory` is needed because the checkout is owned by root and git
+refuses to work in another user's directory without it.
+
 What it does:
 
 - installs `python3-yaml`

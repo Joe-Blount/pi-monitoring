@@ -49,10 +49,19 @@ monitoring/
   lineproto.py       build and escape line protocol
   config.py          load and validate a node file
   calibration.py     scale and offset, applied in one place
+  duration.py        read durations such as 10m from node files
+  runner.py          run a node's devices and print what they read
   drivers/           one module per device family
+  control/           the load controller: decisions, relays, the override page
+  wavlink_recover.py restore a Wavlink that has returned to factory settings
 bin/
   collect            read devices, print line protocol
+  control            run the load controller, force loads, inspect decisions
+  control-page       serve the override page
+  wavlink-recover    the Wavlink repair, as its timer runs it
+  ble-discover       enumerate an unknown Bluetooth device
   gpio-probe         measure what a pin does when software lets go
+docs/                bring-up and day-to-day operation
 sites/
   example/node.yaml  every option, with the reasoning
   blind1/            upstairs.yaml, downstairs.yaml, telegraf.d/
@@ -64,8 +73,8 @@ tests/               fixtures and tests, none of which need hardware
 ## Configuration
 
 One file per **machine**, not per site. A site can have several machines: the
-deer blind is planned as an upstairs node with the sensors and a downstairs
-node with the power devices and the load control. Both write the same
+deer blind has an upstairs node with the sensors and a downstairs node with
+the power devices and the load control. Both write the same
 measurement, so dashboards do not care how the work is divided.
 
 `sites/example/node.yaml` documents every option and explains the ones whose
@@ -182,7 +191,9 @@ sudo deploy/install.sh <site> <node>
 sudo deploy/install.sh garage garage
 ```
 
-Idempotent, so updating is `git pull` and run it again. It installs telegraf
+Idempotent, so updating is `git pull` and run it again. A machine with no
+route to GitHub can fetch from a `git bundle` copied to it instead; the
+bring-up guide has the steps. It installs telegraf
 **inputs** only and never touches the output, so a machine that already writes
 to InfluxDB keeps its existing configuration and its existing credentials.
 
@@ -278,7 +289,13 @@ The controller runs on the blind's downstairs node, and its node file says
 which loads it drives. The irrigation sequence is written and tested, and it
 stays disabled in the node file until a supervised wet and dry run on site.
 The controller unit has a watchdog: if passes stop, systemd kills the process,
-every pin is released, and every load falls to its wired fail-safe.
+every pin is released, and every load falls to its wired fail-safe. A small
+page on port 8088 shows each load's mode and lets a phone force one on or
+off for a set time; it answers only private and tailnet addresses.
+
+The blind's Wavlink can return to factory settings when its power fails. A
+timer on the downstairs node checks every five minutes and restores its saved
+settings when it finds the unit in that state.
 
 Two preconditions are settled before a node drives anything, and both are
 software rather than hardware. Whether killing a process releases the GPIO
