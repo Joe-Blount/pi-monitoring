@@ -41,7 +41,8 @@ that has no idea what day it is.
 The floor takes a second opinion where one exists. The battery reading comes
 over Bluetooth from a device that is routinely quiet for minutes, and a ladder
 with one source hangs entirely on the least reliable thing on the node. Where
-a second, independently wired source is declared, either can shed.
+a second, independently wired source is declared as a peer, either can shed.
+A source declared as a fallback speaks only while no peer can be read.
 
 When the clock cannot be trusted
 --------------------------------

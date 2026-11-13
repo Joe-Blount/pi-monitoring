@@ -959,3 +959,26 @@ def test_a_loop_interval_past_the_watchdog_is_refused(tmp_path):
     result = run_control(tmp_path, "run", "--node", str(node))
     assert result.returncode == 2
     assert "loop_interval" in result.stderr
+
+
+def test_the_loop_prunes_the_switches_file_it_reads(control_module, tmp_path,
+                                                    monkeypatch):
+    """A relocated switches file is the one the loop reads, so it is the one
+    the loop takes expired forces out of. Pruning the default file instead
+    would rewrite live switches during a hand run against a scratch one."""
+    relocated = switches_path(tmp_path)
+    control_module.files.write_switches(
+        {"loads": {"cameras": {"force": "on", "expires_epoch": 5.0}}},
+        str(relocated))
+    monkeypatch.setenv("MONITORING_SWITCHES", str(relocated))
+    monkeypatch.setattr(control_module.location, "read", lambda: {
+        "latitude": 0.0, "longitude": 0.0, "zone": None})
+    built = {}
+    monkeypatch.setattr(control_module.loop, "Loop",
+                        lambda *args, **kwargs: built.update(kwargs))
+
+    control_module._build_machine(_Node({}))
+    assert built["switches"]()["loads"], "the loop reads the relocated file"
+    built["prune"](10.0)
+    with open(relocated) as handle:
+        assert json.load(handle)["loads"] == {}

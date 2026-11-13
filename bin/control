@@ -167,6 +167,8 @@ def _build_machine(node, relays=None):
         # this the loop reads the default path while those write elsewhere,
         # so a dry run shows decisions taken against switches nobody set.
         switches=_read_switches,
+        # And it takes expired forces out of that same file, not the default.
+        prune=lambda now: override.prune_expired(now, path=_switches_path()),
         published_path=os.environ.get(PUBLISHED_VAR),
         high_water_path=os.environ.get(HIGH_WATER_VAR),
         boot=os.environ.get(BOOT_VAR))
