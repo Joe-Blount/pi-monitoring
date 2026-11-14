@@ -309,7 +309,7 @@ in InfluxDB Cloud, as Cloud exports them. They are a record to compare and
 edit against; Cloud is where they are changed until one moves to the
 builder.
 
-Three dashboards are kept as files and built by
+Six dashboards are kept as files and built by
 [docs/dashboards/build.py](dashboards/build.py). Import each in the InfluxDB
 web interface: Dashboards, Create Dashboard, Import Dashboard. Each import
 makes a dashboard of its own, so delete the old one first.
@@ -328,6 +328,18 @@ makes a dashboard of its own, so delete the old one first.
   a front end chip error, switches locked), the cells it is balancing, and
   how long ago it last answered. A switch reading OFF while an alarm shows
   is the pack protecting itself.
+- [blind1-victron.json](dashboards/blind1-victron.json): the blind's charge
+  controller. The top row is the newest reading in the last ten minutes. The
+  controller reports every thirty seconds, so an empty cell means it
+  stopped. The status row gives the charge state, the tracker, the error and
+  the off reason in words. The yield by day comes from the lifetime total,
+  as the daily energy query works it out.
+- [garage-sok.json](dashboards/garage-sok.json): the garage's packs, one row
+  each in the status table, with how long ago each last answered. Every
+  device on the rack is a pack, so a pack added there appears with no edit.
+- [garage-charge-inverter.json](dashboards/garage-charge-inverter.json): the
+  garage's inverter, with whether its newest poll got a reading and its
+  newest error, with how long ago that was.
 
 ## How much energy went into and out of the battery each day
 
@@ -339,11 +351,21 @@ It shows:
   from solar, and the surplus going into the bank. The lower two add up to
   the load. A window with no reading from either the shunt or the charge
   controller is left out, and the lines run straight across it.
-- the Chins pack's state of charge underneath, on the same time axis, so a
-  shed shows against the charge that caused it.
+- the state of charge underneath, on the same time axis, so a shed shows
+  against the charge that caused it. The Chins's own figure is the one the
+  shedding ladder follows. The shunt's is beside it; it counts amp-hours for
+  the whole bank and drifts from the packs between full charges.
 - the bank's average draw in the dark over the last 24 hours.
 - daily energy for the bank (in and out) and for the system (solar and
   load), one flat step per day, and the full daily table.
+- the current through each pack: the whole bank from the shunt, the Chins
+  from its own reading, and the Weize pair as the difference, since it has
+  no meter of its own.
+- each pack's share of the bank's current, in percent, left out while the
+  bank carries under two amps, and the Chins's share of each day's
+  throughput as a flat step. A share above 100 or below 0 means one pack is
+  charging the other. The share moves with state of charge, so a fixed
+  share is not a sign of trouble by itself.
 
 The supply and state of charge graphs follow the dashboard's time range. The
 daily cells start at the midnight on or before the range's start and run

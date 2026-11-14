@@ -93,7 +93,7 @@
           "name": "Why each load is where it is (latest)",
           "queries": [
             {
-              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.node == v.pi and r.device == \"control\" and exists r.load and contains(value: r._field, set: [\"powered\", \"shed_level\", \"reason\", \"decided_on\", \"floor_latched_by\", \"level_changes\"]))\n  |> last()\n  |> map(fn: (r) => ({load: r.load, _field: r._field, _value: string(v: r._value)}))\n  |> group()\n  |> pivot(rowKey: [\"load\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> keep(columns: [\"load\", \"powered\", \"shed_level\", \"reason\", \"decided_on\", \"floor_latched_by\", \"level_changes\"])"
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.node == v.pi and r.device == \"control\" and exists r.load and r._field =~ /^(powered|shed_level|reason|decided_on|floor_latched_by|level_changes)$/)\n  |> last()\n  |> map(fn: (r) => ({load: r.load, _field: r._field, _value: string(v: r._value)}))\n  |> group()\n  |> pivot(rowKey: [\"load\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> keep(columns: [\"load\", \"powered\", \"shed_level\", \"reason\", \"decided_on\", \"floor_latched_by\", \"level_changes\"])"
             }
           ],
           "staticLegend": {},
@@ -171,9 +171,6 @@
               "scale": "linear"
             }
           ],
-          "colorMapping": {
-            "battery_volts-blind1-mppt-solar-downstairs-_result-": "#31C0F6"
-          },
           "colors": [
             {
               "name": "Nineteen Eighty Four",
@@ -194,11 +191,11 @@
           "geom": "line",
           "height": 4,
           "kind": "Xy",
-          "name": "Battery volts",
+          "name": "Lowest cell (the floor's main source)",
           "position": "overlaid",
           "queries": [
             {
-              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.node == v.pi and r.device == \"mppt\" and r._field == \"battery_volts\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
+              "query": "// The lowest reading in each window, since the floor acts on the lowest.\nfrom(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.node == v.pi and r.device == \"bms\" and r._field == \"cell_min_volts\")\n  |> aggregateWindow(every: v.windowPeriod, fn: min, createEmpty: false)"
             }
           ],
           "staticLegend": {},
@@ -208,13 +205,61 @@
           "yPos": 13
         },
         {
-          "height": 2,
-          "kind": "Markdown",
-          "name": "Reading this board",
-          "note": "**Pi** at the top picks the node. Every load the controller on that node reports appears by itself.\n\n**Controller age** is how old its last decision is, counted to now. Red above 90 s means the controller, the collector or telegraf stopped.\n\n**Shed level:** 0 means not shed. Each tier the battery falls through adds one.",
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "10",
+              "label": "V",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "line",
+          "height": 3,
+          "kind": "Xy",
+          "name": "Pack volts (the floor's fallbacks)",
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "// Read by the floor only while the cell minimum cannot be. Both are\n// measured at the far end of the wiring and sag with the load current.\n// The lowest reading in each window.\nfrom(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.node == v.pi and (r.device == \"shunt\" and r._field == \"shunt_volts\" or r.device == \"mppt\" and r._field == \"battery_volts\"))\n  |> group(columns: [\"device\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: min, createEmpty: false)"
+            }
+          ],
           "staticLegend": {},
           "width": 12,
-          "yPos": 17
+          "xCol": "_time",
+          "yCol": "_value",
+          "yPos": 17,
+          "xPos": 0
+        },
+        {
+          "height": 3,
+          "kind": "Markdown",
+          "name": "Reading this board",
+          "note": "**Pi** at the top picks the node. Every load the controller on that node reports appears by itself.\n\n**Controller age** is how old its last decision is, counted to now. Red above 90 s means the controller, the collector or telegraf stopped.\n\n**Shed level:** 0 means not shed. Each tier the battery falls through adds one.\n\n**Floor:** the lowest cell decides while the pack can be read. The pack volts are fallbacks, read only while it cannot. \"floor_latched_by\" in the table names the source that shed a load.",
+          "staticLegend": {},
+          "width": 12,
+          "yPos": 20
         },
         {
           "colors": [

@@ -1,0 +1,398 @@
+[
+  {
+    "apiVersion": "influxdata.com/v2alpha1",
+    "kind": "Dashboard",
+    "metadata": {
+      "name": "garage-sok"
+    },
+    "spec": {
+      "name": "Garage - SOK",
+      "description": "The garage's packs, from their own battery management systems.",
+      "charts": [
+        {
+          "name": "Pack status",
+          "xPos": 0,
+          "yPos": 0,
+          "width": 12,
+          "height": 3,
+          "kind": "Table",
+          "queries": [
+            {
+              "query": "// One row per pack, its newest readings in the last thirty days. \"read\" is\n// how long ago the pack last answered, so a pack that stopped stays listed\n// with its last values. Alarms names each protection state the pack reports.\n\nimport \"math\"\nimport \"strings\"\n\nalarms = (v) =>\n    strings.trimSuffix(\n    v:\n        (if v / 1 % 2 == 1 then \"cell over volts, \" else \"\") +\n        (if v / 2 % 2 == 1 then \"full, \" else \"\") +\n        (if v / 4 % 2 == 1 then \"charge high, \" else \"\") +\n        (if v / 8 % 2 == 1 then \"too warm to charge, \" else \"\") +\n        (if v / 16 % 2 == 1 then \"too cold to charge, \" else \"\") +\n        (if v / 32 % 2 == 1 then \"board hot, charging, \" else \"\") +\n        (if v / 64 % 2 == 1 then \"cell under volts, \" else \"\") +\n        (if v / 128 % 2 == 1 then \"empty, \" else \"\") +\n        (if v / 256 % 2 == 1 then \"charge low, \" else \"\") +\n        (if v / 512 % 2 == 1 then \"too warm to discharge, \" else \"\") +\n        (if v / 1024 % 2 == 1 then \"too cold to discharge, \" else \"\") +\n        (if v / 2048 % 2 == 1 then \"board hot, discharging, \" else \"\") +\n        (if v / 4096 % 2 == 1 then \"short circuit, \" else \"\") +\n        (if v / 8192 % 2 == 1 then \"over current, \" else \"\") +\n        (if v / 16384 % 2 == 1 then \"pack under volts, \" else \"\") +\n        (if v / 32768 % 2 == 1 then \"pack over volts, \" else \"\") +\n        (if v >= 65536 then \"other bits \" + string(v: v - v % 65536) + \", \" else \"\"),\n    suffix: \", \",\n)\n\nago = (t) => string(v: duration(v: (int(v: now()) - int(v: t)) / 1000000000 * 1000000000))\n\nlatest = from(bucket: \"raw\")\n    |> range(start: -30d)\n    |> filter(\n        fn: (r) =>\n            r._measurement == \"garage\" and r.location == \"rack\"\n                and\n                r._field =~ /^(state_of_charge_pct|pack_volts|pack_amps|cell_spread_volts|temp_[0-9]+|cycles|charge_mosfet_on|discharge_mosfet_on|heater_on|alarm_flags|commands_unanswered)$/,\n    )\n    |> last()\n\nstates = latest\n    |> map(\n        fn: (r) =>\n            ({r with\n                _value:\n                    if r._field =~ /mosfet/ then\n                        if r._value > 0.5 then \"on\" else \"OFF\"\n                    else if r._field == \"heater_on\" then\n                        if r._value > 0.5 then \"on\" else \"off\"\n                    else if r._field == \"alarm_flags\" then\n                        if r._value == 0.0 then \"none\" else alarms(v: int(v: r._value))\n                    else if r._field == \"cell_spread_volts\" then\n                        string(v: int(v: math.round(x: r._value * 1000.0)))\n                    else if r._field == \"pack_amps\" or r._field == \"pack_volts\" or r._field =~ /^temp_/ then\n                        string(v: math.round(x: r._value * 10.0) / 10.0)\n                    else\n                        string(v: int(v: math.round(x: r._value))),\n            }),\n    )\n\nread = latest\n    |> group(columns: [\"device\"])\n    |> max(column: \"_time\")\n    |> map(fn: (r) => ({r with _field: \"read\", _value: ago(t: r._time) + \" ago\"}))\n\nunion(tables: [states |> group(), read |> group()])\n    |> keep(columns: [\"device\", \"_field\", \"_value\"])\n    |> pivot(rowKey: [\"device\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n    |> sort(columns: [\"device\"])\n"
+            }
+          ],
+          "timeFormat": "",
+          "decimalPlaces": 0,
+          "enforceDecimals": true,
+          "colors": [
+            {
+              "name": "laser",
+              "type": "text",
+              "hex": "#00C9FF"
+            }
+          ],
+          "tableOptions": {
+            "verticalTimeAxis": true,
+            "wrapping": "truncate",
+            "fixFirstColumn": true,
+            "sortBy": "device"
+          },
+          "fieldOptions": [
+            {
+              "fieldName": "device",
+              "displayName": "pack",
+              "visible": true
+            },
+            {
+              "fieldName": "read",
+              "displayName": "read",
+              "visible": true
+            },
+            {
+              "fieldName": "state_of_charge_pct",
+              "displayName": "charge %",
+              "visible": true
+            },
+            {
+              "fieldName": "pack_volts",
+              "displayName": "volts",
+              "visible": true
+            },
+            {
+              "fieldName": "pack_amps",
+              "displayName": "amps",
+              "visible": true
+            },
+            {
+              "fieldName": "cell_spread_volts",
+              "displayName": "spread mV",
+              "visible": true
+            },
+            {
+              "fieldName": "temp_1",
+              "displayName": "temp 1 F",
+              "visible": true
+            },
+            {
+              "fieldName": "temp_2",
+              "displayName": "temp 2 F",
+              "visible": true
+            },
+            {
+              "fieldName": "cycles",
+              "displayName": "cycles",
+              "visible": true
+            },
+            {
+              "fieldName": "charge_mosfet_on",
+              "displayName": "charging",
+              "visible": true
+            },
+            {
+              "fieldName": "discharge_mosfet_on",
+              "displayName": "discharging",
+              "visible": true
+            },
+            {
+              "fieldName": "heater_on",
+              "displayName": "heater",
+              "visible": true
+            },
+            {
+              "fieldName": "alarm_flags",
+              "displayName": "alarms",
+              "visible": true
+            },
+            {
+              "fieldName": "commands_unanswered",
+              "displayName": "unanswered",
+              "visible": true
+            }
+          ]
+        },
+        {
+          "name": "State of charge",
+          "xPos": 0,
+          "yPos": 3,
+          "width": 6,
+          "height": 3,
+          "kind": "Xy",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"garage\" and r.location == \"rack\" and r._field =~ /^state_of_charge_pct$/)\n    |> group(columns: [\"device\", \"_field\"])\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n"
+            }
+          ],
+          "geom": "line",
+          "xCol": "_time",
+          "yCol": "_value",
+          "position": "overlaid",
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "label": "%",
+              "base": "10",
+              "scale": "linear"
+            }
+          ]
+        },
+        {
+          "name": "Current (positive is charging)",
+          "xPos": 6,
+          "yPos": 3,
+          "width": 6,
+          "height": 3,
+          "kind": "Xy",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"garage\" and r.location == \"rack\" and r._field =~ /^pack_amps$/)\n    |> group(columns: [\"device\", \"_field\"])\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n"
+            }
+          ],
+          "geom": "line",
+          "xCol": "_time",
+          "yCol": "_value",
+          "position": "overlaid",
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "label": "A",
+              "base": "10",
+              "scale": "linear"
+            }
+          ]
+        },
+        {
+          "name": "Lowest and highest cell",
+          "xPos": 0,
+          "yPos": 6,
+          "width": 6,
+          "height": 3,
+          "kind": "Xy",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"garage\" and r.location == \"rack\" and r._field =~ /^cell_(min|max)_volts$/)\n    |> group(columns: [\"device\", \"_field\"])\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n"
+            }
+          ],
+          "geom": "line",
+          "xCol": "_time",
+          "yCol": "_value",
+          "position": "overlaid",
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "label": "V",
+              "base": "10",
+              "scale": "linear"
+            }
+          ]
+        },
+        {
+          "name": "Cell spread",
+          "xPos": 6,
+          "yPos": 6,
+          "width": 6,
+          "height": 3,
+          "kind": "Xy",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"garage\" and r.location == \"rack\" and r._field =~ /^cell_spread_volts$/)\n    |> group(columns: [\"device\", \"_field\"])\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n    |> map(fn: (r) => ({r with _value: r._value * 1000.0}))\n"
+            }
+          ],
+          "geom": "line",
+          "xCol": "_time",
+          "yCol": "_value",
+          "position": "overlaid",
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "label": "mV",
+              "base": "10",
+              "scale": "linear"
+            }
+          ]
+        },
+        {
+          "name": "Temperature",
+          "xPos": 0,
+          "yPos": 9,
+          "width": 6,
+          "height": 3,
+          "kind": "Xy",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"garage\" and r.location == \"rack\" and r._field =~ /^temp_[0-9]+$/)\n    |> group(columns: [\"device\", \"_field\"])\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n"
+            }
+          ],
+          "geom": "line",
+          "xCol": "_time",
+          "yCol": "_value",
+          "position": "overlaid",
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "label": "F",
+              "base": "10",
+              "scale": "linear"
+            }
+          ]
+        },
+        {
+          "name": "Pack volts",
+          "xPos": 6,
+          "yPos": 9,
+          "width": 6,
+          "height": 3,
+          "kind": "Xy",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"garage\" and r.location == \"rack\" and r._field =~ /^pack_volts$/)\n    |> group(columns: [\"device\", \"_field\"])\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n"
+            }
+          ],
+          "geom": "line",
+          "xCol": "_time",
+          "yCol": "_value",
+          "position": "overlaid",
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "label": "V",
+              "base": "10",
+              "scale": "linear"
+            }
+          ]
+        }
+      ]
+    }
+  }
+]

@@ -17,6 +17,10 @@ BUILD = REPO / "docs" / "dashboards" / "build.py"
 DASHBOARD = REPO / "docs" / "dashboards" / "blind1-energy.json"
 HEALTH = REPO / "docs" / "dashboards" / "pi-health.json"
 CHINS = REPO / "docs" / "dashboards" / "blind1-chins.json"
+VICTRON = REPO / "docs" / "dashboards" / "blind1-victron.json"
+SOK = REPO / "docs" / "dashboards" / "garage-sok.json"
+INVERTER = REPO / "docs" / "dashboards" / "garage-charge-inverter.json"
+BUILT = [DASHBOARD, HEALTH, CHINS, VICTRON, SOK, INVERTER]
 
 
 def _template(path=DASHBOARD):
@@ -34,7 +38,7 @@ def _charts(path=DASHBOARD):
     return dashboard["spec"]["charts"]
 
 
-@pytest.mark.parametrize("path", [DASHBOARD, HEALTH, CHINS])
+@pytest.mark.parametrize("path", BUILT)
 def test_the_dashboard_is_a_template_in_the_format_the_cloud_export_writes(path):
     (dashboard,) = _template(path)
     assert dashboard["apiVersion"] == "influxdata.com/v2alpha1"
@@ -53,7 +57,7 @@ def test_the_daily_cells_follow_the_dashboards_time_range():
         assert "lookback" not in text
 
 
-@pytest.mark.parametrize("path", [DASHBOARD, HEALTH, CHINS])
+@pytest.mark.parametrize("path", BUILT)
 def test_the_cells_tile_the_grid_without_overlapping(path):
     taken = set()
     for chart in _charts(path):
@@ -92,18 +96,56 @@ def test_the_health_dashboard_reads_only_fields_the_host_device_publishes():
     assert graphed <= published
 
 
-def test_the_chins_dashboard_reads_only_fields_the_pack_publishes():
-    """A renamed pack field would otherwise blank a cell with no error."""
+def _assert_reads_only(path, published):
+    """Every field a dashboard names is one its device publishes."""
     import re
-    from tests.test_node_files import known_driver_fields
-    published = set(known_driver_fields()["jbd"])
-    for chart in _charts(CHINS):
+    for chart in _charts(path):
         text = chart["queries"][0]["query"]
         named = set(re.findall(r'r\._field == "([a-z0-9_]+)"', text))
-        assert named <= published, chart["name"]
-        for pattern in re.findall(r"r\._field =~ /([^/]+)/", text):
-            alternation = re.fullmatch(r"\^\(([a-z0-9_|]+)\)\$", pattern)
+        assert named <= published, (chart["name"], named - published)
+        for pattern in re.findall(r"r\._field =~ /([^/]+)/", text) + re.findall(
+                r"fields: /([^/]+)/", text):
+            alternation = re.fullmatch(r"\^\(([a-z0-9_|\[\]+-]+)\)\$", pattern)
             if alternation:
-                assert set(alternation.group(1).split("|")) <= published, chart["name"]
+                for part in alternation.group(1).split("|"):
+                    assert any(re.fullmatch(part, field) for field in published), (
+                        chart["name"], part)
             else:
-                assert any(re.search(pattern, field) for field in published), chart["name"]
+                assert any(re.search(pattern, field) for field in published), (
+                    chart["name"], pattern)
+
+
+def test_the_chins_dashboard_reads_only_fields_the_pack_publishes():
+    """A renamed pack field would otherwise blank a cell with no error."""
+    from tests.test_node_files import known_driver_fields
+    _assert_reads_only(CHINS, set(known_driver_fields()["jbd"]))
+
+
+def test_the_victron_dashboard_reads_only_fields_the_controller_publishes():
+    from tests.test_node_files import known_driver_fields
+    _assert_reads_only(VICTRON, set(known_driver_fields()["vedirect"]))
+
+
+def test_the_sok_dashboard_reads_only_fields_the_packs_publish():
+    from monitoring.drivers import abc_bms
+    from tests import abc_bms_fixtures
+    _assert_reads_only(SOK, set(abc_bms.parse(abc_bms_fixtures.real_messages())))
+
+
+def test_the_inverter_dashboard_reads_only_fields_the_inverter_publishes():
+    from monitoring.runner import RESERVED_FIELDS
+    from tests.test_node_files import known_driver_fields
+    _assert_reads_only(INVERTER, set(known_driver_fields()["eg4_modbus"])
+                       | set(RESERVED_FIELDS))
+
+
+def test_the_sok_alarm_words_follow_the_drivers_bit_order():
+    """Bit N of alarm_flags is the Nth protection state the driver reads."""
+    sys.path.insert(0, str(BUILD.parent))
+    try:
+        import build
+    finally:
+        sys.path.remove(str(BUILD.parent))
+    from monitoring.drivers import abc_bms
+    assert [code for code, _words in build.SOK_PROTECTION] == [
+        code for code, _description in abc_bms.PROTECTION_STATES]

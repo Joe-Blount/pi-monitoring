@@ -1,0 +1,420 @@
+[
+  {
+    "apiVersion": "influxdata.com/v2alpha1",
+    "kind": "Dashboard",
+    "metadata": {
+      "name": "garage-charge-inverter"
+    },
+    "spec": {
+      "name": "Garage - Charge/Inverter",
+      "description": "The garage's inverter and charger.",
+      "charts": [
+        {
+          "name": "Inverter status",
+          "xPos": 0,
+          "yPos": 0,
+          "width": 12,
+          "height": 2,
+          "kind": "Table",
+          "queries": [
+            {
+              "query": "// The inverter's newest readings in the last thirty days. \"read\" is how long\n// ago it last gave a reading, \"answering\" whether its newest poll got one,\n// and \"last error\" the newest failure with how long ago it was. Words and\n// numbers are read apart, since one stream holding both is a type conflict.\n\nimport \"math\"\n\nago = (t) => string(v: duration(v: (int(v: now()) - int(v: t)) / 1000000000 * 1000000000))\n\ninverter = (fields) =>\n    from(bucket: \"raw\")\n        |> range(start: -30d)\n        |> filter(fn: (r) => r._measurement == \"garage\" and r.device == \"inverter\" and r._field =~ fields)\n\nlatest = inverter(fields: /^(ok|ac_out_volts|ac_out_hz|load_watts|pv_watts|battery_volts|battery_watts)$/)\n    |> last()\n\nstates = latest\n    |> map(\n        fn: (r) =>\n            ({r with\n                _value:\n                    if r._field == \"ok\" then\n                        if r._value > 0.5 then \"yes\" else \"NO\"\n                    else if r._field == \"ac_out_hz\" or r._field == \"battery_volts\" then\n                        string(v: math.round(x: r._value * 10.0) / 10.0)\n                    else\n                        string(v: int(v: math.round(x: r._value))),\n            }),\n    )\n\nfailed = inverter(fields: /^error_message$/)\n    |> last()\n    |> map(fn: (r) => ({r with _value: string(v: r._value) + \" (\" + ago(t: r._time) + \" ago)\"}))\n\nread = latest\n    |> filter(fn: (r) => r._field != \"ok\")\n    |> group()\n    |> max(column: \"_time\")\n    |> map(fn: (r) => ({r with _field: \"read\", _value: ago(t: r._time) + \" ago\"}))\n\nunion(tables: [states |> group(), failed |> group(), read])\n    |> keep(columns: [\"_measurement\", \"_field\", \"_value\"])\n    |> pivot(rowKey: [\"_measurement\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n"
+            }
+          ],
+          "timeFormat": "",
+          "decimalPlaces": 0,
+          "enforceDecimals": true,
+          "colors": [
+            {
+              "name": "laser",
+              "type": "text",
+              "hex": "#00C9FF"
+            }
+          ],
+          "tableOptions": {
+            "verticalTimeAxis": true,
+            "wrapping": "truncate",
+            "fixFirstColumn": true,
+            "sortBy": "read"
+          },
+          "fieldOptions": [
+            {
+              "fieldName": "read",
+              "displayName": "read",
+              "visible": true
+            },
+            {
+              "fieldName": "ok",
+              "displayName": "answering",
+              "visible": true
+            },
+            {
+              "fieldName": "ac_out_volts",
+              "displayName": "AC volts",
+              "visible": true
+            },
+            {
+              "fieldName": "ac_out_hz",
+              "displayName": "AC Hz",
+              "visible": true
+            },
+            {
+              "fieldName": "load_watts",
+              "displayName": "load W",
+              "visible": true
+            },
+            {
+              "fieldName": "pv_watts",
+              "displayName": "panels W",
+              "visible": true
+            },
+            {
+              "fieldName": "battery_volts",
+              "displayName": "battery V",
+              "visible": true
+            },
+            {
+              "fieldName": "battery_watts",
+              "displayName": "battery W",
+              "visible": true
+            },
+            {
+              "fieldName": "error_message",
+              "displayName": "last error",
+              "visible": true
+            }
+          ]
+        },
+        {
+          "name": "Power (battery positive is charging)",
+          "xPos": 0,
+          "yPos": 2,
+          "width": 6,
+          "height": 3,
+          "kind": "Xy",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"garage\" and r.device == \"inverter\" and r._field =~ /^(load_watts|pv_watts|battery_watts)$/)\n    |> group(columns: [\"_field\"])\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n"
+            }
+          ],
+          "geom": "line",
+          "xCol": "_time",
+          "yCol": "_value",
+          "position": "overlaid",
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "label": "W",
+              "base": "10",
+              "scale": "linear"
+            }
+          ]
+        },
+        {
+          "name": "Battery current (positive is charging)",
+          "xPos": 6,
+          "yPos": 2,
+          "width": 6,
+          "height": 3,
+          "kind": "Xy",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"garage\" and r.device == \"inverter\" and r._field =~ /^battery_amps$/)\n    |> group(columns: [\"_field\"])\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n"
+            }
+          ],
+          "geom": "line",
+          "xCol": "_time",
+          "yCol": "_value",
+          "position": "overlaid",
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "label": "A",
+              "base": "10",
+              "scale": "linear"
+            }
+          ]
+        },
+        {
+          "name": "AC out volts",
+          "xPos": 0,
+          "yPos": 5,
+          "width": 4,
+          "height": 3,
+          "kind": "Xy",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"garage\" and r.device == \"inverter\" and r._field =~ /^ac_out_volts$/)\n    |> group(columns: [\"_field\"])\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n"
+            }
+          ],
+          "geom": "line",
+          "xCol": "_time",
+          "yCol": "_value",
+          "position": "overlaid",
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "label": "V",
+              "base": "10",
+              "scale": "linear"
+            }
+          ]
+        },
+        {
+          "name": "AC out frequency",
+          "xPos": 4,
+          "yPos": 5,
+          "width": 4,
+          "height": 3,
+          "kind": "Xy",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"garage\" and r.device == \"inverter\" and r._field =~ /^ac_out_hz$/)\n    |> group(columns: [\"_field\"])\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n"
+            }
+          ],
+          "geom": "line",
+          "xCol": "_time",
+          "yCol": "_value",
+          "position": "overlaid",
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "label": "Hz",
+              "base": "10",
+              "scale": "linear"
+            }
+          ]
+        },
+        {
+          "name": "Battery volts",
+          "xPos": 8,
+          "yPos": 5,
+          "width": 4,
+          "height": 3,
+          "kind": "Xy",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"garage\" and r.device == \"inverter\" and r._field =~ /^battery_volts$/)\n    |> group(columns: [\"_field\"])\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n"
+            }
+          ],
+          "geom": "line",
+          "xCol": "_time",
+          "yCol": "_value",
+          "position": "overlaid",
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "label": "V",
+              "base": "10",
+              "scale": "linear"
+            }
+          ]
+        },
+        {
+          "name": "Panel volts",
+          "xPos": 0,
+          "yPos": 8,
+          "width": 6,
+          "height": 3,
+          "kind": "Xy",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"garage\" and r.device == \"inverter\" and r._field =~ /^pv_volts$/)\n    |> group(columns: [\"_field\"])\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n"
+            }
+          ],
+          "geom": "line",
+          "xCol": "_time",
+          "yCol": "_value",
+          "position": "overlaid",
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "label": "V",
+              "base": "10",
+              "scale": "linear"
+            }
+          ]
+        },
+        {
+          "name": "Panel current",
+          "xPos": 6,
+          "yPos": 8,
+          "width": 6,
+          "height": 3,
+          "kind": "Xy",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"garage\" and r.device == \"inverter\" and r._field =~ /^pv_amps$/)\n    |> group(columns: [\"_field\"])\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n"
+            }
+          ],
+          "geom": "line",
+          "xCol": "_time",
+          "yCol": "_value",
+          "position": "overlaid",
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "label": "A",
+              "base": "10",
+              "scale": "linear"
+            }
+          ]
+        }
+      ]
+    }
+  }
+]

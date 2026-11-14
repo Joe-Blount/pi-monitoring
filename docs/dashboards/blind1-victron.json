@@ -1,0 +1,532 @@
+[
+  {
+    "apiVersion": "influxdata.com/v2alpha1",
+    "kind": "Dashboard",
+    "metadata": {
+      "name": "blind1-victron"
+    },
+    "spec": {
+      "name": "Blind1: Victron",
+      "description": "The blind's solar charge controller.",
+      "charts": [
+        {
+          "name": "Battery",
+          "xPos": 0,
+          "yPos": 0,
+          "width": 2,
+          "height": 2,
+          "kind": "Single_Stat",
+          "queries": [
+            {
+              "query": "// The newest reading in the last ten minutes. The controller reports every\n// thirty seconds, so an empty cell means it stopped, not that it is idle.\nfrom(bucket: \"raw\")\n    |> range(start: -10m)\n    |> filter(fn: (r) => r._measurement == \"blind1\" and r.device == \"mppt\" and r._field == \"battery_volts\")\n    |> group()\n    |> last()\n"
+            }
+          ],
+          "suffix": " V",
+          "decimalPlaces": 2,
+          "colors": [
+            {
+              "name": "laser",
+              "type": "text",
+              "hex": "#00C9FF"
+            }
+          ]
+        },
+        {
+          "name": "Charge current",
+          "xPos": 2,
+          "yPos": 0,
+          "width": 2,
+          "height": 2,
+          "kind": "Single_Stat",
+          "queries": [
+            {
+              "query": "// The newest reading in the last ten minutes. The controller reports every\n// thirty seconds, so an empty cell means it stopped, not that it is idle.\nfrom(bucket: \"raw\")\n    |> range(start: -10m)\n    |> filter(fn: (r) => r._measurement == \"blind1\" and r.device == \"mppt\" and r._field == \"battery_amps\")\n    |> group()\n    |> last()\n"
+            }
+          ],
+          "suffix": " A",
+          "decimalPlaces": 1,
+          "colors": [
+            {
+              "name": "laser",
+              "type": "text",
+              "hex": "#00C9FF"
+            }
+          ]
+        },
+        {
+          "name": "Panels",
+          "xPos": 4,
+          "yPos": 0,
+          "width": 2,
+          "height": 2,
+          "kind": "Single_Stat",
+          "queries": [
+            {
+              "query": "// The newest reading in the last ten minutes. The controller reports every\n// thirty seconds, so an empty cell means it stopped, not that it is idle.\nfrom(bucket: \"raw\")\n    |> range(start: -10m)\n    |> filter(fn: (r) => r._measurement == \"blind1\" and r.device == \"mppt\" and r._field == \"pv_watts\")\n    |> group()\n    |> last()\n"
+            }
+          ],
+          "suffix": " W",
+          "decimalPlaces": 0,
+          "colors": [
+            {
+              "name": "laser",
+              "type": "text",
+              "hex": "#00C9FF"
+            }
+          ]
+        },
+        {
+          "name": "Today",
+          "xPos": 6,
+          "yPos": 0,
+          "width": 2,
+          "height": 2,
+          "kind": "Single_Stat",
+          "queries": [
+            {
+              "query": "// The newest reading in the last ten minutes. The controller reports every\n// thirty seconds, so an empty cell means it stopped, not that it is idle.\nfrom(bucket: \"raw\")\n    |> range(start: -10m)\n    |> filter(fn: (r) => r._measurement == \"blind1\" and r.device == \"mppt\" and r._field == \"yield_today_kwh\")\n    |> group()\n    |> last()\n"
+            }
+          ],
+          "suffix": " kWh",
+          "decimalPlaces": 2,
+          "colors": [
+            {
+              "name": "laser",
+              "type": "text",
+              "hex": "#00C9FF"
+            }
+          ]
+        },
+        {
+          "name": "Peak today",
+          "xPos": 8,
+          "yPos": 0,
+          "width": 2,
+          "height": 2,
+          "kind": "Single_Stat",
+          "queries": [
+            {
+              "query": "// The newest reading in the last ten minutes. The controller reports every\n// thirty seconds, so an empty cell means it stopped, not that it is idle.\nfrom(bucket: \"raw\")\n    |> range(start: -10m)\n    |> filter(fn: (r) => r._measurement == \"blind1\" and r.device == \"mppt\" and r._field == \"max_power_today_watts\")\n    |> group()\n    |> last()\n"
+            }
+          ],
+          "suffix": " W",
+          "decimalPlaces": 0,
+          "colors": [
+            {
+              "name": "laser",
+              "type": "text",
+              "hex": "#00C9FF"
+            }
+          ]
+        },
+        {
+          "name": "Yesterday",
+          "xPos": 10,
+          "yPos": 0,
+          "width": 2,
+          "height": 2,
+          "kind": "Single_Stat",
+          "queries": [
+            {
+              "query": "// The newest reading in the last ten minutes. The controller reports every\n// thirty seconds, so an empty cell means it stopped, not that it is idle.\nfrom(bucket: \"raw\")\n    |> range(start: -10m)\n    |> filter(fn: (r) => r._measurement == \"blind1\" and r.device == \"mppt\" and r._field == \"yield_yesterday_kwh\")\n    |> group()\n    |> last()\n"
+            }
+          ],
+          "suffix": " kWh",
+          "decimalPlaces": 2,
+          "colors": [
+            {
+              "name": "laser",
+              "type": "text",
+              "hex": "#00C9FF"
+            }
+          ]
+        },
+        {
+          "name": "Controller status",
+          "xPos": 0,
+          "yPos": 2,
+          "width": 12,
+          "height": 2,
+          "kind": "Table",
+          "queries": [
+            {
+              "query": "// What the controller says it is doing, newest reading in the last day.\n// \"read\" is how long ago it last reported. Words and numbers are read apart,\n// since one stream holding both is a type conflict.\n\nimport \"strings\"\n\nerrors = (v) =>\n    if v == 0 then \"none\"\n        else if v == 2 then \"battery volts too high\"\n        else if v == 17 then \"charger too hot\"\n        else if v == 18 then \"charger over current\"\n        else if v == 19 then \"charger current reversed\"\n        else if v == 20 then \"bulk time limit reached\"\n        else if v == 21 then \"current sensor fault\"\n        else if v == 26 then \"terminals too hot\"\n        else if v == 28 then \"converter fault\"\n        else if v == 33 then \"panel volts too high\"\n        else if v == 34 then \"panel current too high\"\n        else if v == 38 then \"input off: battery volts too high\"\n        else if v == 39 then \"input off: current while switched off\"\n        else if v == 65 then \"lost contact with a networked device\"\n        else if v == 66 then \"synchronised charging misconfigured\"\n        else if v == 67 then \"BMS connection lost\"\n        else if v == 68 then \"network misconfigured\"\n        else if v == 116 then \"calibration data lost\"\n        else if v == 117 then \"firmware incompatible\"\n        else if v == 119 then \"settings invalid\"\n        else \"error \" + string(v: v)\n\noff = (v) =>\n    strings.trimSuffix(\n    v:\n        (if v / 1 % 2 == 1 then \"no panel power, \" else \"\") +\n        (if v / 2 % 2 == 1 then \"power switch off, \" else \"\") +\n        (if v / 4 % 2 == 1 then \"switched off in settings, \" else \"\") +\n        (if v / 8 % 2 == 1 then \"remote input, \" else \"\") +\n        (if v / 16 % 2 == 1 then \"protection, \" else \"\") +\n        (if v / 32 % 2 == 1 then \"pay as you go, \" else \"\") +\n        (if v / 64 % 2 == 1 then \"BMS, \" else \"\") +\n        (if v / 128 % 2 == 1 then \"engine shutdown detected, \" else \"\") +\n        (if v / 256 % 2 == 1 then \"checking panel volts, \" else \"\") +\n        (if v >= 512 then \"other bits \" + string(v: v - v % 512) + \", \" else \"\"),\n    suffix: \", \",\n)\n\nago = (t) => string(v: duration(v: (int(v: now()) - int(v: t)) / 1000000000 * 1000000000))\n\nmppt = (fields) =>\n    from(bucket: \"raw\")\n        |> range(start: -1d)\n        |> filter(fn: (r) => r._measurement == \"blind1\" and r.device == \"mppt\" and r._field =~ fields)\n\nwords = mppt(fields: /^(charge_state|tracker)$/)\n    |> group(columns: [\"_field\"])\n    |> last()\n    |> map(\n        fn: (r) =>\n            ({r with\n                _value:\n                    if r._value == \"mppt_active\" then\n                        \"tracking\"\n                    else\n                        strings.replaceAll(v: r._value, t: \"_\", u: \" \"),\n            }),\n    )\n\ncodes = mppt(fields: /^(error|off_reason_code)$/)\n    |> group(columns: [\"_field\"])\n    |> last()\n    |> map(\n        fn: (r) =>\n            ({r with\n                _value:\n                    if r._field == \"error\" then\n                        errors(v: int(v: r._value))\n                    else if r._value == 0.0 then\n                        \"none\"\n                    else\n                        off(v: int(v: r._value)),\n            }),\n    )\n\nstates = union(tables: [words |> group(), codes |> group()])\n\nread = states\n    |> max(column: \"_time\")\n    |> map(fn: (r) => ({r with _field: \"read\", _value: ago(t: r._time) + \" ago\"}))\n\nunion(tables: [states, read])\n    |> keep(columns: [\"_measurement\", \"_field\", \"_value\"])\n    |> pivot(rowKey: [\"_measurement\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n"
+            }
+          ],
+          "timeFormat": "",
+          "decimalPlaces": 0,
+          "enforceDecimals": true,
+          "colors": [
+            {
+              "name": "laser",
+              "type": "text",
+              "hex": "#00C9FF"
+            }
+          ],
+          "tableOptions": {
+            "verticalTimeAxis": true,
+            "wrapping": "truncate",
+            "fixFirstColumn": true,
+            "sortBy": "read"
+          },
+          "fieldOptions": [
+            {
+              "fieldName": "read",
+              "displayName": "read",
+              "visible": true
+            },
+            {
+              "fieldName": "charge_state",
+              "displayName": "charging",
+              "visible": true
+            },
+            {
+              "fieldName": "tracker",
+              "displayName": "tracker",
+              "visible": true
+            },
+            {
+              "fieldName": "error",
+              "displayName": "error",
+              "visible": true
+            },
+            {
+              "fieldName": "off_reason_code",
+              "displayName": "off because",
+              "visible": true
+            }
+          ]
+        },
+        {
+          "name": "Battery volts",
+          "xPos": 0,
+          "yPos": 4,
+          "width": 4,
+          "height": 3,
+          "kind": "Xy",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"blind1\" and r.device == \"mppt\")\n    |> filter(fn: (r) => r._field == \"battery_volts\")\n    |> group(columns: [\"_field\"])\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n"
+            }
+          ],
+          "geom": "line",
+          "xCol": "_time",
+          "yCol": "_value",
+          "position": "overlaid",
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "label": "V",
+              "base": "10",
+              "scale": "linear"
+            }
+          ]
+        },
+        {
+          "name": "Charge current",
+          "xPos": 4,
+          "yPos": 4,
+          "width": 4,
+          "height": 3,
+          "kind": "Xy",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"blind1\" and r.device == \"mppt\")\n    |> filter(fn: (r) => r._field == \"battery_amps\")\n    |> group(columns: [\"_field\"])\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n"
+            }
+          ],
+          "geom": "line",
+          "xCol": "_time",
+          "yCol": "_value",
+          "position": "overlaid",
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "label": "A",
+              "base": "10",
+              "scale": "linear"
+            }
+          ]
+        },
+        {
+          "name": "Charge power",
+          "xPos": 8,
+          "yPos": 4,
+          "width": 4,
+          "height": 3,
+          "kind": "Xy",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"blind1\" and r.device == \"mppt\")\n    |> filter(fn: (r) => r._field == \"battery_watts\")\n    |> group(columns: [\"_field\"])\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n"
+            }
+          ],
+          "geom": "line",
+          "xCol": "_time",
+          "yCol": "_value",
+          "position": "overlaid",
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "label": "W",
+              "base": "10",
+              "scale": "linear"
+            }
+          ]
+        },
+        {
+          "name": "Panel volts",
+          "xPos": 0,
+          "yPos": 7,
+          "width": 4,
+          "height": 3,
+          "kind": "Xy",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"blind1\" and r.device == \"mppt\")\n    |> filter(fn: (r) => r._field == \"pv_volts\")\n    |> group(columns: [\"_field\"])\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n"
+            }
+          ],
+          "geom": "line",
+          "xCol": "_time",
+          "yCol": "_value",
+          "position": "overlaid",
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "label": "V",
+              "base": "10",
+              "scale": "linear"
+            }
+          ]
+        },
+        {
+          "name": "Panel current",
+          "xPos": 4,
+          "yPos": 7,
+          "width": 4,
+          "height": 3,
+          "kind": "Xy",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"blind1\" and r.device == \"mppt\")\n    |> filter(fn: (r) => r._field == \"pv_amps\")\n    |> group(columns: [\"_field\"])\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n"
+            }
+          ],
+          "geom": "line",
+          "xCol": "_time",
+          "yCol": "_value",
+          "position": "overlaid",
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "label": "A",
+              "base": "10",
+              "scale": "linear"
+            }
+          ]
+        },
+        {
+          "name": "Panel power",
+          "xPos": 8,
+          "yPos": 7,
+          "width": 4,
+          "height": 3,
+          "kind": "Xy",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"blind1\" and r.device == \"mppt\")\n    |> filter(fn: (r) => r._field == \"pv_watts\")\n    |> group(columns: [\"_field\"])\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n"
+            }
+          ],
+          "geom": "line",
+          "xCol": "_time",
+          "yCol": "_value",
+          "position": "overlaid",
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "label": "W",
+              "base": "10",
+              "scale": "linear"
+            }
+          ]
+        },
+        {
+          "name": "Yield by day",
+          "xPos": 0,
+          "yPos": 10,
+          "width": 12,
+          "height": 3,
+          "kind": "Xy",
+          "queries": [
+            {
+              "query": "// The controller's yield by local day, from its lifetime total, the way the\n// daily energy query works out solar_wh. Each day is drawn from its midnight\n// to a second before the next.\n\nimport \"date\"\nimport \"timezone\"\n\noption location = timezone.location(name: \"America/Chicago\")\n\nstart = date.truncate(t: v.timeRangeStart, unit: 1d)\n\ndaily = from(bucket: \"raw\")\n    |> range(start: date.sub(d: 1h, from: start), stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"blind1\" and r.device == \"mppt\" and r._field == \"yield_total_kwh\")\n    |> group()\n    |> sort(columns: [\"_time\"])\n    |> difference(nonNegative: true)\n    |> filter(fn: (r) => exists r._value and r._time >= start)\n    |> map(fn: (r) => ({day: date.truncate(t: r._time, unit: 1d), kwh: r._value}))\n    |> group(columns: [\"day\"])\n    |> sum(column: \"kwh\")\n    |> group()\n\nunion(\n    tables: [\n        daily |> map(fn: (r) => ({_time: r.day, _field: \"yield\", _value: r.kwh})),\n        daily |> map(fn: (r) => ({_time: date.sub(d: 1s, from: date.add(d: 1d, to: r.day)), _field: \"yield\", _value: r.kwh})),\n    ],\n)\n    |> group(columns: [\"_field\"])\n    |> sort(columns: [\"_time\"])\n"
+            }
+          ],
+          "geom": "line",
+          "xCol": "_time",
+          "yCol": "_value",
+          "position": "overlaid",
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "label": "kWh",
+              "base": "10",
+              "scale": "linear"
+            }
+          ]
+        }
+      ]
+    }
+  }
+]

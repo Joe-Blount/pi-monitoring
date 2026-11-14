@@ -79,7 +79,7 @@
           ]
         },
         {
-          "name": "Chins state of charge",
+          "name": "State of charge",
           "xPos": 0,
           "yPos": 4,
           "width": 9,
@@ -87,7 +87,7 @@
           "kind": "Xy",
           "queries": [
             {
-              "query": "// The Chins pack's own state of charge, which the shedding ladder follows.\n\nfrom(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(\n        fn: (r) =>\n            r._measurement == \"blind1\" and r.node == \"downstairs\" and r.device == \"bms\"\n                and\n                r._field == \"state_of_charge_pct\",\n    )\n    |> group()\n    |> keep(columns: [\"_time\", \"_value\"])\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n    |> map(fn: (r) => ({r with _field: \"Chins state of charge\"}))\n"
+              "query": "// The Chins pack's own state of charge, which the shedding ladder follows,\n// and the shunt's. The shunt counts amp-hours for the whole bank and drifts\n// from the packs between full charges.\n\nfrom(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(\n        fn: (r) =>\n            r._measurement == \"blind1\" and r.node == \"downstairs\"\n                and\n                (r.device == \"bms\" or r.device == \"shunt\")\n                and\n                r._field == \"state_of_charge_pct\",\n    )\n    |> group(columns: [\"device\"])\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n    |> map(fn: (r) => ({_time: r._time, _value: r._value, _field: if r.device == \"bms\" then \"Chins\" else \"shunt\"}))\n    |> group(columns: [\"_field\"])\n"
             }
           ],
           "geom": "line",
@@ -312,6 +312,100 @@
               "fieldName": "shunt_coverage_pct",
               "displayName": "shunt_coverage_pct",
               "visible": true
+            }
+          ]
+        },
+        {
+          "name": "Current by pack (positive is charging)",
+          "xPos": 0,
+          "yPos": 13,
+          "width": 6,
+          "height": 3,
+          "kind": "Xy",
+          "queries": [
+            {
+              "query": "// The two devices read at different moments, so both are averaged over a\n// common window of at least three minutes. A window missing either is left\n// out.\n\nw = if int(v: v.windowPeriod) < int(v: 3m) then 3m else v.windowPeriod\n\namps = from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(\n        fn: (r) =>\n            r._measurement == \"blind1\" and r.node == \"downstairs\"\n                and\n                (r.device == \"bms\" and r._field == \"pack_amps\" or r.device == \"shunt\" and r._field == \"shunt_amps\"),\n    )\n    |> group(columns: [\"_field\"])\n    |> aggregateWindow(every: w, fn: mean, createEmpty: false)\n    |> group()\n    |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n    |> filter(fn: (r) => exists r.pack_amps and exists r.shunt_amps)\n\nunion(\n    tables: [\n        amps |> map(fn: (r) => ({_time: r._time, _field: \"whole bank\", _value: r.shunt_amps})),\n        amps |> map(fn: (r) => ({_time: r._time, _field: \"Chins\", _value: r.pack_amps})),\n        amps |> map(fn: (r) => ({_time: r._time, _field: \"Weize pair\", _value: r.shunt_amps - r.pack_amps})),\n    ],\n)\n    |> group(columns: [\"_field\"])\n    |> sort(columns: [\"_time\"])\n"
+            }
+          ],
+          "geom": "line",
+          "xCol": "_time",
+          "yCol": "_value",
+          "position": "overlaid",
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "label": "A",
+              "base": "10",
+              "scale": "linear"
+            }
+          ]
+        },
+        {
+          "name": "Share of the bank's current",
+          "xPos": 6,
+          "yPos": 13,
+          "width": 6,
+          "height": 3,
+          "kind": "Xy",
+          "queries": [
+            {
+              "query": "// Each pack's share of the bank's current, in percent. A share of almost no\n// current swings wildly, so a window is left out while the bank carries less\n// than two amps either way. \"Chins, by day\" is the Chins's share of the\n// day's throughput, charge and discharge alike, drawn a day wide. A share\n// above 100 or below 0 means one pack is charging the other.\n\nimport \"date\"\nimport \"math\"\nimport \"timezone\"\n\noption location = timezone.location(name: \"America/Chicago\")\n\n// The two devices read at different moments, so both are averaged over a\n// common window of at least three minutes. A window missing either is left\n// out.\n\nw = if int(v: v.windowPeriod) < int(v: 3m) then 3m else v.windowPeriod\n\namps = from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(\n        fn: (r) =>\n            r._measurement == \"blind1\" and r.node == \"downstairs\"\n                and\n                (r.device == \"bms\" and r._field == \"pack_amps\" or r.device == \"shunt\" and r._field == \"shunt_amps\"),\n    )\n    |> group(columns: [\"_field\"])\n    |> aggregateWindow(every: w, fn: mean, createEmpty: false)\n    |> group()\n    |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n    |> filter(fn: (r) => exists r.pack_amps and exists r.shunt_amps)\n\nmoving = amps |> filter(fn: (r) => math.abs(x: r.shunt_amps) >= 2.0)\n\ndaily = moving\n    |> map(fn: (r) => ({day: date.truncate(t: r._time, unit: 1d), chins: math.abs(x: r.pack_amps), bank: math.abs(x: r.shunt_amps)}))\n    |> group(columns: [\"day\"])\n    |> reduce(\n        identity: {chins: 0.0, bank: 0.0},\n        fn: (r, accumulator) => ({chins: accumulator.chins + r.chins, bank: accumulator.bank + r.bank}),\n    )\n    |> group()\n    |> map(fn: (r) => ({day: r.day, _value: 100.0 * r.chins / r.bank}))\n\nunion(\n    tables: [\n        moving |> map(fn: (r) => ({_time: r._time, _field: \"Chins\", _value: 100.0 * r.pack_amps / r.shunt_amps})),\n        moving\n            |> map(fn: (r) => ({_time: r._time, _field: \"Weize pair\", _value: 100.0 - 100.0 * r.pack_amps / r.shunt_amps})),\n        daily |> map(fn: (r) => ({_time: r.day, _field: \"Chins, by day\", _value: r._value})),\n        daily\n            |> map(\n                fn: (r) =>\n                    ({_time: date.sub(d: 1s, from: date.add(d: 1d, to: r.day)), _field: \"Chins, by day\", _value: r._value}),\n            ),\n    ],\n)\n    |> group(columns: [\"_field\"])\n    |> sort(columns: [\"_time\"])\n"
+            }
+          ],
+          "geom": "line",
+          "xCol": "_time",
+          "yCol": "_value",
+          "position": "overlaid",
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "label": "%",
+              "base": "10",
+              "scale": "linear"
             }
           ]
         }

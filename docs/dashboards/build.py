@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Build the dashboards: the blind's energy, and every machine's health.
+"""Build the dashboards: the blind's energy, Chins pack and charge controller,
+the garage's packs and inverter, and every machine's health.
 
 docs/queries/blind1-daily-energy.flux is the one place the daily figures
 are worked out. The dashboard's daily cells are that query, started from the
@@ -29,6 +30,9 @@ QUERY = HERE.parent / "queries" / "blind1-daily-energy.flux"
 OUT = HERE / "blind1-energy.json"
 HEALTH_OUT = HERE / "pi-health.json"
 CHINS_OUT = HERE / "blind1-chins.json"
+VICTRON_OUT = HERE / "blind1-victron.json"
+SOK_OUT = HERE / "garage-sok.json"
+INVERTER_OUT = HERE / "garage-charge-inverter.json"
 
 FIXED_START = "start = date.truncate(t: lookback, unit: 1d)\n"
 PICKED_START = "start = date.truncate(t: v.timeRangeStart, unit: 1d)\n"
@@ -107,20 +111,103 @@ union(tables: [from_bank, from_solar, to_bank])
 """
 
 SOC = """\
-// The Chins pack's own state of charge, which the shedding ladder follows.
+// The Chins pack's own state of charge, which the shedding ladder follows,
+// and the shunt's. The shunt counts amp-hours for the whole bank and drifts
+// from the packs between full charges.
 
 from(bucket: "raw")
     |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
     |> filter(
         fn: (r) =>
-            r._measurement == "blind1" and r.node == "downstairs" and r.device == "bms"
+            r._measurement == "blind1" and r.node == "downstairs"
+                and
+                (r.device == "bms" or r.device == "shunt")
                 and
                 r._field == "state_of_charge_pct",
     )
-    |> group()
-    |> keep(columns: ["_time", "_value"])
+    |> group(columns: ["device"])
     |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)
-    |> map(fn: (r) => ({r with _field: "Chins state of charge"}))
+    |> map(fn: (r) => ({_time: r._time, _value: r._value, _field: if r.device == "bms" then "Chins" else "shunt"}))
+    |> group(columns: ["_field"])
+"""
+
+# The Chins reports its own current and the shunt the whole bank's. The
+# Weize pair has no meter of its own, so its share is the difference.
+PACK_AMPS = """\
+// The two devices read at different moments, so both are averaged over a
+// common window of at least three minutes. A window missing either is left
+// out.
+
+w = if int(v: v.windowPeriod) < int(v: 3m) then 3m else v.windowPeriod
+
+amps = from(bucket: "raw")
+    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+    |> filter(
+        fn: (r) =>
+            r._measurement == "blind1" and r.node == "downstairs"
+                and
+                (r.device == "bms" and r._field == "pack_amps" or r.device == "shunt" and r._field == "shunt_amps"),
+    )
+    |> group(columns: ["_field"])
+    |> aggregateWindow(every: w, fn: mean, createEmpty: false)
+    |> group()
+    |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
+    |> filter(fn: (r) => exists r.pack_amps and exists r.shunt_amps)
+"""
+
+PACK_CURRENT = PACK_AMPS + """
+union(
+    tables: [
+        amps |> map(fn: (r) => ({_time: r._time, _field: "whole bank", _value: r.shunt_amps})),
+        amps |> map(fn: (r) => ({_time: r._time, _field: "Chins", _value: r.pack_amps})),
+        amps |> map(fn: (r) => ({_time: r._time, _field: "Weize pair", _value: r.shunt_amps - r.pack_amps})),
+    ],
+)
+    |> group(columns: ["_field"])
+    |> sort(columns: ["_time"])
+"""
+
+PACK_SHARE = """\
+// Each pack's share of the bank's current, in percent. A share of almost no
+// current swings wildly, so a window is left out while the bank carries less
+// than two amps either way. "Chins, by day" is the Chins's share of the
+// day's throughput, charge and discharge alike, drawn a day wide. A share
+// above 100 or below 0 means one pack is charging the other.
+
+import "date"
+import "math"
+import "timezone"
+
+option location = timezone.location(name: "America/Chicago")
+
+""" + PACK_AMPS + """
+moving = amps |> filter(fn: (r) => math.abs(x: r.shunt_amps) >= 2.0)
+
+daily = moving
+    |> map(fn: (r) => ({day: date.truncate(t: r._time, unit: 1d), chins: math.abs(x: r.pack_amps), bank: math.abs(x: r.shunt_amps)}))
+    |> group(columns: ["day"])
+    |> reduce(
+        identity: {chins: 0.0, bank: 0.0},
+        fn: (r, accumulator) => ({chins: accumulator.chins + r.chins, bank: accumulator.bank + r.bank}),
+    )
+    |> group()
+    |> map(fn: (r) => ({day: r.day, _value: 100.0 * r.chins / r.bank}))
+
+union(
+    tables: [
+        moving |> map(fn: (r) => ({_time: r._time, _field: "Chins", _value: 100.0 * r.pack_amps / r.shunt_amps})),
+        moving
+            |> map(fn: (r) => ({_time: r._time, _field: "Weize pair", _value: 100.0 - 100.0 * r.pack_amps / r.shunt_amps})),
+        daily |> map(fn: (r) => ({_time: r.day, _field: "Chins, by day", _value: r._value})),
+        daily
+            |> map(
+                fn: (r) =>
+                    ({_time: date.sub(d: 1s, from: date.add(d: 1d, to: r.day)), _field: "Chins, by day", _value: r._value}),
+            ),
+    ],
+)
+    |> group(columns: ["_field"])
+    |> sort(columns: ["_time"])
 """
 
 NIGHT = """\
@@ -328,7 +415,7 @@ def build():
         (0, 0, 9, 4, xy("Where the load's power comes from", SUPPLY, "W",
                         position="stacked")),
         (9, 0, 3, 6, single("Night draw, last 24 hours", NIGHT, " W")),
-        (0, 4, 9, 2, xy("Chins state of charge", SOC, "%")),
+        (0, 4, 9, 2, xy("State of charge", SOC, "%")),
         (0, 6, 6, 3, xy("Daily energy, bank",
                         daily(query, steps([("bank in", "bank_in_wh"),
                                             ("bank out", "bank_out_wh")])),
@@ -338,6 +425,9 @@ def build():
                                             ("load", "load_wh")])),
                         "Wh")),
         (0, 9, 12, 4, table("Daily energy", daily(query, None))),
+        (0, 13, 6, 3, xy("Current by pack (positive is charging)", PACK_CURRENT,
+                         "A")),
+        (6, 13, 6, 3, xy("Share of the bank's current", PACK_SHARE, "%")),
     ]
     return dashboard(
         "blind-energy", "Blind energy",
@@ -648,9 +738,403 @@ def build_chins():
         cells)
 
 
+# The blind's charge controller. Its readings are matched by device and not
+# by node, because the controller has been read from more than one node.
+
+def victron(body):
+    return """\
+from(bucket: "raw")
+    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+    |> filter(fn: (r) => r._measurement == "blind1" and r.device == "mppt")
+%s""" % body
+
+
+def victron_graph(field):
+    return victron("""\
+    |> filter(fn: (r) => r._field == "%s")
+    |> group(columns: ["_field"])
+    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)
+""" % field)
+
+
+def victron_latest(field):
+    return """\
+// The newest reading in the last ten minutes. The controller reports every
+// thirty seconds, so an empty cell means it stopped, not that it is idle.
+from(bucket: "raw")
+    |> range(start: -10m)
+    |> filter(fn: (r) => r._measurement == "blind1" and r.device == "mppt" and r._field == "%s")
+    |> group()
+    |> last()
+""" % field
+
+
+#: VE.Direct error numbers, in words. A number not listed is shown as itself.
+VICTRON_ERRORS = [
+    (0, "none"), (2, "battery volts too high"), (17, "charger too hot"),
+    (18, "charger over current"), (19, "charger current reversed"),
+    (20, "bulk time limit reached"), (21, "current sensor fault"),
+    (26, "terminals too hot"), (28, "converter fault"),
+    (33, "panel volts too high"), (34, "panel current too high"),
+    (38, "input off: battery volts too high"),
+    (39, "input off: current while switched off"),
+    (65, "lost contact with a networked device"),
+    (66, "synchronised charging misconfigured"), (67, "BMS connection lost"),
+    (68, "network misconfigured"), (116, "calibration data lost"),
+    (117, "firmware incompatible"), (119, "settings invalid"),
+]
+
+#: The off reason's bits, numbered from 0.
+VICTRON_OFF_BITS = [
+    "no panel power", "power switch off", "switched off in settings",
+    "remote input", "protection", "pay as you go", "BMS",
+    "engine shutdown detected", "checking panel volts",
+]
+
+
+def victron_errors():
+    chain = "".join('if v == %d then "%s"\n        else ' % (code, words)
+                    for code, words in VICTRON_ERRORS)
+    return chain + '"error " + string(v: v)'
+
+
+VICTRON_STATUS = """\
+// What the controller says it is doing, newest reading in the last day.
+// "read" is how long ago it last reported. Words and numbers are read apart,
+// since one stream holding both is a type conflict.
+
+import "strings"
+
+errors = (v) =>
+    %s
+
+off = (v) =>
+    %s
+
+ago = (t) => string(v: duration(v: (int(v: now()) - int(v: t)) / 1000000000 * 1000000000))
+
+mppt = (fields) =>
+    from(bucket: "raw")
+        |> range(start: -1d)
+        |> filter(fn: (r) => r._measurement == "blind1" and r.device == "mppt" and r._field =~ fields)
+
+words = mppt(fields: /^(charge_state|tracker)$/)
+    |> group(columns: ["_field"])
+    |> last()
+    |> map(
+        fn: (r) =>
+            ({r with
+                _value:
+                    if r._value == "mppt_active" then
+                        "tracking"
+                    else
+                        strings.replaceAll(v: r._value, t: "_", u: " "),
+            }),
+    )
+
+codes = mppt(fields: /^(error|off_reason_code)$/)
+    |> group(columns: ["_field"])
+    |> last()
+    |> map(
+        fn: (r) =>
+            ({r with
+                _value:
+                    if r._field == "error" then
+                        errors(v: int(v: r._value))
+                    else if r._value == 0.0 then
+                        "none"
+                    else
+                        off(v: int(v: r._value)),
+            }),
+    )
+
+states = union(tables: [words |> group(), codes |> group()])
+
+read = states
+    |> max(column: "_time")
+    |> map(fn: (r) => ({r with _field: "read", _value: ago(t: r._time) + " ago"}))
+
+union(tables: [states, read])
+    |> keep(columns: ["_measurement", "_field", "_value"])
+    |> pivot(rowKey: ["_measurement"], columnKey: ["_field"], valueColumn: "_value")
+"""
+
+VICTRON_STATUS_COLUMNS = [
+    ("read", "read"), ("charge_state", "charging"), ("tracker", "tracker"),
+    ("error", "error"), ("off_reason_code", "off because"),
+]
+
+VICTRON_DAILY = """\
+// The controller's yield by local day, from its lifetime total, the way the
+// daily energy query works out solar_wh. Each day is drawn from its midnight
+// to a second before the next.
+
+import "date"
+import "timezone"
+
+option location = timezone.location(name: "America/Chicago")
+
+start = date.truncate(t: v.timeRangeStart, unit: 1d)
+
+daily = from(bucket: "raw")
+    |> range(start: date.sub(d: 1h, from: start), stop: v.timeRangeStop)
+    |> filter(fn: (r) => r._measurement == "blind1" and r.device == "mppt" and r._field == "yield_total_kwh")
+    |> group()
+    |> sort(columns: ["_time"])
+    |> difference(nonNegative: true)
+    |> filter(fn: (r) => exists r._value and r._time >= start)
+    |> map(fn: (r) => ({day: date.truncate(t: r._time, unit: 1d), kwh: r._value}))
+    |> group(columns: ["day"])
+    |> sum(column: "kwh")
+    |> group()
+
+union(
+    tables: [
+        daily |> map(fn: (r) => ({_time: r.day, _field: "yield", _value: r.kwh})),
+        daily |> map(fn: (r) => ({_time: date.sub(d: 1s, from: date.add(d: 1d, to: r.day)), _field: "yield", _value: r.kwh})),
+    ],
+)
+    |> group(columns: ["_field"])
+    |> sort(columns: ["_time"])
+"""
+
+
+def status_table(name, text, row, columns):
+    chart = table(name, text)
+    chart["timeFormat"] = ""
+    chart["tableOptions"]["sortBy"] = row
+    chart["fieldOptions"] = [
+        {"fieldName": field, "displayName": label, "visible": True}
+        for field, label in columns]
+    return chart
+
+
+def build_victron():
+    status = VICTRON_STATUS % (victron_errors(), bit_names(VICTRON_OFF_BITS))
+    cells = [
+        (0, 0, 2, 2, single("Battery", victron_latest("battery_volts"), " V", 2)),
+        (2, 0, 2, 2, single("Charge current", victron_latest("battery_amps"), " A", 1)),
+        (4, 0, 2, 2, single("Panels", victron_latest("pv_watts"), " W")),
+        (6, 0, 2, 2, single("Today", victron_latest("yield_today_kwh"), " kWh", 2)),
+        (8, 0, 2, 2, single("Peak today", victron_latest("max_power_today_watts"), " W")),
+        (10, 0, 2, 2, single("Yesterday", victron_latest("yield_yesterday_kwh"), " kWh", 2)),
+        (0, 2, 12, 2, status_table("Controller status", status, "read",
+                                   VICTRON_STATUS_COLUMNS)),
+        (0, 4, 4, 3, xy("Battery volts", victron_graph("battery_volts"), "V")),
+        (4, 4, 4, 3, xy("Charge current", victron_graph("battery_amps"), "A")),
+        (8, 4, 4, 3, xy("Charge power", victron_graph("battery_watts"), "W")),
+        (0, 7, 4, 3, xy("Panel volts", victron_graph("pv_volts"), "V")),
+        (4, 7, 4, 3, xy("Panel current", victron_graph("pv_amps"), "A")),
+        (8, 7, 4, 3, xy("Panel power", victron_graph("pv_watts"), "W")),
+        (0, 10, 12, 3, xy("Yield by day", VICTRON_DAILY, "kWh")),
+    ]
+    return dashboard(
+        "blind1-victron", "Blind1: Victron",
+        "The blind's solar charge controller.", cells)
+
+
+# The garage's packs are every device on the rack, so a pack added there
+# appears with no change here.
+
+def garage_packs(pattern, scale=None):
+    convert = ("" if scale is None else
+               "    |> map(fn: (r) => ({r with _value: r._value * %s}))\n" % scale)
+    return """\
+from(bucket: "raw")
+    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+    |> filter(fn: (r) => r._measurement == "garage" and r.location == "rack" and r._field =~ /%s/)
+    |> group(columns: ["device", "_field"])
+    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)
+%s""" % (pattern, convert)
+
+
+#: The pack's protection states in words, in the order and with the codes
+#: the driver reads them (monitoring/drivers/abc_bms.py, PROTECTION_STATES).
+SOK_PROTECTION = [
+    ("COV", "cell over volts"), ("FC", "full"), ("SOCC", "charge high"),
+    ("OTC", "too warm to charge"), ("UTC", "too cold to charge"),
+    ("BOTC", "board hot, charging"), ("CUV", "cell under volts"),
+    ("FD", "empty"), ("SOCD", "charge low"),
+    ("OTD", "too warm to discharge"), ("UTD", "too cold to discharge"),
+    ("BOTD", "board hot, discharging"), ("SCD", "short circuit"),
+    ("OCD", "over current"), ("UVP", "pack under volts"),
+    ("OVP", "pack over volts"),
+]
+
+SOK_STATUS = """\
+// One row per pack, its newest readings in the last thirty days. "read" is
+// how long ago the pack last answered, so a pack that stopped stays listed
+// with its last values. Alarms names each protection state the pack reports.
+
+import "math"
+import "strings"
+
+alarms = (v) =>
+    %s
+
+ago = (t) => string(v: duration(v: (int(v: now()) - int(v: t)) / 1000000000 * 1000000000))
+
+latest = from(bucket: "raw")
+    |> range(start: -30d)
+    |> filter(
+        fn: (r) =>
+            r._measurement == "garage" and r.location == "rack"
+                and
+                r._field =~ /^(state_of_charge_pct|pack_volts|pack_amps|cell_spread_volts|temp_[0-9]+|cycles|charge_mosfet_on|discharge_mosfet_on|heater_on|alarm_flags|commands_unanswered)$/,
+    )
+    |> last()
+
+states = latest
+    |> map(
+        fn: (r) =>
+            ({r with
+                _value:
+                    if r._field =~ /mosfet/ then
+                        if r._value > 0.5 then "on" else "OFF"
+                    else if r._field == "heater_on" then
+                        if r._value > 0.5 then "on" else "off"
+                    else if r._field == "alarm_flags" then
+                        if r._value == 0.0 then "none" else alarms(v: int(v: r._value))
+                    else if r._field == "cell_spread_volts" then
+                        string(v: int(v: math.round(x: r._value * 1000.0)))
+                    else if r._field == "pack_amps" or r._field == "pack_volts" or r._field =~ /^temp_/ then
+                        string(v: math.round(x: r._value * 10.0) / 10.0)
+                    else
+                        string(v: int(v: math.round(x: r._value))),
+            }),
+    )
+
+read = latest
+    |> group(columns: ["device"])
+    |> max(column: "_time")
+    |> map(fn: (r) => ({r with _field: "read", _value: ago(t: r._time) + " ago"}))
+
+union(tables: [states |> group(), read |> group()])
+    |> keep(columns: ["device", "_field", "_value"])
+    |> pivot(rowKey: ["device"], columnKey: ["_field"], valueColumn: "_value")
+    |> sort(columns: ["device"])
+"""
+
+SOK_STATUS_COLUMNS = [
+    ("device", "pack"), ("read", "read"), ("state_of_charge_pct", "charge %"),
+    ("pack_volts", "volts"), ("pack_amps", "amps"),
+    ("cell_spread_volts", "spread mV"), ("temp_1", "temp 1 F"),
+    ("temp_2", "temp 2 F"), ("cycles", "cycles"),
+    ("charge_mosfet_on", "charging"), ("discharge_mosfet_on", "discharging"),
+    ("heater_on", "heater"), ("alarm_flags", "alarms"),
+    ("commands_unanswered", "unanswered"),
+]
+
+
+def build_sok():
+    status = SOK_STATUS % bit_names([words for _code, words in SOK_PROTECTION])
+    cells = [
+        (0, 0, 12, 3, status_table("Pack status", status, "device",
+                                   SOK_STATUS_COLUMNS)),
+        (0, 3, 6, 3, xy("State of charge", garage_packs("^state_of_charge_pct$"), "%")),
+        (6, 3, 6, 3, xy("Current (positive is charging)", garage_packs("^pack_amps$"),
+                        "A")),
+        (0, 6, 6, 3, xy("Lowest and highest cell",
+                        garage_packs("^cell_(min|max)_volts$"), "V")),
+        (6, 6, 6, 3, xy("Cell spread", garage_packs("^cell_spread_volts$", "1000.0"),
+                        "mV")),
+        (0, 9, 6, 3, xy("Temperature", garage_packs("^temp_[0-9]+$"), "F")),
+        (6, 9, 6, 3, xy("Pack volts", garage_packs("^pack_volts$"), "V")),
+    ]
+    return dashboard(
+        "garage-sok", "Garage - SOK",
+        "The garage's packs, from their own battery management systems.",
+        cells)
+
+
+def inverter_graph(pattern):
+    return """\
+from(bucket: "raw")
+    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+    |> filter(fn: (r) => r._measurement == "garage" and r.device == "inverter" and r._field =~ /%s/)
+    |> group(columns: ["_field"])
+    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)
+""" % pattern
+
+
+INVERTER_STATUS = """\
+// The inverter's newest readings in the last thirty days. "read" is how long
+// ago it last gave a reading, "answering" whether its newest poll got one,
+// and "last error" the newest failure with how long ago it was. Words and
+// numbers are read apart, since one stream holding both is a type conflict.
+
+import "math"
+
+ago = (t) => string(v: duration(v: (int(v: now()) - int(v: t)) / 1000000000 * 1000000000))
+
+inverter = (fields) =>
+    from(bucket: "raw")
+        |> range(start: -30d)
+        |> filter(fn: (r) => r._measurement == "garage" and r.device == "inverter" and r._field =~ fields)
+
+latest = inverter(fields: /^(ok|ac_out_volts|ac_out_hz|load_watts|pv_watts|battery_volts|battery_watts)$/)
+    |> last()
+
+states = latest
+    |> map(
+        fn: (r) =>
+            ({r with
+                _value:
+                    if r._field == "ok" then
+                        if r._value > 0.5 then "yes" else "NO"
+                    else if r._field == "ac_out_hz" or r._field == "battery_volts" then
+                        string(v: math.round(x: r._value * 10.0) / 10.0)
+                    else
+                        string(v: int(v: math.round(x: r._value))),
+            }),
+    )
+
+failed = inverter(fields: /^error_message$/)
+    |> last()
+    |> map(fn: (r) => ({r with _value: string(v: r._value) + " (" + ago(t: r._time) + " ago)"}))
+
+read = latest
+    |> filter(fn: (r) => r._field != "ok")
+    |> group()
+    |> max(column: "_time")
+    |> map(fn: (r) => ({r with _field: "read", _value: ago(t: r._time) + " ago"}))
+
+union(tables: [states |> group(), failed |> group(), read])
+    |> keep(columns: ["_measurement", "_field", "_value"])
+    |> pivot(rowKey: ["_measurement"], columnKey: ["_field"], valueColumn: "_value")
+"""
+
+INVERTER_STATUS_COLUMNS = [
+    ("read", "read"), ("ok", "answering"), ("ac_out_volts", "AC volts"),
+    ("ac_out_hz", "AC Hz"), ("load_watts", "load W"), ("pv_watts", "panels W"),
+    ("battery_volts", "battery V"), ("battery_watts", "battery W"),
+    ("error_message", "last error"),
+]
+
+
+def build_inverter():
+    cells = [
+        (0, 0, 12, 2, status_table("Inverter status", INVERTER_STATUS, "read",
+                                   INVERTER_STATUS_COLUMNS)),
+        (0, 2, 6, 3, xy("Power (battery positive is charging)",
+                        inverter_graph("^(load_watts|pv_watts|battery_watts)$"), "W")),
+        (6, 2, 6, 3, xy("Battery current (positive is charging)",
+                        inverter_graph("^battery_amps$"), "A")),
+        (0, 5, 4, 3, xy("AC out volts", inverter_graph("^ac_out_volts$"), "V")),
+        (4, 5, 4, 3, xy("AC out frequency", inverter_graph("^ac_out_hz$"), "Hz")),
+        (8, 5, 4, 3, xy("Battery volts", inverter_graph("^battery_volts$"), "V")),
+        (0, 8, 6, 3, xy("Panel volts", inverter_graph("^pv_volts$"), "V")),
+        (6, 8, 6, 3, xy("Panel current", inverter_graph("^pv_amps$"), "A")),
+    ]
+    return dashboard(
+        "garage-charge-inverter", "Garage - Charge/Inverter",
+        "The garage's inverter and charger.", cells)
+
+
 def main(argv):
     outputs = [(OUT, build()), (HEALTH_OUT, build_health()),
-               (CHINS_OUT, build_chins())]
+               (CHINS_OUT, build_chins()), (VICTRON_OUT, build_victron()),
+               (SOK_OUT, build_sok()), (INVERTER_OUT, build_inverter())]
     if argv[1:] == ["--check"]:
         stale = [path for path, template in outputs
                  if not path.exists()
