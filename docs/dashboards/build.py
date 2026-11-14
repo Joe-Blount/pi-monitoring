@@ -185,8 +185,10 @@ moving = amps |> filter(fn: (r) => math.abs(x: r.shunt_amps) >= 2.0)
 
 // The day's throughput from each reading's size, taken before any averaging,
 // so charge and discharge add rather than cancel. The sizes are averaged over
-// the same windows as above and only windows holding both devices count, so
-// a gap in one device does not tilt the day.
+// three-minute windows and only windows holding both devices count, so a gap
+// in one device does not tilt the day. Three minutes divides the day, and
+// each window counts on the day it starts, so no window crosses midnight and
+// the figure does not change with the dashboard's range.
 daily = from(bucket: "raw")
     |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
     |> filter(
@@ -197,7 +199,7 @@ daily = from(bucket: "raw")
     )
     |> map(fn: (r) => ({r with _value: math.abs(x: r._value)}))
     |> group(columns: ["_field"])
-    |> aggregateWindow(every: w, fn: mean, createEmpty: false)
+    |> aggregateWindow(every: 3m, fn: mean, createEmpty: false, timeSrc: "_start")
     |> group()
     |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
     |> filter(fn: (r) => exists r.pack_amps and exists r.shunt_amps)
