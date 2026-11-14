@@ -25,40 +25,35 @@ def test_the_committed_dashboard_matches_its_builder():
     assert result.returncode == 0, result.stderr
 
 
-def test_the_dashboard_is_in_the_format_the_web_importer_accepts():
-    template = _template()
-    assert template["meta"]["version"] == "1"
-    assert template["content"]["data"]["type"] == "dashboard"
-    included = {(item["type"], item["id"]): item
-                for item in template["content"]["included"]}
-    for ref in template["content"]["data"]["relationships"]["cell"]["data"]:
-        cell = included[("cell", ref["id"])]
-        assert set(cell["attributes"]) == {"x", "y", "w", "h"}
-        view = included[("view", cell["relationships"]["view"]["data"]["id"])]
-        properties = view["attributes"]["properties"]
-        assert properties["shape"] == "chronograf-v2"
-        assert properties["queries"][0]["text"].strip()
+def _charts():
+    (dashboard,) = _template()
+    return dashboard["spec"]["charts"]
+
+
+def test_the_dashboard_is_a_template_in_the_format_the_cloud_export_writes():
+    (dashboard,) = _template()
+    assert dashboard["apiVersion"] == "influxdata.com/v2alpha1"
+    assert dashboard["kind"] == "Dashboard"
+    for chart in dashboard["spec"]["charts"]:
+        assert chart["kind"] in {"Xy", "Single_Stat", "Table"}
+        assert chart["queries"][0]["query"].strip()
 
 
 def test_the_daily_cells_follow_the_dashboards_time_range():
-    views = [item["attributes"] for item in _template()["content"]["included"]
-             if item["type"] == "view"]
-    daily = [view for view in views if view["name"].startswith("Daily energy")]
+    daily = [c for c in _charts() if c["name"].startswith("Daily energy")]
     assert len(daily) == 3
-    for view in daily:
-        text = view["properties"]["queries"][0]["text"]
+    for chart in daily:
+        text = chart["queries"][0]["query"]
         assert "v.timeRangeStart" in text
         assert "lookback" not in text
 
 
 def test_the_cells_tile_the_grid_without_overlapping():
     taken = set()
-    for item in _template()["content"]["included"]:
-        if item["type"] != "cell":
-            continue
-        a = item["attributes"]
-        assert 0 <= a["x"] and a["x"] + a["w"] <= 12
-        for x in range(a["x"], a["x"] + a["w"]):
-            for y in range(a["y"], a["y"] + a["h"]):
-                assert (x, y) not in taken
-                taken.add((x, y))
+    for chart in _charts():
+        x, y, w, h = chart["xPos"], chart["yPos"], chart["width"], chart["height"]
+        assert 0 <= x and x + w <= 12
+        for column in range(x, x + w):
+            for row in range(y, y + h):
+                assert (column, row) not in taken
+                taken.add((column, row))

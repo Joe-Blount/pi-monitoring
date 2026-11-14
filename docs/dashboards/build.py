@@ -11,8 +11,10 @@ disagree. Run this after changing the query and commit what it writes:
 With --check it writes nothing and exits 1 if the committed dashboard is out
 of date.
 
-The output imports through the InfluxDB web interface: Dashboards, Create
-Dashboard, Import Dashboard.
+The output is an InfluxDB template, the format the web interface's own
+dashboard export writes, and imports there: Dashboards, Create Dashboard,
+Import Dashboard. The older export format with a meta block is accepted by
+that dialog and then saves nothing in InfluxDB Cloud.
 """
 
 import json
@@ -229,74 +231,40 @@ union(
 """ % series
 
 
-def query_entry(text):
-    return {
-        "text": text,
-        "editMode": "advanced",
-        "name": "",
-        "builderConfig": {
-            "buckets": [],
-            "tags": [{"key": "_measurement", "values": [],
-                      "aggregateFunctionType": "filter"}],
-            "functions": [],
-            "aggregateWindow": {"period": "auto", "fillValues": False},
-        },
-    }
-
-
 PALETTE = [
-    {"id": "a", "type": "scale", "hex": "#31C0F6", "name": "Nineteen Eighty Four", "value": 0},
-    {"id": "b", "type": "scale", "hex": "#A500A5", "name": "Nineteen Eighty Four", "value": 0},
-    {"id": "c", "type": "scale", "hex": "#FF7E27", "name": "Nineteen Eighty Four", "value": 0},
+    {"name": "Nineteen Eighty Four", "type": "scale", "hex": "#31C0F6"},
+    {"name": "Nineteen Eighty Four", "type": "scale", "hex": "#A500A5"},
+    {"name": "Nineteen Eighty Four", "type": "scale", "hex": "#FF7E27"},
 ]
 
-
-def axis(label="", bounds=("", "")):
-    return {"bounds": list(bounds), "label": label, "prefix": "", "suffix": "",
-            "base": "10", "scale": "linear"}
+TEXT = [{"name": "laser", "type": "text", "hex": "#00C9FF"}]
 
 
-def xy(name, text, unit, position="overlaid", bounds=("", "")):
+def xy(name, text, unit, position="overlaid", domain=None):
+    y = {"name": "y", "label": unit, "base": "10", "scale": "linear"}
+    if domain is not None:
+        y["domain"] = list(domain)
     return {
         "name": name,
-        "properties": {
-            "shape": "chronograf-v2",
-            "type": "xy",
-            "queries": [query_entry(text)],
-            "axes": {"x": axis(), "y": axis(unit, bounds)},
-            "colors": PALETTE,
-            "geom": "line",
-            "position": position,
-            "xColumn": "_time",
-            "yColumn": "_value",
-            "hoverDimension": "auto",
-            "legendColorizeRows": True,
-            "legendOpacity": 1,
-            "legendOrientationThreshold": 100000000,
-            "timeFormat": "",
-            "note": "",
-            "showNoteWhenEmpty": False,
-        },
+        "kind": "Xy",
+        "queries": [{"query": text}],
+        "geom": "line",
+        "xCol": "_time",
+        "yCol": "_value",
+        "position": position,
+        "colors": PALETTE,
+        "axes": [{"name": "x", "base": "10", "scale": "linear"}, y],
     }
 
 
 def single(name, text, suffix):
     return {
         "name": name,
-        "properties": {
-            "shape": "chronograf-v2",
-            "type": "single-stat",
-            "queries": [query_entry(text)],
-            "colors": [{"id": "base", "type": "text", "hex": "#00C9FF",
-                        "name": "laser", "value": 0}],
-            "prefix": "",
-            "tickPrefix": "",
-            "suffix": suffix,
-            "tickSuffix": "",
-            "decimalPlaces": {"isEnforced": True, "digits": 0},
-            "note": "",
-            "showNoteWhenEmpty": False,
-        },
+        "kind": "Single_Stat",
+        "queries": [{"query": text}],
+        "suffix": suffix,
+        "decimalPlaces": 0,
+        "colors": TEXT,
     }
 
 
@@ -310,37 +278,31 @@ TABLE_COLUMNS = [
 def table(name, text):
     return {
         "name": name,
-        "properties": {
-            "shape": "chronograf-v2",
-            "type": "table",
-            "queries": [query_entry(text)],
-            "colors": [{"id": "base", "type": "text", "hex": "#00C9FF",
-                        "name": "laser", "value": 0}],
-            "tableOptions": {
-                "verticalTimeAxis": True,
-                "sortBy": {"internalName": "day", "displayName": "day",
-                           "visible": True},
-                "wrapping": "truncate",
-                "fixFirstColumn": True,
-            },
-            "fieldOptions": [{"internalName": c, "displayName": c,
-                              "visible": True} for c in TABLE_COLUMNS],
-            "timeFormat": "YYYY-MM-DD",
-            "decimalPlaces": {"isEnforced": True, "digits": 0},
-            "note": "",
-            "showNoteWhenEmpty": False,
+        "kind": "Table",
+        "queries": [{"query": text}],
+        "timeFormat": "YYYY-MM-DD",
+        "decimalPlaces": 0,
+        "enforceDecimals": True,
+        "colors": TEXT,
+        "tableOptions": {
+            "verticalTimeAxis": True,
+            "wrapping": "truncate",
+            "fixFirstColumn": True,
+            "sortBy": "day",
         },
+        "fieldOptions": [{"fieldName": c, "displayName": c, "visible": True}
+                         for c in TABLE_COLUMNS],
     }
 
 
 def build():
     query = QUERY.read_text()
-    # (x, y, w, h, view) on the dashboard's twelve-column grid.
+    # (x, y, w, h, chart) on the dashboard's twelve-column grid.
     cells = [
         (0, 0, 9, 4, xy("Where the load's power comes from", SUPPLY, "W",
                         position="stacked")),
         (9, 0, 3, 6, single("Night draw, last 24 hours", NIGHT, " W")),
-        (0, 4, 9, 2, xy("Chins state of charge", SOC, "%", bounds=("0", "100"))),
+        (0, 4, 9, 2, xy("Chins state of charge", SOC, "%", domain=(0.0, 100.0))),
         (0, 6, 6, 3, xy("Daily energy, bank",
                         daily(query, steps([("bank in", "bank_in_wh"),
                                             ("bank out", "bank_out_wh")])),
@@ -351,38 +313,23 @@ def build():
                         "Wh")),
         (0, 9, 12, 4, table("Daily energy", daily(query, None))),
     ]
-    included = []
-    refs = []
-    for number, (x, y, w, h, view) in enumerate(cells, start=1):
-        ident = str(number)
-        refs.append({"type": "cell", "id": ident})
-        included.append({
-            "id": ident, "type": "cell",
-            "attributes": {"x": x, "y": y, "w": w, "h": h},
-            "relationships": {"view": {"data": {"type": "view", "id": ident}}},
-        })
-        included.append({"id": ident, "type": "view", "attributes": view})
-    return {
-        "meta": {"version": "1", "type": "dashboard",
-                 "name": "Blind energy-Template", "description": ""},
-        "content": {
-            "data": {
-                "type": "dashboard",
-                "attributes": {
-                    "name": "Blind energy",
-                    "description": "The blind's battery bank and solar, "
-                                   "from the shunt and the charge controller.",
-                },
-                "relationships": {
-                    "label": {"data": []},
-                    "cell": {"data": refs},
-                    "variable": {"data": []},
-                },
-            },
-            "included": included,
+    charts = []
+    for x, y, w, h, chart in cells:
+        placed = {"name": chart["name"], "xPos": x, "yPos": y,
+                  "width": w, "height": h}
+        placed.update((k, v) for k, v in chart.items() if k != "name")
+        charts.append(placed)
+    return [{
+        "apiVersion": "influxdata.com/v2alpha1",
+        "kind": "Dashboard",
+        "metadata": {"name": "blind-energy"},
+        "spec": {
+            "name": "Blind energy",
+            "description": "The blind's battery bank and solar, from the "
+                           "shunt and the charge controller.",
+            "charts": charts,
         },
-        "labels": [],
-    }
+    }]
 
 
 def main(argv):
