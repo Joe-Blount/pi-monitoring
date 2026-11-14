@@ -183,15 +183,24 @@ option location = timezone.location(name: "America/Chicago")
 """ + PACK_AMPS + """
 moving = amps |> filter(fn: (r) => math.abs(x: r.shunt_amps) >= 2.0)
 
-daily = moving
-    |> map(fn: (r) => ({day: date.truncate(t: r._time, unit: 1d), chins: math.abs(x: r.pack_amps), bank: math.abs(x: r.shunt_amps)}))
-    |> group(columns: ["day"])
-    |> reduce(
-        identity: {chins: 0.0, bank: 0.0},
-        fn: (r, accumulator) => ({chins: accumulator.chins + r.chins, bank: accumulator.bank + r.bank}),
+// The day's throughput from each reading's size, taken before any averaging,
+// so charge and discharge add rather than cancel. Both devices read once a
+// minute, so the ratio of their mean sizes is the ratio of their amp-hours.
+daily = from(bucket: "raw")
+    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+    |> filter(
+        fn: (r) =>
+            r._measurement == "blind1" and r.node == "downstairs"
+                and
+                (r.device == "bms" and r._field == "pack_amps" or r.device == "shunt" and r._field == "shunt_amps"),
     )
+    |> map(fn: (r) => ({day: date.truncate(t: r._time, unit: 1d), _field: r._field, _value: math.abs(x: r._value)}))
+    |> group(columns: ["day", "_field"])
+    |> mean()
     |> group()
-    |> map(fn: (r) => ({day: r.day, _value: 100.0 * r.chins / r.bank}))
+    |> pivot(rowKey: ["day"], columnKey: ["_field"], valueColumn: "_value")
+    |> filter(fn: (r) => exists r.pack_amps and exists r.shunt_amps and r.shunt_amps > 0.0)
+    |> map(fn: (r) => ({day: r.day, _value: 100.0 * r.pack_amps / r.shunt_amps}))
 
 union(
     tables: [
@@ -765,6 +774,7 @@ from(bucket: "raw")
     |> range(start: -10m)
     |> filter(fn: (r) => r._measurement == "blind1" and r.device == "mppt" and r._field == "%s")
     |> group()
+    |> sort(columns: ["_time"])
     |> last()
 """ % field
 
@@ -820,6 +830,7 @@ mppt = (fields) =>
 
 words = mppt(fields: /^(charge_state|tracker)$/)
     |> group(columns: ["_field"])
+    |> sort(columns: ["_time"])
     |> last()
     |> map(
         fn: (r) =>
@@ -834,6 +845,7 @@ words = mppt(fields: /^(charge_state|tracker)$/)
 
 codes = mppt(fields: /^(error|off_reason_code)$/)
     |> group(columns: ["_field"])
+    |> sort(columns: ["_time"])
     |> last()
     |> map(
         fn: (r) =>
