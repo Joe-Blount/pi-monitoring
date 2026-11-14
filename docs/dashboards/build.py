@@ -739,7 +739,7 @@ def build_chins():
 
 
 # The blind's charge controller. Its readings are matched by device and not
-# by node, because the controller has been read from more than one node.
+# by node, so the controller stays on the dashboard whichever node reads it.
 
 def victron(body):
     return """\

@@ -214,8 +214,8 @@ class HostDriver(Driver):
         changes, and when the install ran. Read from the record install.sh
         leaves, rather than from git, because the collector does not run as
         the checkout's owner. A missing or unreadable record gives no fields:
-        a machine installed before the record existed reports nothing rather
-        than something wrong.
+        a machine with no record reports nothing rather than something
+        wrong.
 
         A record that lacks the commit, the branch or the local-changes flag,
         because git could not read the checkout, reports "unknown" and -1.0

@@ -264,7 +264,7 @@ systemctl --global mask $AUDIO_UNITS >/dev/null 2>&1 \
 for uid in $(loginctl list-users --no-legend 2>/dev/null | awk '{print $1}'); do
     user=$(id -nu "$uid" 2>/dev/null) || continue
     # shellcheck disable=SC2086
-    systemctl --user -M "$user@" stop $AUDIO_UNITS >/dev/null 2>&1 || true
+    systemctl --user -M "$user@" stop --no-block $AUDIO_UNITS >/dev/null 2>&1 || true
 done
 
 echo "==> where this machine is"

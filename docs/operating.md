@@ -312,7 +312,9 @@ builder.
 Cloud's export leaves out which column colours a Mosaic cell. After
 importing [load-controller.json](dashboards/cloud/load-controller.json), the
 "Load power" cell says its data cannot be shown until that is set: edit the
-cell and pick _value as the fill column.
+cell and pick _value as the fill column. Every cell reads the dashboard
+variable "pi", which the export does not carry either: create it before the
+import, as a query variable listing the node tag's values.
 
 Six dashboards are kept as files and built by
 [docs/dashboards/build.py](dashboards/build.py). Import each in the InfluxDB
@@ -431,8 +433,8 @@ the host device publishes it with each reading:
 | `code_dirty` | `1.0` when the checkout had local changes at install, so what was installed is not exactly that commit. `0.0` when it had none, `-1.0` when git could not read it. |
 | `code_installed_time` | When the install ran, in epoch seconds. |
 
-A machine installed before the record existed publishes none of these until
-its next install, and an install that stops partway removes the record, so
+A machine with no record publishes none of these until an install writes
+one, and an install that stops partway removes the record, so
 none are published until an install finishes. A dashboard showing the latest
 value of each still shows the previous install's for as long as it looks
 back: a week in the health table, an hour in the query below. When the
@@ -491,6 +493,21 @@ union(tables: [text, times, dirty])
         ],
     )
 ```
+
+## Sound is off on every node
+
+The install masks PipeWire and its session manager, wireplumber, for every
+user. wireplumber follows every Bluetooth scan and connection the pack and
+shunt readers make, and its memory grows with them until the kernel kills it
+or the machine stops answering. Nothing here plays sound.
+
+To have sound back on a node:
+
+```
+sudo systemctl --global unmask pipewire.socket pipewire.service pipewire-pulse.socket pipewire-pulse.service wireplumber.service filter-chain.service
+```
+
+The next install masks them again.
 
 ## What to do when telegraf is down
 
