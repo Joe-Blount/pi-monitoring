@@ -302,6 +302,28 @@ If that directory is owned by root because someone ran `collect` by hand
 with `sudo`, the service user can no longer write to it, and the controller
 is deciding from nothing.
 
+## Dashboards
+
+Three dashboards are kept as files and built by
+[docs/dashboards/build.py](dashboards/build.py). Import each in the InfluxDB
+web interface: Dashboards, Create Dashboard, Import Dashboard. Each import
+makes a dashboard of its own, so delete the old one first.
+
+- [blind1-energy.json](dashboards/blind1-energy.json): the blind's energy,
+  described below.
+- [pi-health.json](dashboards/pi-health.json): every machine's health and
+  the code it last installed, described under "Which code each machine last
+  installed".
+- [blind1-chins.json](dashboards/blind1-chins.json): the Chins pack from its
+  own battery management system. The top row is the newest reading in the
+  last hour, so a pack that has stopped answering shows empty rather than an
+  old number. The status row shows the pack's charge and discharge switches,
+  each alarm its protection word holds (cell or pack over or under volts,
+  too hot or too cold to charge or discharge, over current, short circuit,
+  a front end chip error, switches locked), the cells it is balancing, and
+  how long ago it last answered. A switch reading OFF while an alarm shows
+  is the pack protecting itself.
+
 ## How much energy went into and out of the battery each day
 
 Import [docs/dashboards/blind1-energy.json](dashboards/blind1-energy.json) in

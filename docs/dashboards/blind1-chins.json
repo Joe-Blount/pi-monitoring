@@ -1,0 +1,503 @@
+[
+  {
+    "apiVersion": "influxdata.com/v2alpha1",
+    "kind": "Dashboard",
+    "metadata": {
+      "name": "blind1-chins"
+    },
+    "spec": {
+      "name": "Blind1 Chins",
+      "description": "The blind's Chins pack, from its own battery management system.",
+      "charts": [
+        {
+          "name": "State of charge",
+          "xPos": 0,
+          "yPos": 0,
+          "width": 2,
+          "height": 2,
+          "kind": "Single_Stat",
+          "queries": [
+            {
+              "query": "// The newest reading in the last hour. Empty when the pack has not answered\n// for an hour, rather than an old number shown as current.\nfrom(bucket: \"raw\")\n    |> range(start: -1h)\n    |> filter(\n        fn: (r) =>\n            r._measurement == \"blind1\" and r.node == \"downstairs\" and r.device == \"bms\"\n                and\n                r._field == \"state_of_charge_pct\",\n    )\n    |> last()\n"
+            }
+          ],
+          "suffix": "%",
+          "decimalPlaces": 0,
+          "colors": [
+            {
+              "name": "base",
+              "type": "background",
+              "hex": "#DC4E58",
+              "value": 0
+            },
+            {
+              "name": "c",
+              "type": "background",
+              "hex": "#FFB94A",
+              "value": 25
+            },
+            {
+              "name": "c",
+              "type": "background",
+              "hex": "#34BB55",
+              "value": 50
+            }
+          ]
+        },
+        {
+          "name": "Pack",
+          "xPos": 2,
+          "yPos": 0,
+          "width": 2,
+          "height": 2,
+          "kind": "Single_Stat",
+          "queries": [
+            {
+              "query": "// The newest reading in the last hour. Empty when the pack has not answered\n// for an hour, rather than an old number shown as current.\nfrom(bucket: \"raw\")\n    |> range(start: -1h)\n    |> filter(\n        fn: (r) =>\n            r._measurement == \"blind1\" and r.node == \"downstairs\" and r.device == \"bms\"\n                and\n                r._field == \"pack_volts\",\n    )\n    |> last()\n"
+            }
+          ],
+          "suffix": " V",
+          "decimalPlaces": 2,
+          "colors": [
+            {
+              "name": "laser",
+              "type": "text",
+              "hex": "#00C9FF"
+            }
+          ]
+        },
+        {
+          "name": "Current",
+          "xPos": 4,
+          "yPos": 0,
+          "width": 2,
+          "height": 2,
+          "kind": "Single_Stat",
+          "queries": [
+            {
+              "query": "// The newest reading in the last hour. Empty when the pack has not answered\n// for an hour, rather than an old number shown as current.\nfrom(bucket: \"raw\")\n    |> range(start: -1h)\n    |> filter(\n        fn: (r) =>\n            r._measurement == \"blind1\" and r.node == \"downstairs\" and r.device == \"bms\"\n                and\n                r._field == \"pack_amps\",\n    )\n    |> last()\n"
+            }
+          ],
+          "suffix": " A",
+          "decimalPlaces": 1,
+          "colors": [
+            {
+              "name": "laser",
+              "type": "text",
+              "hex": "#00C9FF"
+            }
+          ]
+        },
+        {
+          "name": "Cell spread",
+          "xPos": 6,
+          "yPos": 0,
+          "width": 2,
+          "height": 2,
+          "kind": "Single_Stat",
+          "queries": [
+            {
+              "query": "// The newest reading in the last hour. Empty when the pack has not answered\n// for an hour, rather than an old number shown as current.\nfrom(bucket: \"raw\")\n    |> range(start: -1h)\n    |> filter(\n        fn: (r) =>\n            r._measurement == \"blind1\" and r.node == \"downstairs\" and r.device == \"bms\"\n                and\n                r._field == \"cell_spread_volts\",\n    )\n    |> last()\n    |> map(fn: (r) => ({r with _value: r._value * 1000.0}))\n"
+            }
+          ],
+          "suffix": " mV",
+          "decimalPlaces": 0,
+          "colors": [
+            {
+              "name": "laser",
+              "type": "text",
+              "hex": "#00C9FF"
+            }
+          ]
+        },
+        {
+          "name": "Temperature",
+          "xPos": 8,
+          "yPos": 0,
+          "width": 2,
+          "height": 2,
+          "kind": "Single_Stat",
+          "queries": [
+            {
+              "query": "// The newest reading in the last hour. Empty when the pack has not answered\n// for an hour, rather than an old number shown as current.\nfrom(bucket: \"raw\")\n    |> range(start: -1h)\n    |> filter(\n        fn: (r) =>\n            r._measurement == \"blind1\" and r.node == \"downstairs\" and r.device == \"bms\"\n                and\n                r._field == \"temp_1\",\n    )\n    |> last()\n"
+            }
+          ],
+          "suffix": " F",
+          "decimalPlaces": 1,
+          "colors": [
+            {
+              "name": "laser",
+              "type": "text",
+              "hex": "#00C9FF"
+            }
+          ]
+        },
+        {
+          "name": "Cycles",
+          "xPos": 10,
+          "yPos": 0,
+          "width": 2,
+          "height": 2,
+          "kind": "Single_Stat",
+          "queries": [
+            {
+              "query": "// The newest reading in the last hour. Empty when the pack has not answered\n// for an hour, rather than an old number shown as current.\nfrom(bucket: \"raw\")\n    |> range(start: -1h)\n    |> filter(\n        fn: (r) =>\n            r._measurement == \"blind1\" and r.node == \"downstairs\" and r.device == \"bms\"\n                and\n                r._field == \"cycles\",\n    )\n    |> last()\n"
+            }
+          ],
+          "suffix": "",
+          "decimalPlaces": 0,
+          "colors": [
+            {
+              "name": "laser",
+              "type": "text",
+              "hex": "#00C9FF"
+            }
+          ]
+        },
+        {
+          "name": "Pack status",
+          "xPos": 0,
+          "yPos": 2,
+          "width": 12,
+          "height": 2,
+          "kind": "Table",
+          "queries": [
+            {
+              "query": "// The pack's own switches and alarms, newest reading in the last day. Each\n// field is its own latest value; \"read\" is how long ago the pack last\n// answered at all. Protection names each alarm the pack has raised, and\n// balancing names each cell it is bleeding.\n\nimport \"strings\"\n\nprotection = (v) =>\n    strings.trimSuffix(\n    v:\n        (if v / 1 % 2 == 1 then \"cell over volts, \" else \"\") +\n        (if v / 2 % 2 == 1 then \"cell under volts, \" else \"\") +\n        (if v / 4 % 2 == 1 then \"pack over volts, \" else \"\") +\n        (if v / 8 % 2 == 1 then \"pack under volts, \" else \"\") +\n        (if v / 16 % 2 == 1 then \"charge too hot, \" else \"\") +\n        (if v / 32 % 2 == 1 then \"charge too cold, \" else \"\") +\n        (if v / 64 % 2 == 1 then \"discharge too hot, \" else \"\") +\n        (if v / 128 % 2 == 1 then \"discharge too cold, \" else \"\") +\n        (if v / 256 % 2 == 1 then \"charge over current, \" else \"\") +\n        (if v / 512 % 2 == 1 then \"discharge over current, \" else \"\") +\n        (if v / 1024 % 2 == 1 then \"short circuit, \" else \"\") +\n        (if v / 2048 % 2 == 1 then \"front end chip error, \" else \"\") +\n        (if v / 4096 % 2 == 1 then \"switches locked, \" else \"\") +\n        (if v >= 8192 then \"other bits \" + string(v: v - v % 8192) + \", \" else \"\"),\n    suffix: \", \",\n)\n\nbalancing = (v) =>\n    strings.trimSuffix(\n    v:\n        (if v / 1 % 2 == 1 then \"1, \" else \"\") +\n        (if v / 2 % 2 == 1 then \"2, \" else \"\") +\n        (if v / 4 % 2 == 1 then \"3, \" else \"\") +\n        (if v / 8 % 2 == 1 then \"4, \" else \"\") +\n        (if v / 16 % 2 == 1 then \"5, \" else \"\") +\n        (if v / 32 % 2 == 1 then \"6, \" else \"\") +\n        (if v / 64 % 2 == 1 then \"7, \" else \"\") +\n        (if v / 128 % 2 == 1 then \"8, \" else \"\") +\n        (if v / 256 % 2 == 1 then \"9, \" else \"\") +\n        (if v / 512 % 2 == 1 then \"10, \" else \"\") +\n        (if v / 1024 % 2 == 1 then \"11, \" else \"\") +\n        (if v / 2048 % 2 == 1 then \"12, \" else \"\") +\n        (if v / 4096 % 2 == 1 then \"13, \" else \"\") +\n        (if v / 8192 % 2 == 1 then \"14, \" else \"\") +\n        (if v / 16384 % 2 == 1 then \"15, \" else \"\") +\n        (if v / 32768 % 2 == 1 then \"16, \" else \"\") +\n        (if v / 65536 % 2 == 1 then \"17, \" else \"\") +\n        (if v / 131072 % 2 == 1 then \"18, \" else \"\") +\n        (if v / 262144 % 2 == 1 then \"19, \" else \"\") +\n        (if v / 524288 % 2 == 1 then \"20, \" else \"\") +\n        (if v / 1048576 % 2 == 1 then \"21, \" else \"\") +\n        (if v / 2097152 % 2 == 1 then \"22, \" else \"\") +\n        (if v / 4194304 % 2 == 1 then \"23, \" else \"\") +\n        (if v / 8388608 % 2 == 1 then \"24, \" else \"\") +\n        (if v / 16777216 % 2 == 1 then \"25, \" else \"\") +\n        (if v / 33554432 % 2 == 1 then \"26, \" else \"\") +\n        (if v / 67108864 % 2 == 1 then \"27, \" else \"\") +\n        (if v / 134217728 % 2 == 1 then \"28, \" else \"\") +\n        (if v / 268435456 % 2 == 1 then \"29, \" else \"\") +\n        (if v / 536870912 % 2 == 1 then \"30, \" else \"\") +\n        (if v / 1073741824 % 2 == 1 then \"31, \" else \"\") +\n        (if v / 2147483648 % 2 == 1 then \"32, \" else \"\") +\n        (if v >= 4294967296 then \"other bits \" + string(v: v - v % 4294967296) + \", \" else \"\"),\n    suffix: \", \",\n)\n\nago = (t) => string(v: duration(v: (int(v: now()) - int(v: t)) / 1000000000 * 1000000000))\n\nlatest = from(bucket: \"raw\")\n    |> range(start: -1d)\n    |> filter(\n        fn: (r) =>\n            r._measurement == \"blind1\" and r.node == \"downstairs\" and r.device == \"bms\"\n                and\n                r._field =~ /^(charge_mosfet_on|discharge_mosfet_on|protection_flags|balancing_flags|commands_unanswered)$/,\n    )\n    |> last()\n\nstates = latest\n    |> map(\n        fn: (r) =>\n            ({r with\n                _value:\n                    if r._field =~ /mosfet/ then\n                        if r._value > 0.5 then \"on\" else \"OFF\"\n                    else if r._value == 0.0 and r._field =~ /flags/ then\n                        \"none\"\n                    else if r._field == \"protection_flags\" then\n                        protection(v: int(v: r._value))\n                    else if r._field == \"balancing_flags\" then\n                        \"cells \" + balancing(v: int(v: r._value))\n                    else\n                        string(v: int(v: r._value)),\n            }),\n    )\n\nread = latest\n    |> group()\n    |> max(column: \"_time\")\n    |> map(fn: (r) => ({r with _field: \"read\", _value: ago(t: r._time) + \" ago\"}))\n\nunion(tables: [states |> group(), read])\n    |> keep(columns: [\"_measurement\", \"_field\", \"_value\"])\n    |> pivot(rowKey: [\"_measurement\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n"
+            }
+          ],
+          "timeFormat": "",
+          "decimalPlaces": 0,
+          "enforceDecimals": true,
+          "colors": [
+            {
+              "name": "laser",
+              "type": "text",
+              "hex": "#00C9FF"
+            }
+          ],
+          "tableOptions": {
+            "verticalTimeAxis": true,
+            "wrapping": "truncate",
+            "fixFirstColumn": true,
+            "sortBy": "read"
+          },
+          "fieldOptions": [
+            {
+              "fieldName": "read",
+              "displayName": "read",
+              "visible": true
+            },
+            {
+              "fieldName": "charge_mosfet_on",
+              "displayName": "charging",
+              "visible": true
+            },
+            {
+              "fieldName": "discharge_mosfet_on",
+              "displayName": "discharging",
+              "visible": true
+            },
+            {
+              "fieldName": "protection_flags",
+              "displayName": "protection",
+              "visible": true
+            },
+            {
+              "fieldName": "balancing_flags",
+              "displayName": "balancing",
+              "visible": true
+            },
+            {
+              "fieldName": "commands_unanswered",
+              "displayName": "unanswered",
+              "visible": true
+            }
+          ]
+        },
+        {
+          "name": "Cell voltages",
+          "xPos": 0,
+          "yPos": 4,
+          "width": 6,
+          "height": 4,
+          "kind": "Xy",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"blind1\" and r.node == \"downstairs\" and r.device == \"bms\")\n    |> filter(fn: (r) => r._field =~ /^cell_[0-9]+_volts$/)\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n"
+            }
+          ],
+          "geom": "line",
+          "xCol": "_time",
+          "yCol": "_value",
+          "position": "overlaid",
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "label": "V",
+              "base": "10",
+              "scale": "linear"
+            }
+          ]
+        },
+        {
+          "name": "Cell spread",
+          "xPos": 6,
+          "yPos": 4,
+          "width": 6,
+          "height": 4,
+          "kind": "Xy",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"blind1\" and r.node == \"downstairs\" and r.device == \"bms\")\n    |> filter(fn: (r) => r._field =~ /^cell_spread_volts$/)\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n    |> map(fn: (r) => ({r with _value: r._value * 1000.0}))\n"
+            }
+          ],
+          "geom": "line",
+          "xCol": "_time",
+          "yCol": "_value",
+          "position": "overlaid",
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "label": "mV",
+              "base": "10",
+              "scale": "linear"
+            }
+          ]
+        },
+        {
+          "name": "Current (positive is charging)",
+          "xPos": 0,
+          "yPos": 8,
+          "width": 6,
+          "height": 3,
+          "kind": "Xy",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"blind1\" and r.node == \"downstairs\" and r.device == \"bms\")\n    |> filter(fn: (r) => r._field =~ /^pack_amps$/)\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n"
+            }
+          ],
+          "geom": "line",
+          "xCol": "_time",
+          "yCol": "_value",
+          "position": "overlaid",
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "label": "A",
+              "base": "10",
+              "scale": "linear"
+            }
+          ]
+        },
+        {
+          "name": "State of charge",
+          "xPos": 6,
+          "yPos": 8,
+          "width": 6,
+          "height": 3,
+          "kind": "Xy",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"blind1\" and r.node == \"downstairs\" and r.device == \"bms\")\n    |> filter(fn: (r) => r._field =~ /^state_of_charge_pct$/)\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n"
+            }
+          ],
+          "geom": "line",
+          "xCol": "_time",
+          "yCol": "_value",
+          "position": "overlaid",
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "label": "%",
+              "base": "10",
+              "scale": "linear"
+            }
+          ]
+        },
+        {
+          "name": "Remaining capacity",
+          "xPos": 0,
+          "yPos": 11,
+          "width": 6,
+          "height": 3,
+          "kind": "Xy",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"blind1\" and r.node == \"downstairs\" and r.device == \"bms\")\n    |> filter(fn: (r) => r._field =~ /^remaining_capacity_ah$/)\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n"
+            }
+          ],
+          "geom": "line",
+          "xCol": "_time",
+          "yCol": "_value",
+          "position": "overlaid",
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "label": "Ah",
+              "base": "10",
+              "scale": "linear"
+            }
+          ]
+        },
+        {
+          "name": "Temperature",
+          "xPos": 6,
+          "yPos": 11,
+          "width": 6,
+          "height": 3,
+          "kind": "Xy",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"blind1\" and r.node == \"downstairs\" and r.device == \"bms\")\n    |> filter(fn: (r) => r._field =~ /^temp_[0-9]+$/)\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n"
+            }
+          ],
+          "geom": "line",
+          "xCol": "_time",
+          "yCol": "_value",
+          "position": "overlaid",
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "axes": [
+            {
+              "name": "x",
+              "base": "10",
+              "scale": "linear"
+            },
+            {
+              "name": "y",
+              "label": "F",
+              "base": "10",
+              "scale": "linear"
+            }
+          ]
+        }
+      ]
+    }
+  }
+]

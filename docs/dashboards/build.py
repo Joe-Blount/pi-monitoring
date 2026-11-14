@@ -28,6 +28,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 QUERY = HERE.parent / "queries" / "blind1-daily-energy.flux"
 OUT = HERE / "blind1-energy.json"
 HEALTH_OUT = HERE / "pi-health.json"
+CHINS_OUT = HERE / "blind1-chins.json"
 
 FIXED_START = "start = date.truncate(t: lookback, unit: 1d)\n"
 PICKED_START = "start = date.truncate(t: v.timeRangeStart, unit: 1d)\n"
@@ -263,14 +264,14 @@ def xy(name, text, unit, position="overlaid"):
     }
 
 
-def single(name, text, suffix):
+def single(name, text, suffix, decimals=0, colors=None):
     return {
         "name": name,
         "kind": "Single_Stat",
         "queries": [{"query": text}],
         "suffix": suffix,
-        "decimalPlaces": 0,
-        "colors": TEXT,
+        "decimalPlaces": decimals,
+        "colors": colors or TEXT,
     }
 
 
@@ -467,8 +468,189 @@ def build_health():
         cells)
 
 
+# The blind's Chins pack, read by the downstairs node's bms device. The cell
+# and temperature graphs match fields by pattern, so a pack with more cells
+# or sensors fills them with no change here.
+
+def chins(body):
+    return """\
+from(bucket: "raw")
+    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+    |> filter(fn: (r) => r._measurement == "blind1" and r.node == "downstairs" and r.device == "bms")
+%s""" % body
+
+
+def chins_graph(pattern, scale=None):
+    convert = ("" if scale is None else
+               "    |> map(fn: (r) => ({r with _value: r._value * %s}))\n" % scale)
+    return chins("""\
+    |> filter(fn: (r) => r._field =~ /%s/)
+    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)
+%s""" % (pattern, convert))
+
+
+def chins_latest(field, scale=None):
+    convert = ("" if scale is None else
+               "    |> map(fn: (r) => ({r with _value: r._value * %s}))\n" % scale)
+    return """\
+// The newest reading in the last hour. Empty when the pack has not answered
+// for an hour, rather than an old number shown as current.
+from(bucket: "raw")
+    |> range(start: -1h)
+    |> filter(
+        fn: (r) =>
+            r._measurement == "blind1" and r.node == "downstairs" and r.device == "bms"
+                and
+                r._field == "%s",
+    )
+    |> last()
+%s""" % (field, convert)
+
+
+#: The protection word's bits, as the JBD protocol numbers them from 0.
+PROTECTION_BITS = [
+    "cell over volts", "cell under volts", "pack over volts",
+    "pack under volts", "charge too hot", "charge too cold",
+    "discharge too hot", "discharge too cold", "charge over current",
+    "discharge over current", "short circuit", "front end chip error",
+    "switches locked",
+]
+
+#: Cells the balancing word can name: bit N is cell N + 1. As many as the
+#: driver accepts.
+BALANCING_CELLS = 32
+
+
+def bit_names(names):
+    """Flux naming every set bit of `v`, comma separated.
+
+    Bits above the named ones are shown as their value, so an alarm with no
+    name is never an empty cell.
+    """
+    parts = [
+        '(if v / %d %% 2 == 1 then "%s, " else "")' % (1 << bit, name)
+        for bit, name in enumerate(names)]
+    top = 1 << len(names)
+    parts.append('(if v >= %d then "other bits " + string(v: v - v %% %d) + ", " else "")'
+                 % (top, top))
+    parts = " +\n        ".join(parts)
+    return "strings.trimSuffix(\n    v:\n        %s,\n    suffix: \", \",\n)" % parts
+
+
+CHINS_STATUS = """\
+// The pack's own switches and alarms, newest reading in the last day. Each
+// field is its own latest value; "read" is how long ago the pack last
+// answered at all. Protection names each alarm the pack has raised, and
+// balancing names each cell it is bleeding.
+
+import "strings"
+
+protection = (v) =>
+    %s
+
+balancing = (v) =>
+    %s
+
+ago = (t) => string(v: duration(v: (int(v: now()) - int(v: t)) / 1000000000 * 1000000000))
+
+latest = from(bucket: "raw")
+    |> range(start: -1d)
+    |> filter(
+        fn: (r) =>
+            r._measurement == "blind1" and r.node == "downstairs" and r.device == "bms"
+                and
+                r._field =~ /^(charge_mosfet_on|discharge_mosfet_on|protection_flags|balancing_flags|commands_unanswered)$/,
+    )
+    |> last()
+
+states = latest
+    |> map(
+        fn: (r) =>
+            ({r with
+                _value:
+                    if r._field =~ /mosfet/ then
+                        if r._value > 0.5 then "on" else "OFF"
+                    else if r._value == 0.0 and r._field =~ /flags/ then
+                        "none"
+                    else if r._field == "protection_flags" then
+                        protection(v: int(v: r._value))
+                    else if r._field == "balancing_flags" then
+                        "cells " + balancing(v: int(v: r._value))
+                    else
+                        string(v: int(v: r._value)),
+            }),
+    )
+
+read = latest
+    |> group()
+    |> max(column: "_time")
+    |> map(fn: (r) => ({r with _field: "read", _value: ago(t: r._time) + " ago"}))
+
+union(tables: [states |> group(), read])
+    |> keep(columns: ["_measurement", "_field", "_value"])
+    |> pivot(rowKey: ["_measurement"], columnKey: ["_field"], valueColumn: "_value")
+""" % (bit_names(PROTECTION_BITS),
+       bit_names([str(cell + 1) for cell in range(BALANCING_CELLS)]))
+
+CHINS_STATUS_COLUMNS = [
+    ("read", "read"), ("charge_mosfet_on", "charging"),
+    ("discharge_mosfet_on", "discharging"),
+    ("protection_flags", "protection"), ("balancing_flags", "balancing"),
+    ("commands_unanswered", "unanswered"),
+]
+
+#: Background colours by state of charge: red under 25, amber under 50, green
+#: above. The bands are the camera ladder's 25 and 50 percent tiers in
+#: sites/blind1/downstairs.yaml, copied rather than read, so they need
+#: changing by hand if those tiers move.
+SOC_COLORS = [
+    {"name": "base", "type": "background", "hex": "#DC4E58", "value": 0},
+    {"name": "c", "type": "background", "hex": "#FFB94A", "value": 25},
+    {"name": "c", "type": "background", "hex": "#34BB55", "value": 50},
+]
+
+
+def chins_status_table():
+    chart = table("Pack status", CHINS_STATUS)
+    chart["timeFormat"] = ""
+    chart["tableOptions"]["sortBy"] = "read"
+    chart["fieldOptions"] = [
+        {"fieldName": field, "displayName": label, "visible": True}
+        for field, label in CHINS_STATUS_COLUMNS]
+    return chart
+
+
+def build_chins():
+    cells = [
+        (0, 0, 2, 2, single("State of charge",
+                            chins_latest("state_of_charge_pct"), "%",
+                            colors=SOC_COLORS)),
+        (2, 0, 2, 2, single("Pack", chins_latest("pack_volts"), " V", 2)),
+        (4, 0, 2, 2, single("Current", chins_latest("pack_amps"), " A", 1)),
+        (6, 0, 2, 2, single("Cell spread", chins_latest("cell_spread_volts", "1000.0"),
+                            " mV")),
+        (8, 0, 2, 2, single("Temperature", chins_latest("temp_1"), " F", 1)),
+        (10, 0, 2, 2, single("Cycles", chins_latest("cycles"), "")),
+        (0, 2, 12, 2, chins_status_table()),
+        (0, 4, 6, 4, xy("Cell voltages", chins_graph("^cell_[0-9]+_volts$"), "V")),
+        (6, 4, 6, 4, xy("Cell spread", chins_graph("^cell_spread_volts$", "1000.0"),
+                        "mV")),
+        (0, 8, 6, 3, xy("Current (positive is charging)", chins_graph("^pack_amps$"),
+                        "A")),
+        (6, 8, 6, 3, xy("State of charge", chins_graph("^state_of_charge_pct$"), "%")),
+        (0, 11, 6, 3, xy("Remaining capacity", chins_graph("^remaining_capacity_ah$"),
+                         "Ah")),
+        (6, 11, 6, 3, xy("Temperature", chins_graph("^temp_[0-9]+$"), "F")),
+    ]
+    return dashboard(
+        "blind1-chins", "Blind1 Chins",
+        "The blind's Chins pack, from its own battery management system.",
+        cells)
+
+
 def main(argv):
-    outputs = [(OUT, build()), (HEALTH_OUT, build_health())]
+    outputs = [(OUT, build()), (HEALTH_OUT, build_health()),
+               (CHINS_OUT, build_chins())]
     if argv[1:] == ["--check"]:
         stale = [path for path, template in outputs
                  if not path.exists()

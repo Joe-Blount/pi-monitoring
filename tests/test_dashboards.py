@@ -16,6 +16,7 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 BUILD = REPO / "docs" / "dashboards" / "build.py"
 DASHBOARD = REPO / "docs" / "dashboards" / "blind1-energy.json"
 HEALTH = REPO / "docs" / "dashboards" / "pi-health.json"
+CHINS = REPO / "docs" / "dashboards" / "blind1-chins.json"
 
 
 def _template(path=DASHBOARD):
@@ -33,7 +34,7 @@ def _charts(path=DASHBOARD):
     return dashboard["spec"]["charts"]
 
 
-@pytest.mark.parametrize("path", [DASHBOARD, HEALTH])
+@pytest.mark.parametrize("path", [DASHBOARD, HEALTH, CHINS])
 def test_the_dashboard_is_a_template_in_the_format_the_cloud_export_writes(path):
     (dashboard,) = _template(path)
     assert dashboard["apiVersion"] == "influxdata.com/v2alpha1"
@@ -52,7 +53,7 @@ def test_the_daily_cells_follow_the_dashboards_time_range():
         assert "lookback" not in text
 
 
-@pytest.mark.parametrize("path", [DASHBOARD, HEALTH])
+@pytest.mark.parametrize("path", [DASHBOARD, HEALTH, CHINS])
 def test_the_cells_tile_the_grid_without_overlapping(path):
     taken = set()
     for chart in _charts(path):
@@ -89,3 +90,20 @@ def test_the_health_dashboard_reads_only_fields_the_host_device_publishes():
     graphed = {chart["queries"][0]["query"].split('r._field == "')[1].split('"')[0]
                for chart in _charts(HEALTH) if chart["kind"] == "Xy"}
     assert graphed <= published
+
+
+def test_the_chins_dashboard_reads_only_fields_the_pack_publishes():
+    """A renamed pack field would otherwise blank a cell with no error."""
+    import re
+    from tests.test_node_files import known_driver_fields
+    published = set(known_driver_fields()["jbd"])
+    for chart in _charts(CHINS):
+        text = chart["queries"][0]["query"]
+        named = set(re.findall(r'r\._field == "([a-z0-9_]+)"', text))
+        assert named <= published, chart["name"]
+        for pattern in re.findall(r"r\._field =~ /([^/]+)/", text):
+            alternation = re.fullmatch(r"\^\(([a-z0-9_|]+)\)\$", pattern)
+            if alternation:
+                assert set(alternation.group(1).split("|")) <= published, chart["name"]
+            else:
+                assert any(re.search(pattern, field) for field in published), chart["name"]
