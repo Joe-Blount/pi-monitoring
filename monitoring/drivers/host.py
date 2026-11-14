@@ -213,10 +213,16 @@ class HostDriver(Driver):
         The commit, its branch and its time, whether the checkout had local
         changes, and when the install ran. Read from the record install.sh
         leaves, rather than from git, because the collector does not run as
-        the checkout's owner, and because the record says what was installed
-        where the checkout says only what is on disk. A missing or unreadable
-        record gives no fields: a machine installed before the record existed
-        reports nothing rather than something wrong.
+        the checkout's owner. A missing or unreadable record gives no fields:
+        a machine installed before the record existed reports nothing rather
+        than something wrong.
+
+        A record that lacks the commit, the branch or the local-changes flag,
+        because git could not read the checkout, reports "unknown" and -1.0
+        for them. Those fields then move with each reading, so the latest
+        commit, branch and flag come from the same install as the latest
+        install time. A commit time git could not read is left out, so an
+        earlier one can still be the latest.
         """
         try:
             with open(self._path(INSTALLED_FILE)) as handle:
@@ -238,10 +244,10 @@ class HostDriver(Driver):
 
         dirty = record.get("dirty")
         return {
-            "code_commit": text("commit"),
-            "code_branch": text("branch"),
+            "code_commit": text("commit") or "unknown",
+            "code_branch": text("branch") or "unknown",
             "code_commit_time": number("commit_time"),
-            "code_dirty": (1.0 if dirty else 0.0) if isinstance(dirty, bool) else None,
+            "code_dirty": (1.0 if dirty else 0.0) if isinstance(dirty, bool) else -1.0,
             "code_installed_time": number("installed_time"),
         }
 

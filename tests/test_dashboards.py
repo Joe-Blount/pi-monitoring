@@ -73,3 +73,19 @@ def test_the_health_dashboard_names_no_machine():
         text = chart["queries"][0]["query"]
         for name in names:
             assert '"%s"' % name not in text, (chart["name"], name)
+
+
+def test_the_health_dashboard_reads_only_fields_the_host_device_publishes():
+    """A renamed host field would otherwise blank a column with no error."""
+    import importlib.util
+    from tests.test_node_files import known_driver_fields
+    spec = importlib.util.spec_from_file_location("build", BUILD)
+    build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(build)
+    published = set(known_driver_fields()["host"])
+    derived = {"site", "node", "seen", "up"}
+    columns = {field for field, _ in build.MACHINE_COLUMNS} - derived
+    assert columns <= published
+    graphed = {chart["queries"][0]["query"].split('r._field == "')[1].split('"')[0]
+               for chart in _charts(HEALTH) if chart["kind"] == "Xy"}
+    assert graphed <= published

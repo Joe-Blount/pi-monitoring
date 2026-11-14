@@ -29,6 +29,11 @@ if [[ "$(id -u)" != "0" ]]; then
     exit 2
 fi
 
+# The record of the last install, written again at the end. Removed first, so
+# an install that stops partway publishes no code fields rather than naming
+# the commit before it.
+rm -f /var/lib/monitoring/installed.json
+
 # Telegraf is stopped for two reasons below, and must come back however this
 # script ends. Without a trap it stays stopped after a hang that the owner
 # interrupts and after a dropped connection delivers SIGHUP, both of which
@@ -709,37 +714,59 @@ fi
 
 echo "==> what is installed"
 # The host device publishes this record, so a dashboard can say which commit
-# each machine runs and when it was installed. Written last, after every step
-# that can fail, so it never names a commit that did not finish installing.
-installed_tmp=$(mktemp)
-if git -C "$REPO" rev-parse HEAD >/dev/null 2>&1; then
-    if [[ -n "$(git -C "$REPO" status --porcelain 2>/dev/null)" ]]; then
-        dirty=true
-    else
-        dirty=false
+# each machine last installed and when. Written after every step that puts
+# code or services in place; the record of any earlier install was removed at
+# the start, so an install that stops partway leaves no record rather than
+# the previous one. A failure to write it is a warning, not a failed install:
+# nothing else depends on it.
+write_record() {
+    local tmp commit="" branch="" commit_time="" dirty="" changes
+    tmp=$(mktemp) || return 1
+    if git -C "$REPO" rev-parse HEAD >/dev/null 2>&1; then
+        commit=$(git -C "$REPO" rev-parse --short=8 HEAD 2>/dev/null)
+        branch=$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null)
+        commit_time=$(git -C "$REPO" log -1 --format=%ct HEAD 2>/dev/null)
+        # Only a status that succeeded says clean. A failed one, such as a
+        # damaged index, prints nothing, and leaves the flag unknown.
+        if changes=$(git -C "$REPO" status --porcelain 2>/dev/null); then
+            if [[ -n "$changes" ]]; then
+                dirty=true
+            else
+                dirty=false
+            fi
+        fi
     fi
-    python3 - "$installed_tmp" \
-        "$(git -C "$REPO" rev-parse --short=8 HEAD)" \
-        "$(git -C "$REPO" rev-parse --abbrev-ref HEAD)" \
-        "$(git -C "$REPO" log -1 --format=%ct HEAD)" \
-        "$dirty" "$(date +%s)" <<'PY'
+    if ! python3 - "$tmp" "$commit" "$branch" "$commit_time" "$dirty" \
+            "$(date +%s)" <<'PY'
 import json
 import sys
 
 path, commit, branch, commit_time, dirty, now = sys.argv[1:]
+record = {"installed_time": int(now)}
+if commit:
+    record["commit"] = commit
+if branch:
+    record["branch"] = branch
+if commit_time.isdigit():
+    record["commit_time"] = int(commit_time)
+if dirty:
+    record["dirty"] = dirty == "true"
 with open(path, "w") as handle:
-    json.dump({"commit": commit, "branch": branch,
-               "commit_time": int(commit_time), "dirty": dirty == "true",
-               "installed_time": int(now)}, handle)
+    json.dump(record, handle)
 PY
-else
-    python3 -c 'import json, sys, time
-json.dump({"installed_time": int(time.time())}, open(sys.argv[1], "w"))' \
-        "$installed_tmp"
-fi
-install -m 0644 "$installed_tmp" /var/lib/monitoring/installed.json
-rm -f "$installed_tmp"
-echo "    $(cat /var/lib/monitoring/installed.json)"
+    then
+        rm -f "$tmp"
+        return 1
+    fi
+    if ! install -m 0644 "$tmp" /var/lib/monitoring/installed.json; then
+        rm -f "$tmp"
+        return 1
+    fi
+    rm -f "$tmp"
+    echo "    $(cat /var/lib/monitoring/installed.json)"
+}
+write_record || echo "    WARNING: no install record written; the host device" \
+    "will publish no code fields" >&2
 
 echo "==> restarting telegraf"
 systemctl restart telegraf

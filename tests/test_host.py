@@ -148,23 +148,46 @@ def test_a_machine_with_no_install_record_reports_no_code_fields(tmp_path):
     assert not [name for name in fields if name.startswith("code_")]
 
 
-@pytest.mark.parametrize("record", [
-    "not json",
-    "[1, 2]",
-    '{"commit": 7, "branch": "", "commit_time": "soon", "dirty": "no",'
-    ' "installed_time": true}',
-])
-def test_an_unusable_install_record_gives_no_values_rather_than_wrong_ones(
-        tmp_path, record):
+def _record(tmp_path, record):
     (tmp_path / "proc").mkdir()
     (tmp_path / "proc" / "uptime").write_text("5.0 1.0\n")
     target = tmp_path / "var" / "lib" / "monitoring"
     target.mkdir(parents=True)
     (target / "installed.json").write_text(record)
-    fields = driver(sysfs_root=str(tmp_path)).read()
-    assert all(fields.get(name) is None for name in (
-        "code_commit", "code_branch", "code_commit_time", "code_dirty",
-        "code_installed_time"))
+    return driver(sysfs_root=str(tmp_path)).read()
+
+
+def test_local_changes_at_install_are_reported(tmp_path):
+    fields = _record(tmp_path, '{"commit": "abc", "branch": "main",'
+                               ' "commit_time": 1, "dirty": true,'
+                               ' "installed_time": 2}')
+    assert fields["code_dirty"] == 1.0
+
+
+def test_a_record_git_could_not_fill_reports_unknown_code(tmp_path):
+    """The record install.sh writes when git cannot read the checkout."""
+    fields = _record(tmp_path, '{"installed_time": 1794601234}')
+    assert fields["code_commit"] == "unknown"
+    assert fields["code_branch"] == "unknown"
+    assert fields["code_dirty"] == -1.0
+    assert fields["code_commit_time"] is None
+    assert fields["code_installed_time"] == 1794601234.0
+
+
+@pytest.mark.parametrize("record", ["not json", "[1, 2]"])
+def test_an_unreadable_install_record_gives_no_code_fields(tmp_path, record):
+    fields = _record(tmp_path, record)
+    assert not [name for name in fields if name.startswith("code_")]
+
+
+def test_wrongly_typed_values_in_the_record_are_not_published(tmp_path):
+    fields = _record(tmp_path, '{"commit": 7, "branch": "", "commit_time":'
+                               ' "soon", "dirty": "no", "installed_time": true}')
+    assert fields["code_commit"] == "unknown"
+    assert fields["code_branch"] == "unknown"
+    assert fields["code_dirty"] == -1.0
+    assert fields["code_commit_time"] is None
+    assert fields["code_installed_time"] is None
 
 
 def test_install_writes_the_record_where_the_driver_reads_it():

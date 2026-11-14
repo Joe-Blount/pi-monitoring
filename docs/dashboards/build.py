@@ -348,14 +348,17 @@ def build():
 # name, so the dashboard needs no edit when a machine is added. Each series
 # is one machine, labelled by its measurement (the site) and node.
 
-def health_graph(field):
+def health_graph(field, divisor=None):
+    """One line per machine, the field divided by `divisor` when given."""
+    convert = ("" if divisor is None else
+               "    |> map(fn: (r) => ({r with _value: r._value / %s}))\n" % divisor)
     return """\
 from(bucket: "raw")
     |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
     |> filter(fn: (r) => r._field == "%s")
     |> group(columns: ["_measurement", "node"])
     |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)
-""" % field
+%s""" % (field, convert)
 
 
 MACHINES = """\
@@ -365,25 +368,22 @@ MACHINES = """\
 import "math"
 
 // Strings and numbers are read apart: one stream holding both is a type
-// conflict for every function that touches _value.
-recent = (fields) =>
-    from(bucket: "raw")
-        |> range(start: -7d)
-        |> filter(fn: (r) => contains(value: r._field, set: fields))
-        |> last()
+// conflict for every function that touches _value. Each filter is a plain
+// comparison, so storage applies it and last() before anything is read.
+latest = from(bucket: "raw")
+    |> range(start: -7d)
+    |> filter(
+        fn: (r) =>
+            r.device == "host"
+                and
+                r._field =~ /^(uptime_seconds|cpu_temp_f|load_per_core|mem_used_pct|swap_used_pct|root_used_pct|code_dirty|code_installed_time)$/,
+    )
+    |> last()
 
-latest = recent(
-    fields: [
-        "uptime_seconds",
-        "cpu_temp_f",
-        "load_per_core",
-        "mem_used_pct",
-        "swap_used_pct",
-        "root_used_pct",
-        "code_dirty",
-        "code_installed_time",
-    ],
-)
+text = from(bucket: "raw")
+    |> range(start: -7d)
+    |> filter(fn: (r) => r.device == "host" and r._field =~ /^(ip|code_commit|code_branch)$/)
+    |> last()
 
 ago = (t) => string(v: duration(v: (int(v: now()) - int(v: t)) / 1000000000 * 1000000000))
 
@@ -404,11 +404,14 @@ numbers = latest
     )
     |> map(fn: (r) => ({r with _value: string(v: math.round(x: r._value * 100.0) / 100.0)}))
 
-text = recent(fields: ["ip", "code_commit", "code_branch"])
-
 dirty = latest
     |> filter(fn: (r) => r._field == "code_dirty")
-    |> map(fn: (r) => ({r with _value: if r._value > 0.5 then "local changes" else "clean"}))
+    |> map(
+        fn: (r) =>
+            ({r with
+                _value: if r._value > 0.5 then "local changes" else if r._value < -0.5 then "unknown" else "clean",
+            }),
+    )
 
 installed = latest
     |> filter(fn: (r) => r._field == "code_installed_time")
@@ -453,7 +456,10 @@ def build_health():
         (0, 6, 4, 3, xy("Memory used", health_graph("mem_used_pct"), "%")),
         (4, 6, 4, 3, xy("Swap used", health_graph("swap_used_pct"), "%")),
         (8, 6, 4, 3, xy("Disk used", health_graph("root_used_pct"), "%")),
-        (0, 9, 12, 2, xy("Uptime", health_graph("uptime_seconds"), "s")),
+        # A graph axis has one unit, so uptime is drawn in days; the table
+        # gives it as days, hours and minutes.
+        (0, 9, 12, 2, xy("Uptime", health_graph("uptime_seconds", "86400.0"),
+                         "days")),
     ]
     return dashboard(
         "pi-health", "Pi health",

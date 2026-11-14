@@ -364,32 +364,43 @@ absorption or float within the last six hours. A start that fails the check
 is skipped, so a sunny day's load overstates what a dark spell draws. A run
 started by hand skips the check.
 
-## Which code each machine runs
+## Which code each machine last installed
 
 Every install leaves a record in `/var/lib/monitoring/installed.json`, and
 the host device publishes it with each reading:
 
 | Field | Meaning |
 |---|---|
-| `code_commit` | The commit installed, abbreviated. |
-| `code_branch` | Its branch. `HEAD` when the checkout was not on a branch. |
+| `code_commit` | The commit installed, abbreviated. `unknown` when git could not read the checkout. |
+| `code_branch` | Its branch. `HEAD` when the checkout was not on a branch, `unknown` when git could not read it. |
 | `code_commit_time` | When that commit was made, in epoch seconds. |
-| `code_dirty` | `1.0` when the checkout had local changes at install, so what runs is not exactly that commit. |
+| `code_dirty` | `1.0` when the checkout had local changes at install, so what was installed is not exactly that commit. `0.0` when it had none, `-1.0` when git could not read it. |
 | `code_installed_time` | When the install ran, in epoch seconds. |
 
 A machine installed before the record existed publishes none of these until
-its next install. The record says what was installed, not what is on disk:
-a pull without an install changes the disk and leaves the record alone.
+its next install, and an install that stops partway removes the record, so
+none are published until an install finishes. A dashboard showing the latest
+value of each still shows the previous install's for as long as it looks
+back: a week in the health table, an hour in the query below. When the
+commit reads `unknown`, a commit time beside it is from an earlier install.
+
+The record says what was last installed, which is not always what runs. The
+collectors telegraf runs on a schedule, the override page and the Wavlink
+repair start fresh from the checkout each time, so after a pull they run the
+pulled code at once, before any install. The controller and the collectors
+that stay running keep the code they started with until something restarts
+them, which an install does. So after an install every process runs the
+installed commit, and a pull without one leaves the record behind the disk.
 
 [docs/dashboards/pi-health.json](dashboards/pi-health.json) shows every
 machine at once: a table of each one's latest readings, how long ago it last
-reported, and the code it runs, with graphs of temperature, load, memory,
+reported, and the code it last installed, with graphs of temperature, load, memory,
 swap, disk and uptime under it. It finds machines by their host readings, so
 a machine added later appears on it by itself. Import it the same way as
 the energy dashboard. A machine that has not reported for a week drops off
 the table.
 
-The same table as a query of its own:
+The code columns as a query of their own:
 
 ```
 host = from(bucket: "raw")
@@ -405,7 +416,10 @@ times = host
 
 dirty = host
     |> filter(fn: (r) => r._field == "code_dirty")
-    |> map(fn: (r) => ({r with _value: if r._value > 0.5 then "yes" else "no"}))
+    |> map(
+        fn: (r) =>
+            ({r with _value: if r._value > 0.5 then "yes" else if r._value < -0.5 then "unknown" else "no"}),
+    )
 
 union(tables: [text, times, dirty])
     |> group(columns: ["_measurement", "node"])
