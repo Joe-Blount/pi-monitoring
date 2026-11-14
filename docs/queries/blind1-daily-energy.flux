@@ -95,10 +95,13 @@ shunt = node(device: "shunt")
     |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
     |> filter(fn: (r) => exists r.cumulative_energy_wh and exists r.charging)
     |> sort(columns: ["_time"])
-    |> elapsed(unit: 1s)
 
+// difference keeps the first reading, with no value, so that elapsed has it
+// to drop. Otherwise each would drop a reading of its own, and the rise from
+// the first reading to the second, gap and all, would be lost.
 steps = shunt
-    |> difference(columns: ["cumulative_energy_wh"], nonNegative: true)
+    |> difference(columns: ["cumulative_energy_wh"], nonNegative: true, keepFirst: true)
+    |> elapsed(unit: 1s)
     |> filter(fn: (r) => exists r.cumulative_energy_wh and r._time >= start)
     |> map(
         fn: (r) =>

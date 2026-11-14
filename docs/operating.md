@@ -358,9 +358,11 @@ did, and the charge controller is needed to tell what the loads used.
 | `shunt_coverage_pct` | Shunt readings received, of one a minute in the day so far. Well under 100 means the day had a gap. The energy across a gap is kept, but all of it is filed in the direction of the reading that ends the gap, and on that reading's day. |
 
 A day's `load_wh` is what the loads drew at that day's state of charge. The
-shedding ladder cuts the cameras and the recorder as the charge falls, and
-irrigation runs only on a full, charging bank, so a sunny day's load
-overstates what a dark spell draws.
+shedding ladder cuts the cameras and the recorder as the charge falls, and a
+scheduled irrigation start needs the charge controller to have been in
+absorption or float within the last six hours. A start that fails the check
+is skipped, so a sunny day's load overstates what a dark spell draws. A run
+started by hand skips the check.
 
 ## What to do when telegraf is down
 

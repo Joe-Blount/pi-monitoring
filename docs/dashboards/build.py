@@ -33,7 +33,7 @@ NAMED_FINAL = "\ndaily = union(\n"
 SUPPLY = """\
 // Where the loads' power comes from, and where the surplus goes. Stacked,
 // the two "loads from" series add up to the whole load. The top edge is the
-// load or the charge controller's output, whichever is larger. The shunt
+// charge controller's output plus the battery's discharge. The shunt
 // reports every minute and the controller every thirty seconds, so both are
 // averaged over a common window of at least five minutes. A window missing
 // either device is left out, and the lines are drawn straight across it.
@@ -48,35 +48,44 @@ node = (device) =>
             fn: (r) => r._measurement == "blind1" and r.node == "downstairs" and r.device == device,
         )
 
+// The bank's power, split into charge and discharge reading by reading and
+// only then averaged. A window that holds both would otherwise net them, and
+// a cloud passing over would hide the battery's share.
 bank = node(device: "shunt")
     |> filter(fn: (r) => r._field == "shunt_volts" or r._field == "shunt_amps")
     |> group()
     |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
     |> filter(fn: (r) => exists r.shunt_volts and exists r.shunt_amps)
-    |> map(fn: (r) => ({_time: r._time, _value: r.shunt_volts * r.shunt_amps}))
+    |> map(fn: (r) => ({_time: r._time, watts: r.shunt_volts * r.shunt_amps}))
+
+into = bank
+    |> map(fn: (r) => ({_time: r._time, _field: "into", _value: if r.watts > 0.0 then r.watts else 0.0}))
+    |> group(columns: ["_field"])
+    |> aggregateWindow(every: w, fn: mean, createEmpty: false)
+
+out = bank
+    |> map(fn: (r) => ({_time: r._time, _field: "out", _value: if r.watts < 0.0 then 0.0 - r.watts else 0.0}))
+    |> group(columns: ["_field"])
     |> aggregateWindow(every: w, fn: mean, createEmpty: false)
 
 solar = node(device: "mppt")
     |> filter(fn: (r) => r._field == "battery_watts")
-    |> group()
-    |> keep(columns: ["_time", "_value"])
+    |> group(columns: ["_field"])
+    |> keep(columns: ["_time", "_field", "_value"])
     |> aggregateWindow(every: w, fn: mean, createEmpty: false)
 
-both = join(tables: {b: bank, s: solar}, on: ["_time"])
+both = union(tables: [into, out, solar])
+    |> group()
+    |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
+    |> filter(fn: (r) => exists r.into and exists r.out and exists r.battery_watts)
 
 from_bank = both
-    |> map(
-        fn: (r) =>
-            ({_time: r._time, _field: "loads from battery",
-                _value: if r._value_b < 0.0 then 0.0 - r._value_b else 0.0,
-            }),
-    )
+    |> map(fn: (r) => ({_time: r._time, _field: "loads from battery", _value: r.out}))
 
 from_solar = both
     |> map(
         fn: (r) => {
-            into = if r._value_b > 0.0 then r._value_b else 0.0
-            direct = r._value_s - into
+            direct = r.battery_watts - r.into
 
             return {_time: r._time, _field: "loads from solar",
                 _value: if direct > 0.0 then direct else 0.0,
@@ -85,12 +94,7 @@ from_solar = both
     )
 
 to_bank = both
-    |> map(
-        fn: (r) =>
-            ({_time: r._time, _field: "surplus to bank",
-                _value: if r._value_b > 0.0 then r._value_b else 0.0,
-            }),
-    )
+    |> map(fn: (r) => ({_time: r._time, _field: "surplus to bank", _value: r.into}))
 
 union(tables: [from_bank, from_solar, to_bank])
     |> group(columns: ["_field"])
@@ -140,8 +144,8 @@ shunt = from(bucket: "raw")
     |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
     |> filter(fn: (r) => exists r.cumulative_energy_wh and exists r.charging)
     |> sort(columns: ["_time"])
+    |> difference(columns: ["cumulative_energy_wh"], nonNegative: true, keepFirst: true)
     |> elapsed(unit: 1s)
-    |> difference(columns: ["cumulative_energy_wh"], nonNegative: true)
     |> filter(
         fn: (r) =>
             exists r.cumulative_energy_wh and r._time >= date.add(d: start, to: now())
