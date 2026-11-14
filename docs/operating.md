@@ -309,21 +309,27 @@ the InfluxDB web interface: Dashboards, Create Dashboard, Import Dashboard.
 It shows:
 
 - where the load's power comes from, stacked: loads from the battery, loads
-  from solar, and the surplus going into the bank. The top edge is the charge
-  controller's whole output.
+  from solar, and the surplus going into the bank. The lower two add up to
+  the load. A window with no reading from either the shunt or the charge
+  controller is left out, and the lines run straight across it.
 - the Chins pack's state of charge underneath, on the same time axis, so a
   shed shows against the charge that caused it.
 - the bank's average draw in the dark over the last 24 hours.
 - daily energy for the bank (in and out) and for the system (solar and
   load), one flat step per day, and the full daily table.
 
-Every cell follows the dashboard's time range except the night draw. Pick 24
-hours for the stacked supply graph and a week or a month for the daily ones.
+The supply and state of charge graphs follow the dashboard's time range. The
+daily cells start at the midnight on or before the range's start and run
+through today. The
+night draw is always the last 24 hours. Pick 24 hours for the supply graph
+and 7 days for the daily ones. A range reaching back past the bucket's oldest
+data makes the first day a part day.
 
 The daily cells are
 [docs/queries/blind1-daily-energy.flux](queries/blind1-daily-energy.flux),
 started from the dashboard's range. After changing that query, rebuild the
-dashboard and import it again:
+dashboard, delete the old one, and import it again; each import makes a
+dashboard of its own:
 
 ```
 python3 docs/dashboards/build.py
@@ -347,7 +353,7 @@ did, and the charge controller is needed to tell what the loads used.
 | `direct_solar_wh` | Solar the loads used without it crossing the shunt: `solar_wh` less `bank_in_wh`. |
 | `night_load_wh` | Energy out of the bank while the controller produced nothing. A stretch with no shunt readings is left out, since it could hold daylight. |
 | `night_hours` | How long the controller produced nothing. An overcast day is not night. |
-| `night_avg_w` | `night_load_wh` over `night_hours`: the load's average draw in the dark. |
+| `night_avg_w` | `night_load_wh` over the time its readings cover: the load's average draw in the dark. A gap leaves out its energy and its time together, so it does not pull the average down. |
 | `solar_wh_check` | The controller's output power, summed from its snapshots. It should land close to `solar_wh`. A large gap means missing controller readings. A controller outage across midnight puts its yield on the later day. |
 | `shunt_coverage_pct` | Shunt readings received, of one a minute in the day so far. Well under 100 means the day had a gap. The energy across a gap is kept, but all of it is filed in the direction of the reading that ends the gap, and on that reading's day. |
 

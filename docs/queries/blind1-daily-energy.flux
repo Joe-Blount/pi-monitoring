@@ -15,7 +15,7 @@
 //   direct_solar_wh   solar_wh less bank_in_wh: solar the loads used directly
 //   night_load_wh     bank_out_wh while the controller produced nothing
 //   night_hours       how long the controller produced nothing
-//   night_avg_w       night_load_wh over night_hours
+//   night_avg_w       night_load_wh over the time its readings cover
 //   solar_wh_check    the controller's output power, integrated
 //   shunt_coverage_pct  shunt readings received, of one a poll interval
 //                       in the day so far
@@ -27,7 +27,7 @@
 // poll interval's energy at each change; their sum is exact. A gap in the
 // readings is kept whole and filed by the reading that ends it, in that
 // reading's direction and on that reading's day. night_load_wh leaves out
-// any step longer than two poll intervals, which could hold daylight.
+// any step that spans a gap, which could hold daylight.
 //
 // A counter that falls has been reset, and that one interval is dropped.
 // Each day reads one hour before its midnight, so its first interval has a
@@ -62,7 +62,8 @@ option location = timezone.location(name: "America/Chicago")
 lookback = -29d
 
 // The shunt's poll interval, from the node's slow_poll_interval. A step
-// longer than two of these spans a gap in the readings.
+// longer than two and a half of these spans a gap in the readings: one
+// missed poll, with its jitter, stays inside.
 poll = 60s
 
 start = date.truncate(t: lookback, unit: 1d)
@@ -103,7 +104,8 @@ steps = shunt
         fn: (r) =>
             ({
                 _time: r._time,
-                gap: r.elapsed > 2 * int(v: poll) / int(v: 1s),
+                gap: r.elapsed * 2 > 5 * int(v: poll) / int(v: 1s),
+                secs: float(v: r.elapsed),
                 day: date.truncate(t: r._time, unit: 1d),
                 bin: date.truncate(t: r._time, unit: bin, location: timezone.utc),
                 wh_in: if r.charging > 0.5 then r.cumulative_energy_wh else 0.0,
@@ -171,14 +173,19 @@ dark = mppt(field: "pv_watts")
 
 night_hours = dark |> stat(name: "night_hours", col: "hours")
 
-night_load = join(
+night_steps = join(
     tables: {
         s: steps |> filter(fn: (r) => not r.gap) |> group() |> drop(columns: ["_time", "day"]),
         d: dark,
     },
     on: ["bin"],
 )
-    |> stat(name: "night_load_wh", col: "wh_out")
+
+night_load = night_steps |> stat(name: "night_load_wh", col: "wh_out")
+
+// The time the kept night steps cover. A gap is out of night_load_wh, so it
+// is out of the time the average is taken over too.
+night_covered = night_steps |> stat(name: "night_covered_s", col: "secs")
 
 union(
     tables: [
@@ -190,6 +197,7 @@ union(
         solar_check,
         night_hours,
         night_load,
+        night_covered,
     ],
 )
     |> group()
@@ -200,7 +208,7 @@ union(
                 bank_net_wh: r.bank_in_wh - r.bank_out_wh,
                 load_wh: r.solar_wh - (r.bank_in_wh - r.bank_out_wh),
                 direct_solar_wh: r.solar_wh - r.bank_in_wh,
-                night_avg_w: r.night_load_wh / r.night_hours,
+                night_avg_w: r.night_load_wh * 3600.0 / r.night_covered_s,
             }),
     )
     |> keep(

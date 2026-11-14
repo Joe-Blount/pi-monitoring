@@ -32,30 +32,32 @@ NAMED_FINAL = "\ndaily = union(\n"
 
 SUPPLY = """\
 // Where the loads' power comes from, and where the surplus goes. Stacked,
-// the two "loads from" series add up to the whole load, and all three to
-// the charge controller's output. The shunt reports every minute and the
-// controller every thirty seconds, so both are averaged over a common
-// window of at least five minutes. Heater draw crosses the shunt as charge
-// and shows as surplus to the bank.
+// the two "loads from" series add up to the whole load. The top edge is the
+// load or the charge controller's output, whichever is larger. The shunt
+// reports every minute and the controller every thirty seconds, so both are
+// averaged over a common window of at least five minutes. A window missing
+// either device is left out, and the lines are drawn straight across it.
+// Heater draw crosses the shunt as charge and shows as surplus to the bank.
 
 w = if int(v: v.windowPeriod) < int(v: 5m) then 5m else v.windowPeriod
 
-node = from(bucket: "raw")
-    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
-    |> filter(fn: (r) => r._measurement == "blind1" and r.node == "downstairs")
+node = (device) =>
+    from(bucket: "raw")
+        |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+        |> filter(
+            fn: (r) => r._measurement == "blind1" and r.node == "downstairs" and r.device == device,
+        )
 
-bank = node
-    |> filter(
-        fn: (r) => r.device == "shunt" and (r._field == "shunt_volts" or r._field == "shunt_amps"),
-    )
+bank = node(device: "shunt")
+    |> filter(fn: (r) => r._field == "shunt_volts" or r._field == "shunt_amps")
     |> group()
     |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
     |> filter(fn: (r) => exists r.shunt_volts and exists r.shunt_amps)
     |> map(fn: (r) => ({_time: r._time, _value: r.shunt_volts * r.shunt_amps}))
     |> aggregateWindow(every: w, fn: mean, createEmpty: false)
 
-solar = node
-    |> filter(fn: (r) => r.device == "mppt" and r._field == "battery_watts")
+solar = node(device: "mppt")
+    |> filter(fn: (r) => r._field == "battery_watts")
     |> group()
     |> keep(columns: ["_time", "_value"])
     |> aggregateWindow(every: w, fn: mean, createEmpty: false)
@@ -116,7 +118,8 @@ NIGHT = """\
 // The bank's average draw while the charge controller produced nothing, over
 // the last 24 hours whatever the dashboard's range. Night is a five-minute
 // bin in which every controller reading shows no panel power, cut in UTC.
-// A shunt step longer than two poll intervals spans a gap and is left out.
+// A shunt step longer than two and a half poll intervals spans a gap. It is
+// left out, and so is the time it covers.
 
 import "date"
 import "timezone"
@@ -143,13 +146,14 @@ shunt = from(bucket: "raw")
         fn: (r) =>
             exists r.cumulative_energy_wh and r._time >= date.add(d: start, to: now())
                 and
-                r.elapsed <= 2 * int(v: poll) / int(v: 1s),
+                r.elapsed * 2 <= 5 * int(v: poll) / int(v: 1s),
     )
     |> map(
         fn: (r) =>
             ({
                 bin: date.truncate(t: r._time, unit: bin, location: timezone.utc),
                 wh: if r.charging > 0.5 then 0.0 else r.cumulative_energy_wh,
+                secs: float(v: r.elapsed),
             }),
     )
 
@@ -167,18 +171,14 @@ dark = from(bucket: "raw")
     |> max(column: "pv")
     |> group()
     |> filter(fn: (r) => r.pv <= 0.0)
-    |> map(fn: (r) => ({bin: r.bin, one: 1.0}))
+    |> keep(columns: ["bin"])
 
-hours = dark
-    |> sum(column: "one")
-    |> map(fn: (r) => ({key: 1, hours: r.one * float(v: int(v: bin)) / float(v: int(v: 1h))}))
-
-energy = join(tables: {s: shunt, d: dark}, on: ["bin"])
-    |> sum(column: "wh")
-    |> map(fn: (r) => ({key: 1, wh: r.wh}))
-
-join(tables: {e: energy, h: hours}, on: ["key"])
-    |> map(fn: (r) => ({_value: r.wh / r.hours}))
+join(tables: {s: shunt, d: dark}, on: ["bin"])
+    |> reduce(
+        identity: {wh: 0.0, secs: 0.0},
+        fn: (r, accumulator) => ({wh: accumulator.wh + r.wh, secs: accumulator.secs + r.secs}),
+    )
+    |> map(fn: (r) => ({_value: r.wh * 3600.0 / r.secs}))
 """
 
 
@@ -240,10 +240,8 @@ PALETTE = [
 TEXT = [{"name": "laser", "type": "text", "hex": "#00C9FF"}]
 
 
-def xy(name, text, unit, position="overlaid", domain=None):
+def xy(name, text, unit, position="overlaid"):
     y = {"name": "y", "label": unit, "base": "10", "scale": "linear"}
-    if domain is not None:
-        y["domain"] = list(domain)
     return {
         "name": name,
         "kind": "Xy",
@@ -302,7 +300,7 @@ def build():
         (0, 0, 9, 4, xy("Where the load's power comes from", SUPPLY, "W",
                         position="stacked")),
         (9, 0, 3, 6, single("Night draw, last 24 hours", NIGHT, " W")),
-        (0, 4, 9, 2, xy("Chins state of charge", SOC, "%", domain=(0.0, 100.0))),
+        (0, 4, 9, 2, xy("Chins state of charge", SOC, "%")),
         (0, 6, 6, 3, xy("Daily energy, bank",
                         daily(query, steps([("bank in", "bank_in_wh"),
                                             ("bank out", "bank_out_wh")])),
