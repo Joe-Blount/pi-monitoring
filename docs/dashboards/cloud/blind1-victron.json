@@ -1,0 +1,585 @@
+[
+  {
+    "apiVersion": "influxdata.com/v2alpha1",
+    "kind": "Dashboard",
+    "metadata": {
+      "name": "priceless-hopper-893001"
+    },
+    "spec": {
+      "charts": [
+        {
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "10",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colorMapping": {
+            "battery_volts-blind1-mppt-solar-downstairs-mean-": "#31C0F6"
+          },
+          "colorizeRows": true,
+          "colors": [
+            {
+              "id": "0A2oM1ldMXU99_EqDn89S",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "id": "VCJjOc8ccl_34bGi_xGY1",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "id": "uXAN4mjhT3Ovm9g8W4zkY",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "line",
+          "height": 3,
+          "hoverDimension": "auto",
+          "kind": "Xy",
+          "legendColorizeRows": true,
+          "legendOpacity": 1,
+          "legendOrientationThreshold": 100000000,
+          "name": "Voltage (battery)",
+          "opacity": 1,
+          "orientationThreshold": 100000000,
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"blind1\")\n  |> filter(fn: (r) => r[\"_field\"] == \"battery_volts\")\n  |> filter(fn: (r) => r[\"location\"] == \"solar\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"mean\")"
+            }
+          ],
+          "staticLegend": {
+            "colorizeRows": true,
+            "opacity": 1,
+            "orientationThreshold": 100000000,
+            "widthRatio": 1
+          },
+          "width": 4,
+          "widthRatio": 1,
+          "xCol": "_time",
+          "yCol": "_value"
+        },
+        {
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "10",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colorMapping": {
+            "pv_volts-blind1-mppt-solar-downstairs-mean-": "#31C0F6"
+          },
+          "colorizeRows": true,
+          "colors": [
+            {
+              "id": "0A2oM1ldMXU99_EqDn89S",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "id": "VCJjOc8ccl_34bGi_xGY1",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "id": "uXAN4mjhT3Ovm9g8W4zkY",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "line",
+          "height": 3,
+          "hoverDimension": "auto",
+          "kind": "Xy",
+          "legendColorizeRows": true,
+          "legendOpacity": 1,
+          "legendOrientationThreshold": 100000000,
+          "name": "Voltage (pv)",
+          "opacity": 1,
+          "orientationThreshold": 100000000,
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"blind1\")\n  |> filter(fn: (r) => r[\"_field\"] == \"pv_volts\")\n  |> filter(fn: (r) => r[\"location\"] == \"solar\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"mean\")"
+            }
+          ],
+          "staticLegend": {
+            "colorizeRows": true,
+            "opacity": 1,
+            "orientationThreshold": 100000000,
+            "widthRatio": 1
+          },
+          "width": 4,
+          "widthRatio": 1,
+          "xCol": "_time",
+          "yCol": "_value",
+          "yPos": 3
+        },
+        {
+          "colors": [
+            {
+              "id": "base",
+              "name": "laser",
+              "type": "text",
+              "hex": "#00C9FF"
+            }
+          ],
+          "decimalPlaces": 2,
+          "height": 2,
+          "kind": "Single_Stat",
+          "name": "Charge State (pv)",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"blind1\")\n  |> filter(fn: (r) => r[\"_field\"] == \"charge_state\")\n  |> filter(fn: (r) => r[\"location\"] == \"solar\")\n  |> yield(name: \"mean\")"
+            }
+          ],
+          "staticLegend": {},
+          "width": 2,
+          "yPos": 6
+        },
+        {
+          "colors": [
+            {
+              "id": "base",
+              "name": "laser",
+              "type": "text",
+              "hex": "#00C9FF"
+            }
+          ],
+          "decimalPlaces": 2,
+          "height": 2,
+          "kind": "Single_Stat",
+          "name": "State (pv)",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"blind1\")\n  |> filter(fn: (r) => r[\"_field\"] == \"tracker\")\n  |> yield(name: \"mean\")"
+            }
+          ],
+          "staticLegend": {},
+          "width": 2,
+          "xPos": 2,
+          "yPos": 6
+        },
+        {
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "10",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colorMapping": {
+            "battery_amps-blind1-mppt-solar-downstairs-mean-": "#31C0F6"
+          },
+          "colorizeRows": true,
+          "colors": [
+            {
+              "id": "0A2oM1ldMXU99_EqDn89S",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "id": "VCJjOc8ccl_34bGi_xGY1",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "id": "uXAN4mjhT3Ovm9g8W4zkY",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "line",
+          "height": 3,
+          "hoverDimension": "auto",
+          "kind": "Xy",
+          "legendColorizeRows": true,
+          "legendOpacity": 1,
+          "legendOrientationThreshold": 100000000,
+          "name": "Amps (battery)",
+          "opacity": 1,
+          "orientationThreshold": 100000000,
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"blind1\")\n  |> filter(fn: (r) => r[\"_field\"] == \"battery_amps\")\n  |> filter(fn: (r) => r[\"location\"] == \"solar\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"mean\")"
+            }
+          ],
+          "staticLegend": {
+            "colorizeRows": true,
+            "opacity": 1,
+            "orientationThreshold": 100000000,
+            "widthRatio": 1
+          },
+          "width": 4,
+          "widthRatio": 1,
+          "xCol": "_time",
+          "xPos": 4,
+          "yCol": "_value"
+        },
+        {
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "10",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colorMapping": {
+            "pv_amps-blind1-mppt-solar-downstairs-mean-": "#31C0F6"
+          },
+          "colorizeRows": true,
+          "colors": [
+            {
+              "id": "0A2oM1ldMXU99_EqDn89S",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "id": "VCJjOc8ccl_34bGi_xGY1",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "id": "uXAN4mjhT3Ovm9g8W4zkY",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "line",
+          "height": 3,
+          "hoverDimension": "auto",
+          "kind": "Xy",
+          "legendColorizeRows": true,
+          "legendOpacity": 1,
+          "legendOrientationThreshold": 100000000,
+          "name": "Amps (pv)",
+          "opacity": 1,
+          "orientationThreshold": 100000000,
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"blind1\")\n  |> filter(fn: (r) => r[\"_field\"] == \"pv_amps\")\n  |> filter(fn: (r) => r[\"location\"] == \"solar\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"mean\")"
+            }
+          ],
+          "staticLegend": {
+            "colorizeRows": true,
+            "opacity": 1,
+            "orientationThreshold": 100000000,
+            "widthRatio": 1
+          },
+          "width": 4,
+          "widthRatio": 1,
+          "xCol": "_time",
+          "xPos": 4,
+          "yCol": "_value",
+          "yPos": 3
+        },
+        {
+          "colors": [
+            {
+              "id": "base",
+              "name": "laser",
+              "type": "text",
+              "hex": "#00C9FF"
+            }
+          ],
+          "decimalPlaces": 2,
+          "height": 2,
+          "kind": "Single_Stat",
+          "name": "Error (pv)",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"blind1\")\n  |> filter(fn: (r) => r[\"_field\"] == \"error\")\n  |> filter(fn: (r) => r[\"location\"] == \"solar\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"mean\")"
+            }
+          ],
+          "staticLegend": {},
+          "width": 1,
+          "xPos": 4,
+          "yPos": 6
+        },
+        {
+          "colors": [
+            {
+              "id": "base",
+              "name": "laser",
+              "type": "text",
+              "hex": "#00C9FF"
+            }
+          ],
+          "decimalPlaces": 2,
+          "height": 2,
+          "kind": "Single_Stat",
+          "name": "max today watts (pv)",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"blind1\")\n  |> filter(fn: (r) => r[\"_field\"] == \"max_power_today_watts\")\n  |> filter(fn: (r) => r[\"location\"] == \"solar\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"mean\")"
+            }
+          ],
+          "staticLegend": {},
+          "width": 2,
+          "xPos": 5,
+          "yPos": 6
+        },
+        {
+          "colors": [
+            {
+              "id": "base",
+              "name": "laser",
+              "type": "text",
+              "hex": "#00C9FF"
+            }
+          ],
+          "decimalPlaces": 2,
+          "height": 2,
+          "kind": "Single_Stat",
+          "name": "today KWH (pv)",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"blind1\")\n  |> filter(fn: (r) => r[\"_field\"] == \"yield_today_kwh\")\n  |> filter(fn: (r) => r[\"location\"] == \"solar\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"mean\")"
+            }
+          ],
+          "staticLegend": {},
+          "width": 2,
+          "xPos": 7,
+          "yPos": 6
+        },
+        {
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "10",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colorMapping": {
+            "battery_watts-blind1-mppt-solar-downstairs-mean-": "#31C0F6"
+          },
+          "colorizeRows": true,
+          "colors": [
+            {
+              "id": "0A2oM1ldMXU99_EqDn89S",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "id": "VCJjOc8ccl_34bGi_xGY1",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "id": "uXAN4mjhT3Ovm9g8W4zkY",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "line",
+          "height": 3,
+          "hoverDimension": "auto",
+          "kind": "Xy",
+          "legendColorizeRows": true,
+          "legendOpacity": 1,
+          "legendOrientationThreshold": 100000000,
+          "name": "Watts (battery)",
+          "opacity": 1,
+          "orientationThreshold": 100000000,
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"blind1\")\n  |> filter(fn: (r) => r[\"_field\"] == \"battery_watts\")\n  |> filter(fn: (r) => r[\"location\"] == \"solar\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"mean\")"
+            }
+          ],
+          "staticLegend": {
+            "colorizeRows": true,
+            "opacity": 1,
+            "orientationThreshold": 100000000,
+            "widthRatio": 1
+          },
+          "width": 4,
+          "widthRatio": 1,
+          "xCol": "_time",
+          "xPos": 8,
+          "yCol": "_value"
+        },
+        {
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "10",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colorMapping": {
+            "pv_watts-blind1-mppt-solar-downstairs-mean-": "#31C0F6"
+          },
+          "colorizeRows": true,
+          "colors": [
+            {
+              "id": "0A2oM1ldMXU99_EqDn89S",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "id": "VCJjOc8ccl_34bGi_xGY1",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "id": "uXAN4mjhT3Ovm9g8W4zkY",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "line",
+          "height": 3,
+          "hoverDimension": "auto",
+          "kind": "Xy",
+          "legendColorizeRows": true,
+          "legendOpacity": 1,
+          "legendOrientationThreshold": 100000000,
+          "name": "Watts (pv)",
+          "opacity": 1,
+          "orientationThreshold": 100000000,
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"blind1\")\n  |> filter(fn: (r) => r[\"_field\"] == \"pv_watts\")\n  |> filter(fn: (r) => r[\"location\"] == \"solar\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"mean\")"
+            }
+          ],
+          "staticLegend": {
+            "colorizeRows": true,
+            "opacity": 1,
+            "orientationThreshold": 100000000,
+            "widthRatio": 1
+          },
+          "width": 4,
+          "widthRatio": 1,
+          "xCol": "_time",
+          "xPos": 8,
+          "yCol": "_value",
+          "yPos": 3
+        },
+        {
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "10",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colorMapping": {
+            "mppt-downstairs-daily_yield-": "#31C0F6"
+          },
+          "colorizeRows": true,
+          "colors": [
+            {
+              "id": "_XVXyxAbn8tE90dNMK3Sx",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "id": "6uHtOv0N-JUKedcs61kZ7",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "id": "QTZf7D26TejA4n7p7WQ-P",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "line",
+          "height": 2,
+          "hoverDimension": "auto",
+          "kind": "Xy",
+          "legendColorizeRows": true,
+          "legendOpacity": 1,
+          "legendOrientationThreshold": 100000000,
+          "name": "Daily KWH (pv)",
+          "opacity": 1,
+          "orientationThreshold": 100000000,
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "import \"date\"\nimport \"timezone\"\n\noption location = timezone.location(name: \"America/Chicago\")\n\nfrom(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"blind1\")\n  |> filter(fn: (r) => r[\"_field\"] == \"yield_today_kwh\")\n  |> filter(fn: (r) => r[\"location\"] == \"solar\")\n  |> aggregateWindow(every: 1d, fn: last, offset: 22h, createEmpty: false)\n  |> map(fn: (r) => ({\n      r with\n      _time: date.truncate(t: r._time, unit: 1d)\n  }))\n  |> drop(columns: [\"_start\", \"_stop\", \"_field\", \"_measurement\", \"location\"])\n  |> yield(name: \"daily_yield\")"
+            }
+          ],
+          "staticLegend": {
+            "colorizeRows": true,
+            "opacity": 1,
+            "orientationThreshold": 100000000,
+            "widthRatio": 1
+          },
+          "width": 3,
+          "widthRatio": 1,
+          "xCol": "_time",
+          "xPos": 9,
+          "yCol": "_value",
+          "yPos": 6
+        }
+      ],
+      "name": "Blind1: Victron"
+    }
+  }
+]

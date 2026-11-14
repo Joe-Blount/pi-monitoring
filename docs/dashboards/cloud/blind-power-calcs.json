@@ -1,0 +1,809 @@
+[
+  {
+    "apiVersion": "influxdata.com/v2alpha1",
+    "kind": "Dashboard",
+    "metadata": {
+      "name": "vigilant-jennings-c93001"
+    },
+    "spec": {
+      "charts": [
+        {
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "10",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colorMapping": {
+            "difference-": "#31C0F6"
+          },
+          "colorizeRows": true,
+          "colors": [
+            {
+              "id": "UoViyfLXoKuGE1vrQtWpm",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "id": "iKJIo9ndIe0y9wGvmJLeq",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "id": "ugWD6DuR9PdefjxDvlBWB",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "line",
+          "height": 4,
+          "hoverDimension": "auto",
+          "kind": "Xy",
+          "legendColorizeRows": true,
+          "legendOpacity": 1,
+          "legendOrientationThreshold": 100000000,
+          "name": "Load (amps)",
+          "opacity": 1,
+          "orientationThreshold": 100000000,
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "//period=v.windowPeriod\nperiod=1h\n\nbattery =\n    from(bucket: \"raw\")\n        |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n        |> filter(fn: (r) => r[\"_measurement\"] == \"blind1\")\n        |> filter(fn: (r) => r[\"_field\"] == \"battery_amps\")\n        |> filter(fn: (r) => r[\"location\"] == \"solar\")\n        |> aggregateWindow(every: period, fn: mean, createEmpty: false)\n        |> map(fn: (r) => ({r with _field: \"battery_amps\", battery: r._value}))\n        |> keep(columns: [\"_time\", \"battery\"])\n\nshunt =\n    from(bucket: \"raw\")\n        |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n        |> filter(fn: (r) => r[\"_measurement\"] == \"blind1\")\n        |> filter(fn: (r) => r[\"_field\"] == \"shunt_amps\")\n        |> aggregateWindow(every: period, fn: mean, createEmpty: false)\n        |> map(fn: (r) => ({r with shunt: r._value}))\n        |> keep(columns: [\"_time\", \"shunt\"])\n\njoin(tables: {battery: battery, shunt: shunt}, on: [\"_time\"])\n    |> map(fn: (r) => ({\n        _time: r._time,\n        _value: r.shunt - r.battery,\n        _measurement: \"blind1\",\n        _field: \"shunt_minus_battery\"\n    }))\n    |> yield(name: \"difference\")"
+            }
+          ],
+          "staticLegend": {
+            "colorizeRows": true,
+            "opacity": 1,
+            "orientationThreshold": 100000000,
+            "widthRatio": 1
+          },
+          "width": 12,
+          "widthRatio": 1,
+          "xCol": "_time",
+          "yCol": "_value"
+        },
+        {
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "10",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colorMapping": {
+            "_result-": "#31C0F6"
+          },
+          "colorizeRows": true,
+          "colors": [
+            {
+              "id": "DR11lx2HTlVbjkd7IIKso",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "id": "4pXeNAYeF0uAymb4YEFR0",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "id": "Oi-AqbBa863Uhvlf7gzu2",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "line",
+          "height": 2,
+          "hoverDimension": "auto",
+          "kind": "Xy",
+          "legendColorizeRows": true,
+          "legendOpacity": 1,
+          "legendOrientationThreshold": 100000000,
+          "name": "Net KWH",
+          "opacity": 1,
+          "orientationThreshold": 100000000,
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "shunt = from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"blind1\" and r.device == \"shunt\")\n    |> filter(fn: (r) => r._field == \"shunt_amps\" or r._field == \"shunt_volts\")\n    |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n    |> filter(fn: (r) => exists r.shunt_amps and exists r.shunt_volts)\n    |> map(fn: (r) => ({r with _value: r.shunt_amps * r.shunt_volts, _field: \"batt_w\"}))\n    |> keep(columns: [\"_start\", \"_stop\", \"_time\", \"_field\", \"_value\"])\n    |> group(columns: [\"_field\"])\n    |> aggregateWindow(every: 1d, fn: mean, createEmpty: false)\n\n  solar = from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"blind1\" and r.device == \"mppt\")\n    |> filter(fn: (r) => r._field == \"battery_watts\")\n    |> map(fn: (r) => ({r with _field: \"solar_w\"}))\n    |> keep(columns: [\"_start\", \"_stop\", \"_time\", \"_field\", \"_value\"])\n    |> group(columns: [\"_field\"])\n    |> aggregateWindow(every: 1d, fn: mean, createEmpty: false)\n\n  k = 24.0 / 1000.0        // mean watts over a day -> kWh\n\n  daily = union(tables: [shunt, solar])\n    |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n    |> filter(fn: (r) => exists r.batt_w and exists r.solar_w)\n\ndaily |> map(fn: (r) => ({\n    _time: r._time, _value: r.batt_w * k, series: \"net (banked +, drawn -)\"}))"
+            }
+          ],
+          "staticLegend": {
+            "colorizeRows": true,
+            "opacity": 1,
+            "orientationThreshold": 100000000,
+            "widthRatio": 1
+          },
+          "width": 12,
+          "widthRatio": 1,
+          "xCol": "_time",
+          "yCol": "_value",
+          "yPos": 4
+        },
+        {
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "10",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colorMapping": {
+            "generated-daily energy kWh-": "#31C0F6",
+            "net (banked +, drawn -)-daily energy kWh-": "#A500A5",
+            "used-daily energy kWh-": "#FF7E27"
+          },
+          "colorizeRows": true,
+          "colors": [
+            {
+              "id": "DR11lx2HTlVbjkd7IIKso",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "id": "4pXeNAYeF0uAymb4YEFR0",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "id": "Oi-AqbBa863Uhvlf7gzu2",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "line",
+          "height": 2,
+          "hoverDimension": "auto",
+          "kind": "Xy",
+          "legendColorizeRows": true,
+          "legendOpacity": 1,
+          "legendOrientationThreshold": 100000000,
+          "name": "Daily Power Generated & Used",
+          "opacity": 1,
+          "orientationThreshold": 100000000,
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "shunt = from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"blind1\" and r.device == \"shunt\")\n    |> filter(fn: (r) => r._field == \"shunt_amps\" or r._field == \"shunt_volts\")\n    |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n    |> filter(fn: (r) => exists r.shunt_amps and exists r.shunt_volts)\n    |> map(fn: (r) => ({r with _value: r.shunt_amps * r.shunt_volts, _field: \"batt_w\"}))\n    |> keep(columns: [\"_start\", \"_stop\", \"_time\", \"_field\", \"_value\"])\n    |> group(columns: [\"_field\"])\n    |> aggregateWindow(every: 1d, fn: mean, createEmpty: false)\n\n  solar = from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"blind1\" and r.device == \"mppt\")\n    |> filter(fn: (r) => r._field == \"battery_watts\")\n    |> map(fn: (r) => ({r with _field: \"solar_w\"}))\n    |> keep(columns: [\"_start\", \"_stop\", \"_time\", \"_field\", \"_value\"])\n    |> group(columns: [\"_field\"])\n    |> aggregateWindow(every: 1d, fn: mean, createEmpty: false)\n\n  k = 24.0 / 1000.0        // mean watts over a day -> kWh\n\n  daily = union(tables: [shunt, solar])\n    |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n    |> filter(fn: (r) => exists r.batt_w and exists r.solar_w)\n\n  generated = daily |> map(fn: (r) => ({\n    _time: r._time, _value: r.solar_w * k, series: \"generated\"}))\n\n  used = daily |> map(fn: (r) => ({\n    _time: r._time, _value: (r.solar_w - r.batt_w) * k, series: \"used\"}))\n\n  net = daily |> map(fn: (r) => ({\n    _time: r._time, _value: r.batt_w * k, series: \"net (banked +, drawn -)\"}))\n\n  union(tables: [generated, used, net])\n    |> group(columns: [\"series\"])\n    |> sort(columns: [\"_time\"])\n    |> yield(name: \"daily energy kWh\")"
+            }
+          ],
+          "staticLegend": {
+            "colorizeRows": true,
+            "opacity": 1,
+            "orientationThreshold": 100000000,
+            "widthRatio": 1
+          },
+          "width": 12,
+          "widthRatio": 1,
+          "xCol": "_time",
+          "yCol": "_value",
+          "yPos": 6
+        },
+        {
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "10",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colorMapping": {
+            "chins 320-amps-": "#31C0F6",
+            "shunt (whole bank)-amps-": "#A500A5",
+            "weize pair (inferred)-amps-": "#FF7E27"
+          },
+          "colorizeRows": true,
+          "colors": [
+            {
+              "id": "JYFgd87ssEEom5gAZx2ep",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "id": "3efCcEXeBqTUW112HI_An",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "id": "PEaXYroWWBvJOzpc7GlWK",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "line",
+          "height": 4,
+          "hoverDimension": "auto",
+          "kind": "Xy",
+          "legendColorizeRows": true,
+          "legendOpacity": 1,
+          "legendOrientationThreshold": 100000000,
+          "name": "Power Split - Amps",
+          "opacity": 1,
+          "orientationThreshold": 100000000,
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "// At least one collection interval, or a zoomed-in panel makes empty windows.\n  w = if int(v: v.windowPeriod) < int(v: 3m) then 3m else v.windowPeriod\n\n  base = from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"blind1\")\n    |> filter(fn: (r) => r._field == \"pack_amps\" or r._field == \"shunt_amps\")\n    |> filter(fn: (r) => r.device == \"bms\" or r.device == \"shunt\")\n    |> aggregateWindow(every: w, fn: mean, createEmpty: false)\n    |> keep(columns: [\"_start\", \"_stop\", \"_time\", \"_field\", \"_value\"])\n    |> group()\n    |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n    |> filter(fn: (r) => exists r.pack_amps and exists r.shunt_amps)\n\n  shunt = base |> map(fn: (r) => ({\n    _start: r._start, _stop: r._stop, _time: r._time,\n    _value: r.shunt_amps, series: \"shunt (whole bank)\"}))\n\n  chins = base |> map(fn: (r) => ({\n    _start: r._start, _stop: r._stop, _time: r._time,\n    _value: r.pack_amps, series: \"chins 320\"}))\n\n  weize = base |> map(fn: (r) => ({\n    _start: r._start, _stop: r._stop, _time: r._time,\n    _value: r.shunt_amps - r.pack_amps, series: \"weize pair (inferred)\"}))\n\n  union(tables: [shunt, chins, weize])\n    |> group(columns: [\"series\"])\n    |> sort(columns: [\"_time\"])\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n    |> yield(name: \"amps\")"
+            }
+          ],
+          "staticLegend": {
+            "colorizeRows": true,
+            "opacity": 1,
+            "orientationThreshold": 100000000,
+            "widthRatio": 1
+          },
+          "width": 4,
+          "widthRatio": 1,
+          "xCol": "_time",
+          "yCol": "_value",
+          "yPos": 8
+        },
+        {
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "10",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colorMapping": {
+            "shunt_amps-blind1-shunt-battery-downstairs-mean-": "#31C0F6"
+          },
+          "colorizeRows": true,
+          "colors": [
+            {
+              "id": "UoViyfLXoKuGE1vrQtWpm",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "id": "iKJIo9ndIe0y9wGvmJLeq",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "id": "ugWD6DuR9PdefjxDvlBWB",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "line",
+          "height": 4,
+          "hoverDimension": "auto",
+          "kind": "Xy",
+          "legendColorizeRows": true,
+          "legendOpacity": 1,
+          "legendOrientationThreshold": 100000000,
+          "name": "Shunt: Amps",
+          "opacity": 1,
+          "orientationThreshold": 100000000,
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"blind1\")\n  |> filter(fn: (r) => r[\"_field\"] == \"shunt_amps\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"mean\")"
+            }
+          ],
+          "staticLegend": {
+            "colorizeRows": true,
+            "opacity": 1,
+            "orientationThreshold": 100000000,
+            "widthRatio": 1
+          },
+          "width": 4,
+          "widthRatio": 1,
+          "xCol": "_time",
+          "yCol": "_value",
+          "yPos": 12
+        },
+        {
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "10",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colorMapping": {
+            "pack_amps-blind1-bms-battery-downstairs-mean-": "#31C0F6"
+          },
+          "colorizeRows": true,
+          "colors": [
+            {
+              "id": "JYFgd87ssEEom5gAZx2ep",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "id": "3efCcEXeBqTUW112HI_An",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "id": "PEaXYroWWBvJOzpc7GlWK",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "line",
+          "height": 4,
+          "hoverDimension": "auto",
+          "kind": "Xy",
+          "legendColorizeRows": true,
+          "legendOpacity": 1,
+          "legendOrientationThreshold": 100000000,
+          "name": "Chins: Amps",
+          "opacity": 1,
+          "orientationThreshold": 100000000,
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"blind1\")\n  |> filter(fn: (r) => r[\"_field\"] == \"pack_amps\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"mean\")"
+            }
+          ],
+          "staticLegend": {
+            "colorizeRows": true,
+            "opacity": 1,
+            "orientationThreshold": 100000000,
+            "widthRatio": 1
+          },
+          "width": 4,
+          "widthRatio": 1,
+          "xCol": "_time",
+          "yCol": "_value",
+          "yPos": 16
+        },
+        {
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "10",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colorMapping": {
+            "chins, actual-chins share of bank current, percent-": "#31C0F6",
+            "expected, both weize-chins share of bank current, percent-": "#A500A5",
+            "expected, one weize-chins share of bank current, percent-": "#FF7E27"
+          },
+          "colorizeRows": true,
+          "colors": [
+            {
+              "id": "JYFgd87ssEEom5gAZx2ep",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "id": "3efCcEXeBqTUW112HI_An",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "id": "PEaXYroWWBvJOzpc7GlWK",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "line",
+          "height": 4,
+          "hoverDimension": "auto",
+          "kind": "Xy",
+          "legendColorizeRows": true,
+          "legendOpacity": 1,
+          "legendOrientationThreshold": 100000000,
+          "name": "Power Split - Chins Percent",
+          "opacity": 1,
+          "orientationThreshold": 100000000,
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "// At least one collection interval, or a zoomed-in panel makes empty windows.\n  w = if int(v: v.windowPeriod) < int(v: 3m) then 3m else v.windowPeriod\n\n  base = from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"blind1\")\n    |> filter(fn: (r) => r._field == \"pack_amps\" or r._field == \"shunt_amps\")\n    |> filter(fn: (r) => r.device == \"bms\" or r.device == \"shunt\")\n    |> aggregateWindow(every: w, fn: mean, createEmpty: false)\n    |> keep(columns: [\"_start\", \"_stop\", \"_time\", \"_field\", \"_value\"])\n    |> group()\n    |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n    |> filter(fn: (r) => exists r.pack_amps and exists r.shunt_amps)\n\n\n  chins = base |> map(fn: (r) => ({\n    _start: r._start, _stop: r._stop, _time: r._time,\n    _value: 100.0 * r.pack_amps / r.shunt_amps,\n    series: \"chins, actual\"}))\n\n  // 320 Ah of 520. Where the chins should sit if both weize are working.\n  both_weize = base |> map(fn: (r) => ({\n    _start: r._start, _stop: r._stop, _time: r._time,\n    _value: 100.0 * 320.0 / 520.0,\n    series: \"expected, both weize\"}))\n\n  // 320 Ah of 420. Where it would sit if one weize had dropped out.\n  one_weize = base |> map(fn: (r) => ({\n    _start: r._start, _stop: r._stop, _time: r._time,\n    _value: 100.0 * 320.0 / 420.0,\n    series: \"expected, one weize\"}))\n\n  union(tables: [chins, both_weize, one_weize])\n    |> group(columns: [\"series\"])\n    |> sort(columns: [\"_time\"])\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n    |> yield(name: \"chins share of bank current, percent\")"
+            }
+          ],
+          "staticLegend": {
+            "colorizeRows": true,
+            "opacity": 1,
+            "orientationThreshold": 100000000,
+            "widthRatio": 1
+          },
+          "width": 4,
+          "widthRatio": 1,
+          "xCol": "_time",
+          "xPos": 4,
+          "yCol": "_value",
+          "yPos": 8
+        },
+        {
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "10",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colorMapping": {
+            "implied_state_of_charge_pct-blind1-shunt-battery-downstairs-mean-": "#31C0F6"
+          },
+          "colorizeRows": true,
+          "colors": [
+            {
+              "id": "hz9RF6x4OQhcNcQyIQV_j",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "id": "bW_jz4gfUB2-Ox8bUsiD0",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "id": "DvDLPwktQglgBuzTXrTuT",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "line",
+          "height": 4,
+          "hoverDimension": "auto",
+          "kind": "Xy",
+          "legendColorizeRows": true,
+          "legendOpacity": 1,
+          "legendOrientationThreshold": 100000000,
+          "name": "Shunt: SOC",
+          "opacity": 1,
+          "orientationThreshold": 100000000,
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"blind1\")\n  |> filter(fn: (r) => r[\"device\"] == \"shunt\")\n  |> filter(fn: (r) => r[\"_field\"] == \"implied_state_of_charge_pct\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"mean\")"
+            }
+          ],
+          "staticLegend": {
+            "colorizeRows": true,
+            "opacity": 1,
+            "orientationThreshold": 100000000,
+            "widthRatio": 1
+          },
+          "width": 4,
+          "widthRatio": 1,
+          "xCol": "_time",
+          "xPos": 4,
+          "yCol": "_value",
+          "yPos": 12
+        },
+        {
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "10",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colorMapping": {
+            "state_of_charge_pct-blind1-bms-battery-downstairs-mean-": "#31C0F6"
+          },
+          "colorizeRows": true,
+          "colors": [
+            {
+              "id": "JYFgd87ssEEom5gAZx2ep",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "id": "3efCcEXeBqTUW112HI_An",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "id": "PEaXYroWWBvJOzpc7GlWK",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "line",
+          "height": 4,
+          "hoverDimension": "auto",
+          "kind": "Xy",
+          "legendColorizeRows": true,
+          "legendOpacity": 1,
+          "legendOrientationThreshold": 100000000,
+          "name": "Chins: SOC",
+          "opacity": 1,
+          "orientationThreshold": 100000000,
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"blind1\")\n  |> filter(fn: (r) => r[\"device\"] == \"bms\")\n  |> filter(fn: (r) => r[\"location\"] == \"battery\")\n  |> filter(fn: (r) => r[\"_field\"] == \"state_of_charge_pct\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"mean\")"
+            }
+          ],
+          "staticLegend": {
+            "colorizeRows": true,
+            "opacity": 1,
+            "orientationThreshold": 100000000,
+            "widthRatio": 1
+          },
+          "width": 4,
+          "widthRatio": 1,
+          "xCol": "_time",
+          "xPos": 4,
+          "yCol": "_value",
+          "yPos": 16
+        },
+        {
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "10",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colorMapping": {
+            "expected, both weize-weize share of bank current, percent-": "#31C0F6",
+            "expected, one weize-weize share of bank current, percent-": "#A500A5",
+            "weize, inferred-weize share of bank current, percent-": "#FF7E27"
+          },
+          "colorizeRows": true,
+          "colors": [
+            {
+              "id": "JYFgd87ssEEom5gAZx2ep",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "id": "3efCcEXeBqTUW112HI_An",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "id": "PEaXYroWWBvJOzpc7GlWK",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "line",
+          "height": 4,
+          "hoverDimension": "auto",
+          "kind": "Xy",
+          "legendColorizeRows": true,
+          "legendOpacity": 1,
+          "legendOrientationThreshold": 100000000,
+          "name": "Power Split - Weize Percent",
+          "opacity": 1,
+          "orientationThreshold": 100000000,
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "// At least one collection interval, or a zoomed-in panel makes empty windows.\n  w = if int(v: v.windowPeriod) < int(v: 3m) then 3m else v.windowPeriod\n\n  base = from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"blind1\")\n    |> filter(fn: (r) => r._field == \"pack_amps\" or r._field == \"shunt_amps\")\n    |> filter(fn: (r) => r.device == \"bms\" or r.device == \"shunt\")\n    |> aggregateWindow(every: w, fn: mean, createEmpty: false)\n    |> keep(columns: [\"_start\", \"_stop\", \"_time\", \"_field\", \"_value\"])\n    |> group()\n    |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n    |> filter(fn: (r) => exists r.pack_amps and exists r.shunt_amps)\n\n\n  weize = base |> map(fn: (r) => ({\n    _start: r._start, _stop: r._stop, _time: r._time,\n    _value: 100.0 * (r.shunt_amps - r.pack_amps) / r.shunt_amps,\n    series: \"weize, inferred\"}))\n\n  // 200 Ah of 520. Where the pair should sit if both are working.\n  both_weize = base |> map(fn: (r) => ({\n    _start: r._start, _stop: r._stop, _time: r._time,\n    _value: 100.0 * 200.0 / 520.0,\n    series: \"expected, both weize\"}))\n\n  // 100 Ah of 420. Where it would sit if only one is carrying load.\n  one_weize = base |> map(fn: (r) => ({\n    _start: r._start, _stop: r._stop, _time: r._time,\n    _value: 100.0 * 100.0 / 420.0,\n    series: \"expected, one weize\"}))\n\n  union(tables: [weize, both_weize, one_weize])\n    |> group(columns: [\"series\"])\n    |> sort(columns: [\"_time\"])\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n    |> yield(name: \"weize share of bank current, percent\")"
+            }
+          ],
+          "staticLegend": {
+            "colorizeRows": true,
+            "opacity": 1,
+            "orientationThreshold": 100000000,
+            "widthRatio": 1
+          },
+          "width": 4,
+          "widthRatio": 1,
+          "xCol": "_time",
+          "xPos": 8,
+          "yCol": "_value",
+          "yPos": 8
+        },
+        {
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "10",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colorMapping": {
+            "remaining_capacity_ah-blind1-shunt-battery-downstairs-mean-": "#31C0F6"
+          },
+          "colorizeRows": true,
+          "colors": [
+            {
+              "id": "hz9RF6x4OQhcNcQyIQV_j",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "id": "bW_jz4gfUB2-Ox8bUsiD0",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "id": "DvDLPwktQglgBuzTXrTuT",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "line",
+          "height": 4,
+          "hoverDimension": "auto",
+          "kind": "Xy",
+          "legendColorizeRows": true,
+          "legendOpacity": 1,
+          "legendOrientationThreshold": 100000000,
+          "name": "Shunt: AH",
+          "opacity": 1,
+          "orientationThreshold": 100000000,
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"blind1\")\n  |> filter(fn: (r) => r[\"_field\"] == \"remaining_capacity_ah\")\n  |> filter(fn: (r) => r[\"device\"] == \"shunt\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"mean\")"
+            }
+          ],
+          "staticLegend": {
+            "colorizeRows": true,
+            "opacity": 1,
+            "orientationThreshold": 100000000,
+            "widthRatio": 1
+          },
+          "width": 4,
+          "widthRatio": 1,
+          "xCol": "_time",
+          "xPos": 8,
+          "yCol": "_value",
+          "yPos": 12
+        },
+        {
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "10",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colorMapping": {
+            "chins, actual-chins share of bank current, percent-": "#31C0F6",
+            "expected, both weize-chins share of bank current, percent-": "#A500A5",
+            "expected, one weize-chins share of bank current, percent-": "#FF7E27"
+          },
+          "colorizeRows": true,
+          "colors": [
+            {
+              "id": "JYFgd87ssEEom5gAZx2ep",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "id": "3efCcEXeBqTUW112HI_An",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "id": "PEaXYroWWBvJOzpc7GlWK",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "line",
+          "height": 4,
+          "hoverDimension": "auto",
+          "kind": "Xy",
+          "legendColorizeRows": true,
+          "legendOpacity": 1,
+          "legendOrientationThreshold": 100000000,
+          "name": "Power Split - Chins Daily Percent",
+          "opacity": 1,
+          "orientationThreshold": 100000000,
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "// At least one collection interval, or a zoomed-in panel makes empty windows.\n  w = if int(v: v.windowPeriod) < int(v: 3m) then 3m else v.windowPeriod\n\n  base = from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"blind1\")\n    |> filter(fn: (r) => r._field == \"pack_amps\" or r._field == \"shunt_amps\")\n    |> filter(fn: (r) => r.device == \"bms\" or r.device == \"shunt\")\n    |> aggregateWindow(every: w, fn: mean, createEmpty: false)\n    |> keep(columns: [\"_start\", \"_stop\", \"_time\", \"_field\", \"_value\"])\n    |> group()\n    |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n    |> filter(fn: (r) => exists r.pack_amps and exists r.shunt_amps)\n\n\n  chins = base |> map(fn: (r) => ({\n    _start: r._start, _stop: r._stop, _time: r._time,\n    _value: 100.0 * r.pack_amps / r.shunt_amps,\n    series: \"chins, actual\"}))\n\n  // 320 Ah of 520. Where the chins should sit if both weize are working.\n  both_weize = base |> map(fn: (r) => ({\n    _start: r._start, _stop: r._stop, _time: r._time,\n    _value: 100.0 * 320.0 / 520.0,\n    series: \"expected, both weize\"}))\n\n  // 320 Ah of 420. Where it would sit if one weize had dropped out.\n  one_weize = base |> map(fn: (r) => ({\n    _start: r._start, _stop: r._stop, _time: r._time,\n    _value: 100.0 * 320.0 / 420.0,\n    series: \"expected, one weize\"}))\n\n  union(tables: [chins, both_weize, one_weize])\n    |> group(columns: [\"series\"])\n    |> sort(columns: [\"_time\"])\n    |> aggregateWindow(every: 1d, fn: mean, createEmpty: false)\n    |> yield(name: \"chins share of bank current, percent\")"
+            }
+          ],
+          "staticLegend": {
+            "colorizeRows": true,
+            "opacity": 1,
+            "orientationThreshold": 100000000,
+            "widthRatio": 1
+          },
+          "width": 4,
+          "widthRatio": 1,
+          "xCol": "_time",
+          "xPos": 8,
+          "yCol": "_value",
+          "yPos": 16
+        }
+      ],
+      "name": "Blind: Power Calcs"
+    }
+  }
+]

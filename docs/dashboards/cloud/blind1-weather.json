@@ -1,0 +1,439 @@
+[
+  {
+    "apiVersion": "influxdata.com/v2alpha1",
+    "kind": "Dashboard",
+    "metadata": {
+      "name": "zealous-kowalevski-afe001"
+    },
+    "spec": {
+      "charts": [
+        {
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "10",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colorMapping": {
+            "humidity-blind1-box-raspberrypi-pi-upstairs-mean-": "#31C0F6",
+            "humidity-blind1-box-undefined-pi-downstairs-mean-": "#A500A5"
+          },
+          "colorizeRows": true,
+          "colors": [
+            {
+              "id": "0A2oM1ldMXU99_EqDn89S",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "id": "VCJjOc8ccl_34bGi_xGY1",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "id": "uXAN4mjhT3Ovm9g8W4zkY",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "line",
+          "height": 2,
+          "hoverDimension": "auto",
+          "kind": "Xy",
+          "legendColorizeRows": true,
+          "legendOpacity": 1,
+          "legendOrientationThreshold": 100000000,
+          "name": "Interior Humidity",
+          "opacity": 1,
+          "orientationThreshold": 100000000,
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"blind1\")\n  |> filter(fn: (r) => r[\"_field\"] == \"humidity\")\n  |> filter(fn: (r) => r[\"location\"] == \"pi\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"mean\")"
+            }
+          ],
+          "staticLegend": {
+            "colorizeRows": true,
+            "opacity": 1,
+            "orientationThreshold": 100000000,
+            "widthRatio": 1
+          },
+          "width": 12,
+          "widthRatio": 1,
+          "xCol": "_time",
+          "yCol": "_value"
+        },
+        {
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "10",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colorMapping": {
+            "cpu_temp_f-blind1-host-raspberrypi-pi-upstairs-mean-": "rgb(106, 103, 205)",
+            "cpu_temp_f-blind1-host-undefined-pi-downstairs-mean-": "rgb(161, 53, 158)",
+            "temp-blind1-box-raspberrypi-pi-upstairs-mean-": "rgb(255, 126, 39)",
+            "temp-blind1-box-undefined-pi-downstairs-mean-": "rgb(209, 70, 101)",
+            "temp-blind1-outdoor_temp-raspberrypi-outdoor-upstairs-mean-": "rgb(49, 192, 246)"
+          },
+          "colorizeRows": true,
+          "colors": [
+            {
+              "id": "0A2oM1ldMXU99_EqDn89S",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "id": "VCJjOc8ccl_34bGi_xGY1",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "id": "uXAN4mjhT3Ovm9g8W4zkY",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "line",
+          "height": 3,
+          "hoverDimension": "auto",
+          "kind": "Xy",
+          "legendColorizeRows": true,
+          "legendOpacity": 1,
+          "legendOrientationThreshold": 100000000,
+          "name": "Temp",
+          "opacity": 1,
+          "orientationThreshold": 100000000,
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"blind1\")\n  |> filter(fn: (r) => r[\"_field\"] == \"temp\" or r[\"_field\"] == \"cpu_temp_f\")\n  |> filter(fn: (r) => r[\"location\"] == \"pi\" or r[\"location\"] == \"outdoor\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"mean\")"
+            }
+          ],
+          "staticLegend": {
+            "colorizeRows": true,
+            "opacity": 1,
+            "orientationThreshold": 100000000,
+            "widthRatio": 1
+          },
+          "width": 12,
+          "widthRatio": 1,
+          "xCol": "_time",
+          "yCol": "_value",
+          "yPos": 2
+        },
+        {
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "10",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colorMapping": {
+            "voltage-blind1-pi-mean-": "#31C0F6"
+          },
+          "colorizeRows": true,
+          "colors": [
+            {
+              "id": "0A2oM1ldMXU99_EqDn89S",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "id": "VCJjOc8ccl_34bGi_xGY1",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "id": "uXAN4mjhT3Ovm9g8W4zkY",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "line",
+          "height": 5,
+          "hoverDimension": "auto",
+          "kind": "Xy",
+          "legendColorizeRows": true,
+          "legendOpacity": 1,
+          "legendOrientationThreshold": 100000000,
+          "name": "Voltage (at pi)",
+          "opacity": 1,
+          "orientationThreshold": 100000000,
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"blind1\")\n  |> filter(fn: (r) => r[\"_field\"] == \"voltage\")\n  |> filter(fn: (r) => r[\"location\"] == \"pi\")\n  |> aggregateWindow(every: v.windowPeriod, fn: median, createEmpty: false)\n  |> yield(name: \"mean\")"
+            }
+          ],
+          "staticLegend": {
+            "colorizeRows": true,
+            "opacity": 1,
+            "orientationThreshold": 100000000,
+            "widthRatio": 1
+          },
+          "width": 6,
+          "widthRatio": 1,
+          "xCol": "_time",
+          "yCol": "_value",
+          "yPos": 5
+        },
+        {
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "2",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colorMapping": {
+            "total_rainfall-": "#31C0F6"
+          },
+          "colorizeRows": true,
+          "colors": [
+            {
+              "id": "0A2oM1ldMXU99_EqDn89S",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "id": "VCJjOc8ccl_34bGi_xGY1",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "id": "uXAN4mjhT3Ovm9g8W4zkY",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "line",
+          "height": 5,
+          "hoverDimension": "auto",
+          "kind": "Xy",
+          "legendColorizeRows": true,
+          "legendOpacity": 1,
+          "legendOrientationThreshold": 100000000,
+          "name": "Rain Inches (cumulative)",
+          "opacity": 1,
+          "orientationThreshold": 100000000,
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"blind1\")\n  |> filter(fn: (r) => r[\"_field\"] == \"rain_inches\")\n  |> filter(fn: (r) => r[\"location\"] == \"outdoor\")\n  |> drop(columns: [\"device\", \"node\", \"host\"])\n  |> group(columns: [])\n  |> sort(columns: [\"_time\"])\n  |> difference(nonNegative: true)\n  |> cumulativeSum(columns: [\"_value\"])\n  |> yield(name: \"total_rainfall\")"
+            }
+          ],
+          "staticLegend": {
+            "colorizeRows": true,
+            "opacity": 1,
+            "orientationThreshold": 100000000,
+            "widthRatio": 1
+          },
+          "width": 12,
+          "widthRatio": 1,
+          "xCol": "_time",
+          "yCol": "_value",
+          "yPos": 10
+        },
+        {
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "10",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colorMapping": {
+            "rain_inches-blind1-rain-raspberrypi-outdoor-upstairs-mean-": "#31C0F6"
+          },
+          "colorizeRows": true,
+          "colors": [
+            {
+              "id": "0A2oM1ldMXU99_EqDn89S",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "id": "VCJjOc8ccl_34bGi_xGY1",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "id": "uXAN4mjhT3Ovm9g8W4zkY",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "line",
+          "height": 5,
+          "hoverDimension": "auto",
+          "kind": "Xy",
+          "legendColorizeRows": true,
+          "legendOpacity": 1,
+          "legendOrientationThreshold": 100000000,
+          "name": "Rainfall (per 5m)",
+          "opacity": 1,
+          "orientationThreshold": 100000000,
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"blind1\")\n  |> filter(fn: (r) => r[\"_field\"] == \"rain_inches\")\n  |> filter(fn: (r) => r[\"location\"] == \"outdoor\")\n  |> difference(nonNegative: true)\n  |> aggregateWindow(every: 5m, fn: sum, createEmpty: false)\n  |> yield(name: \"mean\")"
+            }
+          ],
+          "staticLegend": {
+            "colorizeRows": true,
+            "opacity": 1,
+            "orientationThreshold": 100000000,
+            "widthRatio": 1
+          },
+          "width": 6,
+          "widthRatio": 1,
+          "xCol": "_time",
+          "yCol": "_value",
+          "yPos": 15
+        },
+        {
+          "colors": [
+            {
+              "id": "0",
+              "name": "laser",
+              "type": "min",
+              "hex": "#00C9FF"
+            },
+            {
+              "id": "1",
+              "name": "comet",
+              "type": "max",
+              "hex": "#9394FF",
+              "value": 5
+            }
+          ],
+          "decimalPlaces": 2,
+          "height": 5,
+          "kind": "Gauge",
+          "name": "Total Rainfall",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"blind1\")\n  |> filter(fn: (r) => r[\"_field\"] == \"rain_inches\")\n  |> filter(fn: (r) => r[\"location\"] == \"outdoor\")\n  |> drop(columns: [\"device\", \"node\", \"host\"])\n  |> group(columns: [])\n  |> sort(columns: [\"_time\"])\n  |> difference(nonNegative: true)\n  |> cumulativeSum(columns: [\"_value\"])\n  |> yield(name: \"mean\")"
+            }
+          ],
+          "staticLegend": {},
+          "width": 6,
+          "xPos": 6,
+          "yPos": 5
+        },
+        {
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "10",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colorMapping": {
+            "rain_inches-blind1-rain-raspberrypi-outdoor-upstairs-mean-": "#31C0F6"
+          },
+          "colorizeRows": true,
+          "colors": [
+            {
+              "id": "0A2oM1ldMXU99_EqDn89S",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "id": "VCJjOc8ccl_34bGi_xGY1",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "id": "uXAN4mjhT3Ovm9g8W4zkY",
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "line",
+          "height": 5,
+          "hoverDimension": "auto",
+          "kind": "Xy",
+          "legendColorizeRows": true,
+          "legendOpacity": 1,
+          "legendOrientationThreshold": 100000000,
+          "name": "Rainfall Hourly Rate (5m ave)",
+          "opacity": 1,
+          "orientationThreshold": 100000000,
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "import \"experimental/aggregate\"\n\n\nfrom(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"blind1\")\n  |> filter(fn: (r) => r[\"_field\"] == \"rain_inches\")\n  |> filter(fn: (r) => r[\"location\"] == \"outdoor\")\n  |> difference(nonNegative: true)\n//  |> aggregate.rate(every: 5m, unit: 1h)\n  |> aggregateWindow(every: 5m, fn: sum, createEmpty: false)\n  |> map(fn: (r) => ({ r with _value: r._value * 12.0 })) // 1h is 12x 5m\n  |> yield(name: \"mean\")"
+            }
+          ],
+          "staticLegend": {
+            "colorizeRows": true,
+            "opacity": 1,
+            "orientationThreshold": 100000000,
+            "widthRatio": 1
+          },
+          "width": 6,
+          "widthRatio": 1,
+          "xCol": "_time",
+          "xPos": 6,
+          "yCol": "_value",
+          "yPos": 15
+        }
+      ],
+      "name": "Blind1: Weather"
+    }
+  }
+]

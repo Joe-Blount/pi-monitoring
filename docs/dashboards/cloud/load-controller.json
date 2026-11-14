@@ -1,0 +1,554 @@
+[
+  {
+    "apiVersion": "influxdata.com/v2alpha1",
+    "kind": "Dashboard",
+    "metadata": {
+      "name": "spectacular-dijkstra-6fe001"
+    },
+    "spec": {
+      "charts": [
+        {
+          "colors": [
+            {
+              "name": "base",
+              "type": "background",
+              "hex": "#DC4E58"
+            },
+            {
+              "name": "c",
+              "type": "background",
+              "hex": "#FFB94A",
+              "value": 25
+            },
+            {
+              "name": "c",
+              "type": "background",
+              "hex": "#34BB55",
+              "value": 50
+            }
+          ],
+          "decimalPlaces": 0,
+          "height": 2,
+          "kind": "Single_Stat",
+          "name": "Battery charge",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.node == v.pi and r.device == \"bms\" and r._field == \"state_of_charge_pct\")\n  |> last()"
+            }
+          ],
+          "staticLegend": {},
+          "suffix": "%",
+          "width": 2
+        },
+        {
+          "axes": [
+            {
+              "name": "x"
+            },
+            {
+              "name": "y"
+            }
+          ],
+          "colors": [
+            {
+              "hex": "#74D495"
+            },
+            {
+              "hex": "#3F3FBA"
+            },
+            {
+              "hex": "#FF4D9E"
+            }
+          ],
+          "height": 3,
+          "kind": "Mosaic",
+          "name": "Load power (green on, red off)",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.node == v.pi and r.device == \"control\" and exists r.load and r._field == \"powered\")\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> map(fn: (r) => ({r with _value: if r._value > 0.5 then \"on\" else \"off\"}))"
+            }
+          ],
+          "staticLegend": {},
+          "width": 12,
+          "xCol": "_time",
+          "yLabelColumns": [
+            "load"
+          ],
+          "yPos": 2,
+          "ySeriesColumns": [
+            "load"
+          ]
+        },
+        {
+          "colors": [
+            {
+              "name": "white",
+              "type": "text",
+              "hex": "#FFFFFF"
+            }
+          ],
+          "decimalPlaces": 1,
+          "height": 4,
+          "kind": "Table",
+          "name": "Why each load is where it is (latest)",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.node == v.pi and r.device == \"control\" and exists r.load and contains(value: r._field, set: [\"powered\", \"shed_level\", \"reason\", \"decided_on\", \"floor_latched_by\", \"level_changes\"]))\n  |> last()\n  |> map(fn: (r) => ({load: r.load, _field: r._field, _value: string(v: r._value)}))\n  |> group()\n  |> pivot(rowKey: [\"load\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> keep(columns: [\"load\", \"powered\", \"shed_level\", \"reason\", \"decided_on\", \"floor_latched_by\", \"level_changes\"])"
+            }
+          ],
+          "staticLegend": {},
+          "tableOptions": {
+            "fixFirstColumn": true,
+            "sortBy": "load",
+            "verticalTimeAxis": true,
+            "wrapping": "wrap"
+          },
+          "timeFormat": "YYYY-MM-DD HH:mm:ss",
+          "width": 8,
+          "yPos": 5
+        },
+        {
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "10",
+              "label": "%",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colorMapping": {
+            "state_of_charge_pct-blind1-bms-battery-downstairs-_result-": "#31C0F6"
+          },
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "line",
+          "height": 4,
+          "kind": "Xy",
+          "name": "Battery charge",
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.node == v.pi and r.device == \"bms\" and r._field == \"state_of_charge_pct\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
+            }
+          ],
+          "staticLegend": {},
+          "width": 6,
+          "xCol": "_time",
+          "yCol": "_value",
+          "yPos": 9
+        },
+        {
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "10",
+              "label": "V",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colorMapping": {
+            "battery_volts-blind1-mppt-solar-downstairs-_result-": "#31C0F6"
+          },
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "line",
+          "height": 4,
+          "kind": "Xy",
+          "name": "Battery volts",
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.node == v.pi and r.device == \"mppt\" and r._field == \"battery_volts\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
+            }
+          ],
+          "staticLegend": {},
+          "width": 4,
+          "xCol": "_time",
+          "yCol": "_value",
+          "yPos": 13
+        },
+        {
+          "height": 2,
+          "kind": "Markdown",
+          "name": "Reading this board",
+          "note": "**Pi** at the top picks the node. Every load the controller on that node reports appears by itself.\n\n**Controller age** is how old its last decision is, counted to now. Red above 90 s means the controller, the collector or telegraf stopped.\n\n**Shed level:** 0 means not shed. Each tier the battery falls through adds one.",
+          "staticLegend": {},
+          "width": 12,
+          "yPos": 17
+        },
+        {
+          "colors": [
+            {
+              "name": "base",
+              "type": "background",
+              "hex": "#34BB55"
+            },
+            {
+              "name": "c",
+              "type": "background",
+              "hex": "#FFB94A",
+              "value": 1
+            },
+            {
+              "name": "c",
+              "type": "background",
+              "hex": "#DC4E58",
+              "value": 3
+            }
+          ],
+          "decimalPlaces": 0,
+          "height": 2,
+          "kind": "Single_Stat",
+          "name": "Highest shed level",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.node == v.pi and r.device == \"control\" and exists r.load and r._field == \"shed_level\")\n  |> last()\n  |> group()\n  |> max()"
+            }
+          ],
+          "staticLegend": {},
+          "width": 2,
+          "xPos": 2
+        },
+        {
+          "colors": [
+            {
+              "name": "base",
+              "type": "text",
+              "hex": "#00A3FF"
+            }
+          ],
+          "decimalPlaces": 0,
+          "height": 2,
+          "kind": "Single_Stat",
+          "name": "Loads powered",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.node == v.pi and r.device == \"control\" and exists r.load and r._field == \"powered\")\n  |> last()\n  |> group()\n  |> sum()"
+            }
+          ],
+          "staticLegend": {},
+          "width": 2,
+          "xPos": 4
+        },
+        {
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "10",
+              "label": "F",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colorMapping": {
+            "cpu_temp_f-host-_result-": "#31C0F6",
+            "temp-box-_result-": "#A500A5"
+          },
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "line",
+          "height": 4,
+          "kind": "Xy",
+          "name": "Box and CPU temperature",
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.node == v.pi and ((r.device == \"box\" and r._field == \"temp\") or (r.device == \"host\" and r._field == \"cpu_temp_f\")))\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"device\", \"_field\"])"
+            }
+          ],
+          "staticLegend": {},
+          "width": 4,
+          "xCol": "_time",
+          "xPos": 4,
+          "yCol": "_value",
+          "yPos": 13
+        },
+        {
+          "colors": [
+            {
+              "name": "base",
+              "type": "background",
+              "hex": "#34BB55"
+            },
+            {
+              "name": "c",
+              "type": "background",
+              "hex": "#DC4E58",
+              "value": 90
+            }
+          ],
+          "decimalPlaces": 0,
+          "height": 2,
+          "kind": "Single_Stat",
+          "name": "Controller age",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.node == v.pi and r.device == \"control\" and not exists r.load and r._field == \"published_age_seconds\")\n  |> last()\n  |> map(fn: (r) => ({r with _value: r._value + float(v: int(v: now()) - int(v: r._time)) / 1000000000.0}))"
+            }
+          ],
+          "staticLegend": {},
+          "suffix": " s",
+          "width": 2,
+          "xPos": 6
+        },
+        {
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "10",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colorMapping": {
+            "cameras_far-_result-": "rgb(49, 192, 246)",
+            "cameras_near-_result-": "rgb(125, 80, 190)",
+            "cpu_fan-_result-": "rgb(194, 58, 121)",
+            "nvr-_result-": "rgb(255, 126, 39)"
+          },
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "step",
+          "height": 4,
+          "kind": "Xy",
+          "name": "Shed level per load",
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.node == v.pi and r.device == \"control\" and exists r.load and r._field == \"shed_level\")\n  |> aggregateWindow(every: v.windowPeriod, fn: max, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"load\"])"
+            }
+          ],
+          "staticLegend": {},
+          "width": 6,
+          "xCol": "_time",
+          "xPos": 6,
+          "yCol": "_value",
+          "yPos": 9
+        },
+        {
+          "colors": [
+            {
+              "name": "base",
+              "type": "background",
+              "hex": "#DC4E58"
+            },
+            {
+              "name": "c",
+              "type": "background",
+              "hex": "#34BB55",
+              "value": 1
+            }
+          ],
+          "decimalPlaces": 0,
+          "height": 2,
+          "kind": "Single_Stat",
+          "name": "Clock trusted (1 = yes)",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.node == v.pi and r.device == \"control\" and not exists r.load and r._field == \"clock_synced\")\n  |> last()"
+            }
+          ],
+          "staticLegend": {},
+          "width": 2,
+          "xPos": 8
+        },
+        {
+          "colors": [
+            {
+              "name": "white",
+              "type": "text",
+              "hex": "#FFFFFF"
+            }
+          ],
+          "decimalPlaces": 1,
+          "height": 4,
+          "kind": "Table",
+          "name": "Controller (latest)",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.node == v.pi and r.device == \"control\" and not exists r.load and contains(value: r._field, set: [\"ok\", \"error_message\", \"clock_reason\", \"passes\"]))\n  |> last()\n  |> map(fn: (r) => ({_time: r._time, _field: r._field, _value: string(v: r._value)}))\n  |> group()\n  |> keep(columns: [\"_field\", \"_value\", \"_time\"])"
+            }
+          ],
+          "staticLegend": {},
+          "tableOptions": {
+            "fixFirstColumn": true,
+            "sortBy": "_field",
+            "verticalTimeAxis": true,
+            "wrapping": "wrap"
+          },
+          "timeFormat": "YYYY-MM-DD HH:mm:ss",
+          "width": 4,
+          "xPos": 8,
+          "yPos": 5
+        },
+        {
+          "axes": [
+            {
+              "base": "10",
+              "name": "x",
+              "scale": "linear"
+            },
+            {
+              "base": "10",
+              "name": "y",
+              "scale": "linear"
+            }
+          ],
+          "colorMapping": {
+            "cameras_far-_result-": "rgb(49, 192, 246)",
+            "cameras_near-_result-": "rgb(125, 80, 190)",
+            "cpu_fan-_result-": "rgb(194, 58, 121)",
+            "nvr-_result-": "rgb(255, 126, 39)"
+          },
+          "colors": [
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#31C0F6"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#A500A5"
+            },
+            {
+              "name": "Nineteen Eighty Four",
+              "type": "scale",
+              "hex": "#FF7E27"
+            }
+          ],
+          "geom": "step",
+          "height": 4,
+          "kind": "Xy",
+          "name": "Relay switches per hour",
+          "position": "overlaid",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.node == v.pi and r.device == \"control\" and exists r.load and r._field == \"level_changes\")\n  |> difference(nonNegative: true)\n  |> aggregateWindow(every: 1h, fn: sum, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"load\"])"
+            }
+          ],
+          "staticLegend": {},
+          "width": 4,
+          "xCol": "_time",
+          "xPos": 8,
+          "yCol": "_value",
+          "yPos": 13
+        },
+        {
+          "colors": [
+            {
+              "name": "base",
+              "type": "background",
+              "hex": "#34BB55"
+            },
+            {
+              "name": "c",
+              "type": "background",
+              "hex": "#FFB94A",
+              "value": 100
+            },
+            {
+              "name": "c",
+              "type": "background",
+              "hex": "#DC4E58",
+              "value": 120
+            }
+          ],
+          "decimalPlaces": 0,
+          "height": 2,
+          "kind": "Single_Stat",
+          "name": "Box temperature",
+          "queries": [
+            {
+              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.node == v.pi and r.device == \"box\" and r._field == \"temp\")\n  |> last()"
+            }
+          ],
+          "staticLegend": {},
+          "suffix": " F",
+          "width": 2,
+          "xPos": 10
+        }
+      ],
+      "description": "Load controller status for one Pi, picked by the pi variable.",
+      "name": "Load controller"
+    }
+  }
+]
