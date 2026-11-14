@@ -302,6 +302,36 @@ If that directory is owned by root because someone ran `collect` by hand
 with `sudo`, the service user can no longer write to it, and the controller
 is deciding from nothing.
 
+## How much energy went into and out of the battery each day
+
+Paste [docs/queries/blind1-daily-energy.flux](queries/blind1-daily-energy.flux)
+into a dashboard cell, shown as a table. It gives one row per local day, in
+watt-hours unless the name says otherwise. The last row is today so far.
+
+The shunt sits where the battery bank joins the rest of the system. Solar
+that feeds a load directly never crosses it. So the shunt tells what the bank
+did, and the charge controller is needed to tell what the loads used.
+
+| Column | Meaning |
+|---|---|
+| `bank_in_wh` | Energy into the bank through the shunt, heater draw included. |
+| `bank_out_wh` | Energy out of the bank through the shunt. |
+| `bank_net_wh` | `bank_in_wh` less `bank_out_wh`. Heater energy is in it but is not stored, so on a cold day it reads high. |
+| `ah_net` | The change in the shunt's remaining capacity. A cross-check on the sign of `bank_net_wh`. It flattens while the shunt is clamped at full or empty. |
+| `solar_wh` | The charge controller's production, from its lifetime yield. |
+| `load_wh` | Everything the loads used: `solar_wh` less `bank_net_wh`. Includes the wiring loss between the controller and the shunt. Leaves out heater energy. |
+| `direct_solar_wh` | Solar the loads used without it crossing the shunt: `solar_wh` less `bank_in_wh`. |
+| `night_load_wh` | Energy out of the bank while the controller produced nothing. |
+| `night_hours` | How long the controller produced nothing. An overcast day is not night. |
+| `night_avg_w` | `night_load_wh` over `night_hours`: the load's average draw in the dark. |
+| `solar_wh_check` | The controller's output power, summed from its snapshots. It should land close to `solar_wh`. A large gap means a counter reset or missing readings. |
+| `shunt_coverage_pct` | Shunt readings received, of one a minute. Well under 100 means the in and out split is less certain; their sum still holds. |
+
+A day's `load_wh` is what the loads drew at that day's state of charge. The
+shedding ladder cuts the cameras and the recorder as the charge falls, and
+irrigation runs only on a full, charging bank, so a sunny day's load
+overstates what a dark spell draws.
+
 ## What to do when telegraf is down
 
 ```
