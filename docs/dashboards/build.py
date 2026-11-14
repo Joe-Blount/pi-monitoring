@@ -188,7 +188,8 @@ moving = amps |> filter(fn: (r) => math.abs(x: r.shunt_amps) >= 2.0)
 // three-minute windows and only windows holding both devices count, so a gap
 // in one device does not tilt the day. Three minutes divides the day, and
 // each window counts on the day it starts, so no window crosses midnight and
-// the figure does not change with the dashboard's range.
+// a whole day's figure does not change with the dashboard's zoom. A day the
+// range cuts holds only the part inside the range.
 daily = from(bucket: "raw")
     |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
     |> filter(
