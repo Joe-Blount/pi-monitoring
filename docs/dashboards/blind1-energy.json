@@ -1,0 +1,706 @@
+{
+  "meta": {
+    "version": "1",
+    "type": "dashboard",
+    "name": "Blind energy-Template",
+    "description": ""
+  },
+  "content": {
+    "data": {
+      "type": "dashboard",
+      "attributes": {
+        "name": "Blind energy",
+        "description": "The blind's battery bank and solar, from the shunt and the charge controller."
+      },
+      "relationships": {
+        "label": {
+          "data": []
+        },
+        "cell": {
+          "data": [
+            {
+              "type": "cell",
+              "id": "1"
+            },
+            {
+              "type": "cell",
+              "id": "2"
+            },
+            {
+              "type": "cell",
+              "id": "3"
+            },
+            {
+              "type": "cell",
+              "id": "4"
+            },
+            {
+              "type": "cell",
+              "id": "5"
+            },
+            {
+              "type": "cell",
+              "id": "6"
+            }
+          ]
+        },
+        "variable": {
+          "data": []
+        }
+      }
+    },
+    "included": [
+      {
+        "id": "1",
+        "type": "cell",
+        "attributes": {
+          "x": 0,
+          "y": 0,
+          "w": 9,
+          "h": 4
+        },
+        "relationships": {
+          "view": {
+            "data": {
+              "type": "view",
+              "id": "1"
+            }
+          }
+        }
+      },
+      {
+        "id": "1",
+        "type": "view",
+        "attributes": {
+          "name": "Where the load's power comes from",
+          "properties": {
+            "shape": "chronograf-v2",
+            "type": "xy",
+            "queries": [
+              {
+                "text": "// Where the loads' power comes from, and where the surplus goes. Stacked,\n// the two \"loads from\" series add up to the whole load, and all three to\n// the charge controller's output. The shunt reports every minute and the\n// controller every thirty seconds, so both are averaged over a common\n// window of at least five minutes. Heater draw crosses the shunt as charge\n// and shows as surplus to the bank.\n\nw = if int(v: v.windowPeriod) < int(v: 5m) then 5m else v.windowPeriod\n\nnode = from(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(fn: (r) => r._measurement == \"blind1\" and r.node == \"downstairs\")\n\nbank = node\n    |> filter(\n        fn: (r) => r.device == \"shunt\" and (r._field == \"shunt_volts\" or r._field == \"shunt_amps\"),\n    )\n    |> group()\n    |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n    |> filter(fn: (r) => exists r.shunt_volts and exists r.shunt_amps)\n    |> map(fn: (r) => ({_time: r._time, _value: r.shunt_volts * r.shunt_amps}))\n    |> aggregateWindow(every: w, fn: mean, createEmpty: false)\n\nsolar = node\n    |> filter(fn: (r) => r.device == \"mppt\" and r._field == \"battery_watts\")\n    |> group()\n    |> keep(columns: [\"_time\", \"_value\"])\n    |> aggregateWindow(every: w, fn: mean, createEmpty: false)\n\nboth = join(tables: {b: bank, s: solar}, on: [\"_time\"])\n\nfrom_bank = both\n    |> map(\n        fn: (r) =>\n            ({_time: r._time, _field: \"loads from battery\",\n                _value: if r._value_b < 0.0 then 0.0 - r._value_b else 0.0,\n            }),\n    )\n\nfrom_solar = both\n    |> map(\n        fn: (r) => {\n            into = if r._value_b > 0.0 then r._value_b else 0.0\n            direct = r._value_s - into\n\n            return {_time: r._time, _field: \"loads from solar\",\n                _value: if direct > 0.0 then direct else 0.0,\n            }\n        },\n    )\n\nto_bank = both\n    |> map(\n        fn: (r) =>\n            ({_time: r._time, _field: \"surplus to bank\",\n                _value: if r._value_b > 0.0 then r._value_b else 0.0,\n            }),\n    )\n\nunion(tables: [from_bank, from_solar, to_bank])\n    |> group(columns: [\"_field\"])\n    |> sort(columns: [\"_time\"])\n",
+                "editMode": "advanced",
+                "name": "",
+                "builderConfig": {
+                  "buckets": [],
+                  "tags": [
+                    {
+                      "key": "_measurement",
+                      "values": [],
+                      "aggregateFunctionType": "filter"
+                    }
+                  ],
+                  "functions": [],
+                  "aggregateWindow": {
+                    "period": "auto",
+                    "fillValues": false
+                  }
+                }
+              }
+            ],
+            "axes": {
+              "x": {
+                "bounds": [
+                  "",
+                  ""
+                ],
+                "label": "",
+                "prefix": "",
+                "suffix": "",
+                "base": "10",
+                "scale": "linear"
+              },
+              "y": {
+                "bounds": [
+                  "",
+                  ""
+                ],
+                "label": "W",
+                "prefix": "",
+                "suffix": "",
+                "base": "10",
+                "scale": "linear"
+              }
+            },
+            "colors": [
+              {
+                "id": "a",
+                "type": "scale",
+                "hex": "#31C0F6",
+                "name": "Nineteen Eighty Four",
+                "value": 0
+              },
+              {
+                "id": "b",
+                "type": "scale",
+                "hex": "#A500A5",
+                "name": "Nineteen Eighty Four",
+                "value": 0
+              },
+              {
+                "id": "c",
+                "type": "scale",
+                "hex": "#FF7E27",
+                "name": "Nineteen Eighty Four",
+                "value": 0
+              }
+            ],
+            "geom": "line",
+            "position": "stacked",
+            "xColumn": "_time",
+            "yColumn": "_value",
+            "hoverDimension": "auto",
+            "legendColorizeRows": true,
+            "legendOpacity": 1,
+            "legendOrientationThreshold": 100000000,
+            "timeFormat": "",
+            "note": "",
+            "showNoteWhenEmpty": false
+          }
+        }
+      },
+      {
+        "id": "2",
+        "type": "cell",
+        "attributes": {
+          "x": 9,
+          "y": 0,
+          "w": 3,
+          "h": 6
+        },
+        "relationships": {
+          "view": {
+            "data": {
+              "type": "view",
+              "id": "2"
+            }
+          }
+        }
+      },
+      {
+        "id": "2",
+        "type": "view",
+        "attributes": {
+          "name": "Night draw, last 24 hours",
+          "properties": {
+            "shape": "chronograf-v2",
+            "type": "single-stat",
+            "queries": [
+              {
+                "text": "// The bank's average draw while the charge controller produced nothing, over\n// the last 24 hours whatever the dashboard's range. Night is a five-minute\n// bin in which every controller reading shows no panel power.\n\nimport \"date\"\n\nbin = 5m\nstart = -24h\n\nshunt = from(bucket: \"raw\")\n    |> range(start: -25h)\n    |> filter(\n        fn: (r) =>\n            r._measurement == \"blind1\" and r.node == \"downstairs\" and r.device == \"shunt\"\n                and\n                (r._field == \"cumulative_energy_wh\" or r._field == \"charging\"),\n    )\n    |> group()\n    |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n    |> filter(fn: (r) => exists r.cumulative_energy_wh and exists r.charging)\n    |> sort(columns: [\"_time\"])\n    |> difference(columns: [\"cumulative_energy_wh\"], nonNegative: true)\n    |> filter(fn: (r) => exists r.cumulative_energy_wh and r._time >= date.add(d: start, to: now()))\n    |> map(\n        fn: (r) =>\n            ({\n                bin: date.truncate(t: r._time, unit: bin),\n                wh: if r.charging > 0.5 then 0.0 else r.cumulative_energy_wh,\n            }),\n    )\n\ndark = from(bucket: \"raw\")\n    |> range(start: start)\n    |> filter(\n        fn: (r) =>\n            r._measurement == \"blind1\" and r.node == \"downstairs\" and r.device == \"mppt\"\n                and\n                r._field == \"pv_watts\",\n    )\n    |> group()\n    |> map(fn: (r) => ({bin: date.truncate(t: r._time, unit: bin), pv: r._value}))\n    |> group(columns: [\"bin\"])\n    |> max(column: \"pv\")\n    |> group()\n    |> filter(fn: (r) => r.pv <= 0.0)\n    |> map(fn: (r) => ({bin: r.bin, one: 1.0}))\n\nhours = dark\n    |> sum(column: \"one\")\n    |> map(fn: (r) => ({key: 1, hours: r.one * float(v: int(v: bin)) / float(v: int(v: 1h))}))\n\nenergy = join(tables: {s: shunt, d: dark}, on: [\"bin\"])\n    |> sum(column: \"wh\")\n    |> map(fn: (r) => ({key: 1, wh: r.wh}))\n\njoin(tables: {e: energy, h: hours}, on: [\"key\"])\n    |> map(fn: (r) => ({_value: if r.hours > 0.0 then r.wh / r.hours else 0.0}))\n",
+                "editMode": "advanced",
+                "name": "",
+                "builderConfig": {
+                  "buckets": [],
+                  "tags": [
+                    {
+                      "key": "_measurement",
+                      "values": [],
+                      "aggregateFunctionType": "filter"
+                    }
+                  ],
+                  "functions": [],
+                  "aggregateWindow": {
+                    "period": "auto",
+                    "fillValues": false
+                  }
+                }
+              }
+            ],
+            "colors": [
+              {
+                "id": "base",
+                "type": "text",
+                "hex": "#00C9FF",
+                "name": "laser",
+                "value": 0
+              }
+            ],
+            "prefix": "",
+            "tickPrefix": "",
+            "suffix": " W",
+            "tickSuffix": "",
+            "decimalPlaces": {
+              "isEnforced": true,
+              "digits": 0
+            },
+            "note": "",
+            "showNoteWhenEmpty": false
+          }
+        }
+      },
+      {
+        "id": "3",
+        "type": "cell",
+        "attributes": {
+          "x": 0,
+          "y": 4,
+          "w": 9,
+          "h": 2
+        },
+        "relationships": {
+          "view": {
+            "data": {
+              "type": "view",
+              "id": "3"
+            }
+          }
+        }
+      },
+      {
+        "id": "3",
+        "type": "view",
+        "attributes": {
+          "name": "Chins state of charge",
+          "properties": {
+            "shape": "chronograf-v2",
+            "type": "xy",
+            "queries": [
+              {
+                "text": "// The Chins pack's own state of charge, which the shedding ladder follows.\n\nfrom(bucket: \"raw\")\n    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n    |> filter(\n        fn: (r) =>\n            r._measurement == \"blind1\" and r.node == \"downstairs\" and r.device == \"bms\"\n                and\n                r._field == \"state_of_charge_pct\",\n    )\n    |> group()\n    |> keep(columns: [\"_time\", \"_value\"])\n    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n    |> map(fn: (r) => ({r with _field: \"Chins state of charge\"}))\n",
+                "editMode": "advanced",
+                "name": "",
+                "builderConfig": {
+                  "buckets": [],
+                  "tags": [
+                    {
+                      "key": "_measurement",
+                      "values": [],
+                      "aggregateFunctionType": "filter"
+                    }
+                  ],
+                  "functions": [],
+                  "aggregateWindow": {
+                    "period": "auto",
+                    "fillValues": false
+                  }
+                }
+              }
+            ],
+            "axes": {
+              "x": {
+                "bounds": [
+                  "",
+                  ""
+                ],
+                "label": "",
+                "prefix": "",
+                "suffix": "",
+                "base": "10",
+                "scale": "linear"
+              },
+              "y": {
+                "bounds": [
+                  "0",
+                  "100"
+                ],
+                "label": "%",
+                "prefix": "",
+                "suffix": "",
+                "base": "10",
+                "scale": "linear"
+              }
+            },
+            "colors": [
+              {
+                "id": "a",
+                "type": "scale",
+                "hex": "#31C0F6",
+                "name": "Nineteen Eighty Four",
+                "value": 0
+              },
+              {
+                "id": "b",
+                "type": "scale",
+                "hex": "#A500A5",
+                "name": "Nineteen Eighty Four",
+                "value": 0
+              },
+              {
+                "id": "c",
+                "type": "scale",
+                "hex": "#FF7E27",
+                "name": "Nineteen Eighty Four",
+                "value": 0
+              }
+            ],
+            "geom": "line",
+            "position": "overlaid",
+            "xColumn": "_time",
+            "yColumn": "_value",
+            "hoverDimension": "auto",
+            "legendColorizeRows": true,
+            "legendOpacity": 1,
+            "legendOrientationThreshold": 100000000,
+            "timeFormat": "",
+            "note": "",
+            "showNoteWhenEmpty": false
+          }
+        }
+      },
+      {
+        "id": "4",
+        "type": "cell",
+        "attributes": {
+          "x": 0,
+          "y": 6,
+          "w": 6,
+          "h": 3
+        },
+        "relationships": {
+          "view": {
+            "data": {
+              "type": "view",
+              "id": "4"
+            }
+          }
+        }
+      },
+      {
+        "id": "4",
+        "type": "view",
+        "attributes": {
+          "name": "Daily energy, bank",
+          "properties": {
+            "shape": "chronograf-v2",
+            "type": "xy",
+            "queries": [
+              {
+                "text": "// The blind's daily energy, one row per local day, in watt-hours.\n//\n// Two levels. The bank level is what crosses the shunt, which sits where the\n// battery bank joins the rest of the system. The system level adds the\n// charge controller: solar that feeds a load directly never crosses the\n// shunt, so the loads' total is the controller's production less what the\n// bank kept.\n//\n//   bank_in_wh        energy into the bank through the shunt\n//   bank_out_wh       energy out of the bank through the shunt\n//   bank_net_wh       bank_in_wh less bank_out_wh\n//   ah_net            change in the shunt's remaining capacity\n//   solar_wh          the controller's production, from its lifetime yield\n//   load_wh           solar_wh less bank_net_wh: everything the loads used\n//   direct_solar_wh   solar_wh less bank_in_wh: solar the loads used directly\n//   night_load_wh     bank_out_wh while the controller produced nothing\n//   night_hours       how long the controller produced nothing\n//   night_avg_w       night_load_wh over night_hours\n//   solar_wh_check    the controller's output power, integrated\n//   shunt_coverage_pct  shunt readings received, of one a minute\n//\n// The shunt's cumulative_energy_wh counts energy in either direction, so it\n// only ever rises. Each rise between two readings is filed by the shunt's\n// charging flag on the later reading. A rise that spans a change of\n// direction is filed whole under one side, so the split is good to about one\n// poll interval's energy at each change; their sum is exact. A gap in the\n// readings is kept whole and filed by the reading that ends it.\n//\n// A counter that falls has been reset, and that one interval is dropped.\n// Each day reads one hour before its midnight, so its first interval has a\n// reading to start from.\n//\n// Self-heating packs draw their heaters from the charge current through the\n// shunt. That energy is in bank_in_wh and bank_net_wh without being stored.\n// It is not in load_wh, which is therefore the loads alone plus the wiring\n// loss between the two meters.\n//\n// The night is wherever every controller reading in a five-minute bin shows\n// no panel power. An overcast day still produces, so it is not night.\n//\n// ah_net flattens wherever the shunt clamps at full or empty.\n//\n// solar_wh_check holds each output-power snapshot, one every thirty\n// seconds, for the interval it ends, at most five minutes. It misses short\n// changes. A large gap from solar_wh means a counter reset or missing\n// readings, not a better figure.\n\nimport \"date\"\nimport \"timezone\"\n\noption location = timezone.location(name: \"America/Chicago\")\n\n// Expected shunt readings per day, at the node's slow poll interval of 60 s.\nshunt_per_day = 1440.0\n\nstart = date.truncate(t: v.timeRangeStart, unit: 1d)\nlead = date.sub(d: 1h, from: start)\nbin = 5m\n\nnode = from(bucket: \"raw\")\n    |> range(start: lead)\n    |> filter(fn: (r) => r._measurement == \"blind1\" and r.node == \"downstairs\")\n\n// One row per field and day, ready to be put side by side.\nstat = (tables=<-, name, col) =>\n    tables\n        |> keep(columns: [\"day\", col])\n        |> rename(fn: (column) => if column == col then \"_value\" else column)\n        |> group(columns: [\"day\"])\n        |> sum()\n        |> map(fn: (r) => ({day: r.day, _field: name, _value: float(v: r._value)}))\n        |> group()\n\nshunt = node\n    |> filter(\n        fn: (r) =>\n            r.device == \"shunt\" and (r._field == \"cumulative_energy_wh\" or r._field == \"charging\"\n                or\n                r._field == \"remaining_capacity_ah\"),\n    )\n    |> group()\n    |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n    |> filter(fn: (r) => exists r.cumulative_energy_wh and exists r.charging)\n    |> sort(columns: [\"_time\"])\n\nsteps = shunt\n    |> difference(columns: [\"cumulative_energy_wh\"], nonNegative: true)\n    |> filter(fn: (r) => exists r.cumulative_energy_wh and r._time >= start)\n    |> map(\n        fn: (r) =>\n            ({\n                _time: r._time,\n                day: date.truncate(t: r._time, unit: 1d),\n                bin: date.truncate(t: r._time, unit: bin),\n                wh_in: if r.charging > 0.5 then r.cumulative_energy_wh else 0.0,\n                wh_out: if r.charging > 0.5 then 0.0 else r.cumulative_energy_wh,\n            }),\n    )\n\nbank_in = steps |> stat(name: \"bank_in_wh\", col: \"wh_in\")\nbank_out = steps |> stat(name: \"bank_out_wh\", col: \"wh_out\")\n\ncoverage = shunt\n    |> filter(fn: (r) => r._time >= start)\n    |> map(fn: (r) => ({day: date.truncate(t: r._time, unit: 1d), pct: 100.0 / shunt_per_day}))\n    |> stat(name: \"shunt_coverage_pct\", col: \"pct\")\n\nah_net = shunt\n    |> filter(fn: (r) => exists r.remaining_capacity_ah)\n    |> difference(columns: [\"remaining_capacity_ah\"])\n    |> filter(fn: (r) => exists r.remaining_capacity_ah and r._time >= start)\n    |> map(fn: (r) => ({day: date.truncate(t: r._time, unit: 1d), ah: r.remaining_capacity_ah}))\n    |> stat(name: \"ah_net\", col: \"ah\")\n\nmppt = node |> filter(fn: (r) => r.device == \"mppt\")\n\nsolar = mppt\n    |> filter(fn: (r) => r._field == \"yield_total_kwh\")\n    |> group()\n    |> sort(columns: [\"_time\"])\n    |> difference(nonNegative: true)\n    |> filter(fn: (r) => exists r._value and r._time >= start)\n    |> map(fn: (r) => ({day: date.truncate(t: r._time, unit: 1d), wh: r._value * 1000.0}))\n    |> stat(name: \"solar_wh\", col: \"wh\")\n\nsolar_check = mppt\n    |> filter(fn: (r) => r._field == \"battery_watts\")\n    |> group()\n    |> sort(columns: [\"_time\"])\n    |> elapsed(unit: 1s)\n    |> filter(fn: (r) => r._time >= start)\n    |> map(\n        fn: (r) =>\n            ({\n                day: date.truncate(t: r._time, unit: 1d),\n                wh: r._value * float(v: if r.elapsed > 300 then 300 else r.elapsed) / 3600.0,\n            }),\n    )\n    |> stat(name: \"solar_wh_check\", col: \"wh\")\n\ndark = mppt\n    |> filter(fn: (r) => r._field == \"pv_watts\" and r._time >= start)\n    |> group()\n    |> map(fn: (r) => ({bin: date.truncate(t: r._time, unit: bin), pv: r._value}))\n    |> group(columns: [\"bin\"])\n    |> max(column: \"pv\")\n    |> group()\n    |> filter(fn: (r) => r.pv <= 0.0)\n    |> map(fn: (r) => ({bin: r.bin, day: date.truncate(t: r.bin, unit: 1d), hours: float(v: int(v: bin)) / float(v: int(v: 1h))}))\n\nnight_hours = dark |> stat(name: \"night_hours\", col: \"hours\")\n\nnight_load = join(\n    tables: {s: steps |> group() |> drop(columns: [\"_time\", \"day\"]), d: dark},\n    on: [\"bin\"],\n)\n    |> stat(name: \"night_load_wh\", col: \"wh_out\")\n\ndaily = union(\n    tables: [\n        bank_in,\n        bank_out,\n        coverage,\n        ah_net,\n        solar,\n        solar_check,\n        night_hours,\n        night_load,\n    ],\n)\n    |> group()\n    |> pivot(rowKey: [\"day\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n    |> map(\n        fn: (r) =>\n            ({r with\n                bank_net_wh: r.bank_in_wh - r.bank_out_wh,\n                load_wh: r.solar_wh - (r.bank_in_wh - r.bank_out_wh),\n                direct_solar_wh: r.solar_wh - r.bank_in_wh,\n                night_avg_w: if r.night_hours > 0.0 then r.night_load_wh / r.night_hours else 0.0,\n            }),\n    )\n    |> keep(\n        columns: [\n            \"day\",\n            \"bank_in_wh\",\n            \"bank_out_wh\",\n            \"bank_net_wh\",\n            \"ah_net\",\n            \"solar_wh\",\n            \"load_wh\",\n            \"direct_solar_wh\",\n            \"night_load_wh\",\n            \"night_hours\",\n            \"night_avg_w\",\n            \"solar_wh_check\",\n            \"shunt_coverage_pct\",\n        ],\n    )\n    |> sort(columns: [\"day\"])\n\npicked = union(\n    tables: [\n        daily |> map(fn: (r) => ({day: r.day, _field: \"bank in\", _value: r.bank_in_wh})),\n        daily |> map(fn: (r) => ({day: r.day, _field: \"bank out\", _value: r.bank_out_wh})),\n    ],\n)\n\nunion(\n    tables: [\n        picked |> map(fn: (r) => ({r with _time: r.day})),\n        picked |> map(fn: (r) => ({r with _time: date.sub(d: 1s, from: date.add(d: 1d, to: r.day))})),\n    ],\n)\n    |> drop(columns: [\"day\"])\n    |> group(columns: [\"_field\"])\n    |> sort(columns: [\"_time\"])\n",
+                "editMode": "advanced",
+                "name": "",
+                "builderConfig": {
+                  "buckets": [],
+                  "tags": [
+                    {
+                      "key": "_measurement",
+                      "values": [],
+                      "aggregateFunctionType": "filter"
+                    }
+                  ],
+                  "functions": [],
+                  "aggregateWindow": {
+                    "period": "auto",
+                    "fillValues": false
+                  }
+                }
+              }
+            ],
+            "axes": {
+              "x": {
+                "bounds": [
+                  "",
+                  ""
+                ],
+                "label": "",
+                "prefix": "",
+                "suffix": "",
+                "base": "10",
+                "scale": "linear"
+              },
+              "y": {
+                "bounds": [
+                  "",
+                  ""
+                ],
+                "label": "Wh",
+                "prefix": "",
+                "suffix": "",
+                "base": "10",
+                "scale": "linear"
+              }
+            },
+            "colors": [
+              {
+                "id": "a",
+                "type": "scale",
+                "hex": "#31C0F6",
+                "name": "Nineteen Eighty Four",
+                "value": 0
+              },
+              {
+                "id": "b",
+                "type": "scale",
+                "hex": "#A500A5",
+                "name": "Nineteen Eighty Four",
+                "value": 0
+              },
+              {
+                "id": "c",
+                "type": "scale",
+                "hex": "#FF7E27",
+                "name": "Nineteen Eighty Four",
+                "value": 0
+              }
+            ],
+            "geom": "line",
+            "position": "overlaid",
+            "xColumn": "_time",
+            "yColumn": "_value",
+            "hoverDimension": "auto",
+            "legendColorizeRows": true,
+            "legendOpacity": 1,
+            "legendOrientationThreshold": 100000000,
+            "timeFormat": "",
+            "note": "",
+            "showNoteWhenEmpty": false
+          }
+        }
+      },
+      {
+        "id": "5",
+        "type": "cell",
+        "attributes": {
+          "x": 6,
+          "y": 6,
+          "w": 6,
+          "h": 3
+        },
+        "relationships": {
+          "view": {
+            "data": {
+              "type": "view",
+              "id": "5"
+            }
+          }
+        }
+      },
+      {
+        "id": "5",
+        "type": "view",
+        "attributes": {
+          "name": "Daily energy, system",
+          "properties": {
+            "shape": "chronograf-v2",
+            "type": "xy",
+            "queries": [
+              {
+                "text": "// The blind's daily energy, one row per local day, in watt-hours.\n//\n// Two levels. The bank level is what crosses the shunt, which sits where the\n// battery bank joins the rest of the system. The system level adds the\n// charge controller: solar that feeds a load directly never crosses the\n// shunt, so the loads' total is the controller's production less what the\n// bank kept.\n//\n//   bank_in_wh        energy into the bank through the shunt\n//   bank_out_wh       energy out of the bank through the shunt\n//   bank_net_wh       bank_in_wh less bank_out_wh\n//   ah_net            change in the shunt's remaining capacity\n//   solar_wh          the controller's production, from its lifetime yield\n//   load_wh           solar_wh less bank_net_wh: everything the loads used\n//   direct_solar_wh   solar_wh less bank_in_wh: solar the loads used directly\n//   night_load_wh     bank_out_wh while the controller produced nothing\n//   night_hours       how long the controller produced nothing\n//   night_avg_w       night_load_wh over night_hours\n//   solar_wh_check    the controller's output power, integrated\n//   shunt_coverage_pct  shunt readings received, of one a minute\n//\n// The shunt's cumulative_energy_wh counts energy in either direction, so it\n// only ever rises. Each rise between two readings is filed by the shunt's\n// charging flag on the later reading. A rise that spans a change of\n// direction is filed whole under one side, so the split is good to about one\n// poll interval's energy at each change; their sum is exact. A gap in the\n// readings is kept whole and filed by the reading that ends it.\n//\n// A counter that falls has been reset, and that one interval is dropped.\n// Each day reads one hour before its midnight, so its first interval has a\n// reading to start from.\n//\n// Self-heating packs draw their heaters from the charge current through the\n// shunt. That energy is in bank_in_wh and bank_net_wh without being stored.\n// It is not in load_wh, which is therefore the loads alone plus the wiring\n// loss between the two meters.\n//\n// The night is wherever every controller reading in a five-minute bin shows\n// no panel power. An overcast day still produces, so it is not night.\n//\n// ah_net flattens wherever the shunt clamps at full or empty.\n//\n// solar_wh_check holds each output-power snapshot, one every thirty\n// seconds, for the interval it ends, at most five minutes. It misses short\n// changes. A large gap from solar_wh means a counter reset or missing\n// readings, not a better figure.\n\nimport \"date\"\nimport \"timezone\"\n\noption location = timezone.location(name: \"America/Chicago\")\n\n// Expected shunt readings per day, at the node's slow poll interval of 60 s.\nshunt_per_day = 1440.0\n\nstart = date.truncate(t: v.timeRangeStart, unit: 1d)\nlead = date.sub(d: 1h, from: start)\nbin = 5m\n\nnode = from(bucket: \"raw\")\n    |> range(start: lead)\n    |> filter(fn: (r) => r._measurement == \"blind1\" and r.node == \"downstairs\")\n\n// One row per field and day, ready to be put side by side.\nstat = (tables=<-, name, col) =>\n    tables\n        |> keep(columns: [\"day\", col])\n        |> rename(fn: (column) => if column == col then \"_value\" else column)\n        |> group(columns: [\"day\"])\n        |> sum()\n        |> map(fn: (r) => ({day: r.day, _field: name, _value: float(v: r._value)}))\n        |> group()\n\nshunt = node\n    |> filter(\n        fn: (r) =>\n            r.device == \"shunt\" and (r._field == \"cumulative_energy_wh\" or r._field == \"charging\"\n                or\n                r._field == \"remaining_capacity_ah\"),\n    )\n    |> group()\n    |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n    |> filter(fn: (r) => exists r.cumulative_energy_wh and exists r.charging)\n    |> sort(columns: [\"_time\"])\n\nsteps = shunt\n    |> difference(columns: [\"cumulative_energy_wh\"], nonNegative: true)\n    |> filter(fn: (r) => exists r.cumulative_energy_wh and r._time >= start)\n    |> map(\n        fn: (r) =>\n            ({\n                _time: r._time,\n                day: date.truncate(t: r._time, unit: 1d),\n                bin: date.truncate(t: r._time, unit: bin),\n                wh_in: if r.charging > 0.5 then r.cumulative_energy_wh else 0.0,\n                wh_out: if r.charging > 0.5 then 0.0 else r.cumulative_energy_wh,\n            }),\n    )\n\nbank_in = steps |> stat(name: \"bank_in_wh\", col: \"wh_in\")\nbank_out = steps |> stat(name: \"bank_out_wh\", col: \"wh_out\")\n\ncoverage = shunt\n    |> filter(fn: (r) => r._time >= start)\n    |> map(fn: (r) => ({day: date.truncate(t: r._time, unit: 1d), pct: 100.0 / shunt_per_day}))\n    |> stat(name: \"shunt_coverage_pct\", col: \"pct\")\n\nah_net = shunt\n    |> filter(fn: (r) => exists r.remaining_capacity_ah)\n    |> difference(columns: [\"remaining_capacity_ah\"])\n    |> filter(fn: (r) => exists r.remaining_capacity_ah and r._time >= start)\n    |> map(fn: (r) => ({day: date.truncate(t: r._time, unit: 1d), ah: r.remaining_capacity_ah}))\n    |> stat(name: \"ah_net\", col: \"ah\")\n\nmppt = node |> filter(fn: (r) => r.device == \"mppt\")\n\nsolar = mppt\n    |> filter(fn: (r) => r._field == \"yield_total_kwh\")\n    |> group()\n    |> sort(columns: [\"_time\"])\n    |> difference(nonNegative: true)\n    |> filter(fn: (r) => exists r._value and r._time >= start)\n    |> map(fn: (r) => ({day: date.truncate(t: r._time, unit: 1d), wh: r._value * 1000.0}))\n    |> stat(name: \"solar_wh\", col: \"wh\")\n\nsolar_check = mppt\n    |> filter(fn: (r) => r._field == \"battery_watts\")\n    |> group()\n    |> sort(columns: [\"_time\"])\n    |> elapsed(unit: 1s)\n    |> filter(fn: (r) => r._time >= start)\n    |> map(\n        fn: (r) =>\n            ({\n                day: date.truncate(t: r._time, unit: 1d),\n                wh: r._value * float(v: if r.elapsed > 300 then 300 else r.elapsed) / 3600.0,\n            }),\n    )\n    |> stat(name: \"solar_wh_check\", col: \"wh\")\n\ndark = mppt\n    |> filter(fn: (r) => r._field == \"pv_watts\" and r._time >= start)\n    |> group()\n    |> map(fn: (r) => ({bin: date.truncate(t: r._time, unit: bin), pv: r._value}))\n    |> group(columns: [\"bin\"])\n    |> max(column: \"pv\")\n    |> group()\n    |> filter(fn: (r) => r.pv <= 0.0)\n    |> map(fn: (r) => ({bin: r.bin, day: date.truncate(t: r.bin, unit: 1d), hours: float(v: int(v: bin)) / float(v: int(v: 1h))}))\n\nnight_hours = dark |> stat(name: \"night_hours\", col: \"hours\")\n\nnight_load = join(\n    tables: {s: steps |> group() |> drop(columns: [\"_time\", \"day\"]), d: dark},\n    on: [\"bin\"],\n)\n    |> stat(name: \"night_load_wh\", col: \"wh_out\")\n\ndaily = union(\n    tables: [\n        bank_in,\n        bank_out,\n        coverage,\n        ah_net,\n        solar,\n        solar_check,\n        night_hours,\n        night_load,\n    ],\n)\n    |> group()\n    |> pivot(rowKey: [\"day\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n    |> map(\n        fn: (r) =>\n            ({r with\n                bank_net_wh: r.bank_in_wh - r.bank_out_wh,\n                load_wh: r.solar_wh - (r.bank_in_wh - r.bank_out_wh),\n                direct_solar_wh: r.solar_wh - r.bank_in_wh,\n                night_avg_w: if r.night_hours > 0.0 then r.night_load_wh / r.night_hours else 0.0,\n            }),\n    )\n    |> keep(\n        columns: [\n            \"day\",\n            \"bank_in_wh\",\n            \"bank_out_wh\",\n            \"bank_net_wh\",\n            \"ah_net\",\n            \"solar_wh\",\n            \"load_wh\",\n            \"direct_solar_wh\",\n            \"night_load_wh\",\n            \"night_hours\",\n            \"night_avg_w\",\n            \"solar_wh_check\",\n            \"shunt_coverage_pct\",\n        ],\n    )\n    |> sort(columns: [\"day\"])\n\npicked = union(\n    tables: [\n        daily |> map(fn: (r) => ({day: r.day, _field: \"solar\", _value: r.solar_wh})),\n        daily |> map(fn: (r) => ({day: r.day, _field: \"load\", _value: r.load_wh})),\n    ],\n)\n\nunion(\n    tables: [\n        picked |> map(fn: (r) => ({r with _time: r.day})),\n        picked |> map(fn: (r) => ({r with _time: date.sub(d: 1s, from: date.add(d: 1d, to: r.day))})),\n    ],\n)\n    |> drop(columns: [\"day\"])\n    |> group(columns: [\"_field\"])\n    |> sort(columns: [\"_time\"])\n",
+                "editMode": "advanced",
+                "name": "",
+                "builderConfig": {
+                  "buckets": [],
+                  "tags": [
+                    {
+                      "key": "_measurement",
+                      "values": [],
+                      "aggregateFunctionType": "filter"
+                    }
+                  ],
+                  "functions": [],
+                  "aggregateWindow": {
+                    "period": "auto",
+                    "fillValues": false
+                  }
+                }
+              }
+            ],
+            "axes": {
+              "x": {
+                "bounds": [
+                  "",
+                  ""
+                ],
+                "label": "",
+                "prefix": "",
+                "suffix": "",
+                "base": "10",
+                "scale": "linear"
+              },
+              "y": {
+                "bounds": [
+                  "",
+                  ""
+                ],
+                "label": "Wh",
+                "prefix": "",
+                "suffix": "",
+                "base": "10",
+                "scale": "linear"
+              }
+            },
+            "colors": [
+              {
+                "id": "a",
+                "type": "scale",
+                "hex": "#31C0F6",
+                "name": "Nineteen Eighty Four",
+                "value": 0
+              },
+              {
+                "id": "b",
+                "type": "scale",
+                "hex": "#A500A5",
+                "name": "Nineteen Eighty Four",
+                "value": 0
+              },
+              {
+                "id": "c",
+                "type": "scale",
+                "hex": "#FF7E27",
+                "name": "Nineteen Eighty Four",
+                "value": 0
+              }
+            ],
+            "geom": "line",
+            "position": "overlaid",
+            "xColumn": "_time",
+            "yColumn": "_value",
+            "hoverDimension": "auto",
+            "legendColorizeRows": true,
+            "legendOpacity": 1,
+            "legendOrientationThreshold": 100000000,
+            "timeFormat": "",
+            "note": "",
+            "showNoteWhenEmpty": false
+          }
+        }
+      },
+      {
+        "id": "6",
+        "type": "cell",
+        "attributes": {
+          "x": 0,
+          "y": 9,
+          "w": 12,
+          "h": 4
+        },
+        "relationships": {
+          "view": {
+            "data": {
+              "type": "view",
+              "id": "6"
+            }
+          }
+        }
+      },
+      {
+        "id": "6",
+        "type": "view",
+        "attributes": {
+          "name": "Daily energy",
+          "properties": {
+            "shape": "chronograf-v2",
+            "type": "table",
+            "queries": [
+              {
+                "text": "// The blind's daily energy, one row per local day, in watt-hours.\n//\n// Two levels. The bank level is what crosses the shunt, which sits where the\n// battery bank joins the rest of the system. The system level adds the\n// charge controller: solar that feeds a load directly never crosses the\n// shunt, so the loads' total is the controller's production less what the\n// bank kept.\n//\n//   bank_in_wh        energy into the bank through the shunt\n//   bank_out_wh       energy out of the bank through the shunt\n//   bank_net_wh       bank_in_wh less bank_out_wh\n//   ah_net            change in the shunt's remaining capacity\n//   solar_wh          the controller's production, from its lifetime yield\n//   load_wh           solar_wh less bank_net_wh: everything the loads used\n//   direct_solar_wh   solar_wh less bank_in_wh: solar the loads used directly\n//   night_load_wh     bank_out_wh while the controller produced nothing\n//   night_hours       how long the controller produced nothing\n//   night_avg_w       night_load_wh over night_hours\n//   solar_wh_check    the controller's output power, integrated\n//   shunt_coverage_pct  shunt readings received, of one a minute\n//\n// The shunt's cumulative_energy_wh counts energy in either direction, so it\n// only ever rises. Each rise between two readings is filed by the shunt's\n// charging flag on the later reading. A rise that spans a change of\n// direction is filed whole under one side, so the split is good to about one\n// poll interval's energy at each change; their sum is exact. A gap in the\n// readings is kept whole and filed by the reading that ends it.\n//\n// A counter that falls has been reset, and that one interval is dropped.\n// Each day reads one hour before its midnight, so its first interval has a\n// reading to start from.\n//\n// Self-heating packs draw their heaters from the charge current through the\n// shunt. That energy is in bank_in_wh and bank_net_wh without being stored.\n// It is not in load_wh, which is therefore the loads alone plus the wiring\n// loss between the two meters.\n//\n// The night is wherever every controller reading in a five-minute bin shows\n// no panel power. An overcast day still produces, so it is not night.\n//\n// ah_net flattens wherever the shunt clamps at full or empty.\n//\n// solar_wh_check holds each output-power snapshot, one every thirty\n// seconds, for the interval it ends, at most five minutes. It misses short\n// changes. A large gap from solar_wh means a counter reset or missing\n// readings, not a better figure.\n\nimport \"date\"\nimport \"timezone\"\n\noption location = timezone.location(name: \"America/Chicago\")\n\n// Expected shunt readings per day, at the node's slow poll interval of 60 s.\nshunt_per_day = 1440.0\n\nstart = date.truncate(t: v.timeRangeStart, unit: 1d)\nlead = date.sub(d: 1h, from: start)\nbin = 5m\n\nnode = from(bucket: \"raw\")\n    |> range(start: lead)\n    |> filter(fn: (r) => r._measurement == \"blind1\" and r.node == \"downstairs\")\n\n// One row per field and day, ready to be put side by side.\nstat = (tables=<-, name, col) =>\n    tables\n        |> keep(columns: [\"day\", col])\n        |> rename(fn: (column) => if column == col then \"_value\" else column)\n        |> group(columns: [\"day\"])\n        |> sum()\n        |> map(fn: (r) => ({day: r.day, _field: name, _value: float(v: r._value)}))\n        |> group()\n\nshunt = node\n    |> filter(\n        fn: (r) =>\n            r.device == \"shunt\" and (r._field == \"cumulative_energy_wh\" or r._field == \"charging\"\n                or\n                r._field == \"remaining_capacity_ah\"),\n    )\n    |> group()\n    |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n    |> filter(fn: (r) => exists r.cumulative_energy_wh and exists r.charging)\n    |> sort(columns: [\"_time\"])\n\nsteps = shunt\n    |> difference(columns: [\"cumulative_energy_wh\"], nonNegative: true)\n    |> filter(fn: (r) => exists r.cumulative_energy_wh and r._time >= start)\n    |> map(\n        fn: (r) =>\n            ({\n                _time: r._time,\n                day: date.truncate(t: r._time, unit: 1d),\n                bin: date.truncate(t: r._time, unit: bin),\n                wh_in: if r.charging > 0.5 then r.cumulative_energy_wh else 0.0,\n                wh_out: if r.charging > 0.5 then 0.0 else r.cumulative_energy_wh,\n            }),\n    )\n\nbank_in = steps |> stat(name: \"bank_in_wh\", col: \"wh_in\")\nbank_out = steps |> stat(name: \"bank_out_wh\", col: \"wh_out\")\n\ncoverage = shunt\n    |> filter(fn: (r) => r._time >= start)\n    |> map(fn: (r) => ({day: date.truncate(t: r._time, unit: 1d), pct: 100.0 / shunt_per_day}))\n    |> stat(name: \"shunt_coverage_pct\", col: \"pct\")\n\nah_net = shunt\n    |> filter(fn: (r) => exists r.remaining_capacity_ah)\n    |> difference(columns: [\"remaining_capacity_ah\"])\n    |> filter(fn: (r) => exists r.remaining_capacity_ah and r._time >= start)\n    |> map(fn: (r) => ({day: date.truncate(t: r._time, unit: 1d), ah: r.remaining_capacity_ah}))\n    |> stat(name: \"ah_net\", col: \"ah\")\n\nmppt = node |> filter(fn: (r) => r.device == \"mppt\")\n\nsolar = mppt\n    |> filter(fn: (r) => r._field == \"yield_total_kwh\")\n    |> group()\n    |> sort(columns: [\"_time\"])\n    |> difference(nonNegative: true)\n    |> filter(fn: (r) => exists r._value and r._time >= start)\n    |> map(fn: (r) => ({day: date.truncate(t: r._time, unit: 1d), wh: r._value * 1000.0}))\n    |> stat(name: \"solar_wh\", col: \"wh\")\n\nsolar_check = mppt\n    |> filter(fn: (r) => r._field == \"battery_watts\")\n    |> group()\n    |> sort(columns: [\"_time\"])\n    |> elapsed(unit: 1s)\n    |> filter(fn: (r) => r._time >= start)\n    |> map(\n        fn: (r) =>\n            ({\n                day: date.truncate(t: r._time, unit: 1d),\n                wh: r._value * float(v: if r.elapsed > 300 then 300 else r.elapsed) / 3600.0,\n            }),\n    )\n    |> stat(name: \"solar_wh_check\", col: \"wh\")\n\ndark = mppt\n    |> filter(fn: (r) => r._field == \"pv_watts\" and r._time >= start)\n    |> group()\n    |> map(fn: (r) => ({bin: date.truncate(t: r._time, unit: bin), pv: r._value}))\n    |> group(columns: [\"bin\"])\n    |> max(column: \"pv\")\n    |> group()\n    |> filter(fn: (r) => r.pv <= 0.0)\n    |> map(fn: (r) => ({bin: r.bin, day: date.truncate(t: r.bin, unit: 1d), hours: float(v: int(v: bin)) / float(v: int(v: 1h))}))\n\nnight_hours = dark |> stat(name: \"night_hours\", col: \"hours\")\n\nnight_load = join(\n    tables: {s: steps |> group() |> drop(columns: [\"_time\", \"day\"]), d: dark},\n    on: [\"bin\"],\n)\n    |> stat(name: \"night_load_wh\", col: \"wh_out\")\n\nunion(\n    tables: [\n        bank_in,\n        bank_out,\n        coverage,\n        ah_net,\n        solar,\n        solar_check,\n        night_hours,\n        night_load,\n    ],\n)\n    |> group()\n    |> pivot(rowKey: [\"day\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n    |> map(\n        fn: (r) =>\n            ({r with\n                bank_net_wh: r.bank_in_wh - r.bank_out_wh,\n                load_wh: r.solar_wh - (r.bank_in_wh - r.bank_out_wh),\n                direct_solar_wh: r.solar_wh - r.bank_in_wh,\n                night_avg_w: if r.night_hours > 0.0 then r.night_load_wh / r.night_hours else 0.0,\n            }),\n    )\n    |> keep(\n        columns: [\n            \"day\",\n            \"bank_in_wh\",\n            \"bank_out_wh\",\n            \"bank_net_wh\",\n            \"ah_net\",\n            \"solar_wh\",\n            \"load_wh\",\n            \"direct_solar_wh\",\n            \"night_load_wh\",\n            \"night_hours\",\n            \"night_avg_w\",\n            \"solar_wh_check\",\n            \"shunt_coverage_pct\",\n        ],\n    )\n    |> sort(columns: [\"day\"])\n",
+                "editMode": "advanced",
+                "name": "",
+                "builderConfig": {
+                  "buckets": [],
+                  "tags": [
+                    {
+                      "key": "_measurement",
+                      "values": [],
+                      "aggregateFunctionType": "filter"
+                    }
+                  ],
+                  "functions": [],
+                  "aggregateWindow": {
+                    "period": "auto",
+                    "fillValues": false
+                  }
+                }
+              }
+            ],
+            "colors": [
+              {
+                "id": "base",
+                "type": "text",
+                "hex": "#00C9FF",
+                "name": "laser",
+                "value": 0
+              }
+            ],
+            "tableOptions": {
+              "verticalTimeAxis": true,
+              "sortBy": {
+                "internalName": "day",
+                "displayName": "day",
+                "visible": true
+              },
+              "wrapping": "truncate",
+              "fixFirstColumn": true
+            },
+            "fieldOptions": [
+              {
+                "internalName": "day",
+                "displayName": "day",
+                "visible": true
+              },
+              {
+                "internalName": "bank_in_wh",
+                "displayName": "bank_in_wh",
+                "visible": true
+              },
+              {
+                "internalName": "bank_out_wh",
+                "displayName": "bank_out_wh",
+                "visible": true
+              },
+              {
+                "internalName": "bank_net_wh",
+                "displayName": "bank_net_wh",
+                "visible": true
+              },
+              {
+                "internalName": "ah_net",
+                "displayName": "ah_net",
+                "visible": true
+              },
+              {
+                "internalName": "solar_wh",
+                "displayName": "solar_wh",
+                "visible": true
+              },
+              {
+                "internalName": "load_wh",
+                "displayName": "load_wh",
+                "visible": true
+              },
+              {
+                "internalName": "direct_solar_wh",
+                "displayName": "direct_solar_wh",
+                "visible": true
+              },
+              {
+                "internalName": "night_load_wh",
+                "displayName": "night_load_wh",
+                "visible": true
+              },
+              {
+                "internalName": "night_hours",
+                "displayName": "night_hours",
+                "visible": true
+              },
+              {
+                "internalName": "night_avg_w",
+                "displayName": "night_avg_w",
+                "visible": true
+              },
+              {
+                "internalName": "solar_wh_check",
+                "displayName": "solar_wh_check",
+                "visible": true
+              },
+              {
+                "internalName": "shunt_coverage_pct",
+                "displayName": "shunt_coverage_pct",
+                "visible": true
+              }
+            ],
+            "timeFormat": "YYYY-MM-DD",
+            "decimalPlaces": {
+              "isEnforced": true,
+              "digits": 0
+            },
+            "note": "",
+            "showNoteWhenEmpty": false
+          }
+        }
+      }
+    ]
+  },
+  "labels": []
+}

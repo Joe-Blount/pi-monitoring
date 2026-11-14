@@ -61,7 +61,7 @@ bin/
   wavlink-recover    the Wavlink repair, as its timer runs it
   ble-discover       enumerate an unknown Bluetooth device
   gpio-probe         measure what a pin does when software lets go
-docs/                bring-up and day-to-day operation
+docs/                bring-up, day-to-day operation, energy queries and dashboard
 sites/
   example/node.yaml  every option, with the reasoning
   blind1/            upstairs.yaml, downstairs.yaml, telegraf.d/

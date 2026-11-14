@@ -304,9 +304,33 @@ is deciding from nothing.
 
 ## How much energy went into and out of the battery each day
 
-Paste [docs/queries/blind1-daily-energy.flux](queries/blind1-daily-energy.flux)
-into a dashboard cell, shown as a table. It gives one row per local day, in
-watt-hours unless the name says otherwise. The last row is today so far.
+Import [docs/dashboards/blind1-energy.json](dashboards/blind1-energy.json) in
+the InfluxDB web interface: Dashboards, Create Dashboard, Import Dashboard.
+It shows:
+
+- where the load's power comes from, stacked: loads from the battery, loads
+  from solar, and the surplus going into the bank. The top edge is the charge
+  controller's whole output.
+- the Chins pack's state of charge underneath, on the same time axis, so a
+  shed shows against the charge that caused it.
+- the bank's average draw in the dark over the last 24 hours.
+- daily energy for the bank (in and out) and for the system (solar and
+  load), one flat step per day, and the full daily table.
+
+Every cell follows the dashboard's time range except the night draw. Pick 24
+hours for the stacked supply graph and a week or a month for the daily ones.
+
+The daily cells are
+[docs/queries/blind1-daily-energy.flux](queries/blind1-daily-energy.flux),
+started from the dashboard's range. After changing that query, rebuild the
+dashboard and import it again:
+
+```
+python3 docs/dashboards/build.py
+```
+
+The daily table gives one row per local day, in watt-hours unless the name
+says otherwise. The last row is today so far.
 
 The shunt sits where the battery bank joins the rest of the system. Solar
 that feeds a load directly never crosses it. So the shunt tells what the bank
