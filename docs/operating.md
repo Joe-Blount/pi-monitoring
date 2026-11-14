@@ -345,11 +345,11 @@ did, and the charge controller is needed to tell what the loads used.
 | `solar_wh` | The charge controller's production, from its lifetime yield. |
 | `load_wh` | Everything the loads used: `solar_wh` less `bank_net_wh`. Includes the wiring loss between the controller and the shunt. Leaves out heater energy. |
 | `direct_solar_wh` | Solar the loads used without it crossing the shunt: `solar_wh` less `bank_in_wh`. |
-| `night_load_wh` | Energy out of the bank while the controller produced nothing. |
+| `night_load_wh` | Energy out of the bank while the controller produced nothing. A stretch with no shunt readings is left out, since it could hold daylight. |
 | `night_hours` | How long the controller produced nothing. An overcast day is not night. |
 | `night_avg_w` | `night_load_wh` over `night_hours`: the load's average draw in the dark. |
-| `solar_wh_check` | The controller's output power, summed from its snapshots. It should land close to `solar_wh`. A large gap means a counter reset or missing readings. |
-| `shunt_coverage_pct` | Shunt readings received, of one a minute. Well under 100 means the in and out split is less certain; their sum still holds. |
+| `solar_wh_check` | The controller's output power, summed from its snapshots. It should land close to `solar_wh`. A large gap means missing controller readings. A controller outage across midnight puts its yield on the later day. |
+| `shunt_coverage_pct` | Shunt readings received, of one a minute in the day so far. Well under 100 means the day had a gap. The energy across a gap is kept, but all of it is filed in the direction of the reading that ends the gap, and on that reading's day. |
 
 A day's `load_wh` is what the loads drew at that day's state of charge. The
 shedding ladder cuts the cameras and the recorder as the charge falls, and

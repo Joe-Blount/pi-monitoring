@@ -113,11 +113,14 @@ from(bucket: "raw")
 NIGHT = """\
 // The bank's average draw while the charge controller produced nothing, over
 // the last 24 hours whatever the dashboard's range. Night is a five-minute
-// bin in which every controller reading shows no panel power.
+// bin in which every controller reading shows no panel power, cut in UTC.
+// A shunt step longer than two poll intervals spans a gap and is left out.
 
 import "date"
+import "timezone"
 
 bin = 5m
+poll = 60s
 start = -24h
 
 shunt = from(bucket: "raw")
@@ -132,12 +135,18 @@ shunt = from(bucket: "raw")
     |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
     |> filter(fn: (r) => exists r.cumulative_energy_wh and exists r.charging)
     |> sort(columns: ["_time"])
+    |> elapsed(unit: 1s)
     |> difference(columns: ["cumulative_energy_wh"], nonNegative: true)
-    |> filter(fn: (r) => exists r.cumulative_energy_wh and r._time >= date.add(d: start, to: now()))
+    |> filter(
+        fn: (r) =>
+            exists r.cumulative_energy_wh and r._time >= date.add(d: start, to: now())
+                and
+                r.elapsed <= 2 * int(v: poll) / int(v: 1s),
+    )
     |> map(
         fn: (r) =>
             ({
-                bin: date.truncate(t: r._time, unit: bin),
+                bin: date.truncate(t: r._time, unit: bin, location: timezone.utc),
                 wh: if r.charging > 0.5 then 0.0 else r.cumulative_energy_wh,
             }),
     )
@@ -151,7 +160,7 @@ dark = from(bucket: "raw")
                 r._field == "pv_watts",
     )
     |> group()
-    |> map(fn: (r) => ({bin: date.truncate(t: r._time, unit: bin), pv: r._value}))
+    |> map(fn: (r) => ({bin: date.truncate(t: r._time, unit: bin, location: timezone.utc), pv: r._value}))
     |> group(columns: ["bin"])
     |> max(column: "pv")
     |> group()
@@ -167,7 +176,7 @@ energy = join(tables: {s: shunt, d: dark}, on: ["bin"])
     |> map(fn: (r) => ({key: 1, wh: r.wh}))
 
 join(tables: {e: energy, h: hours}, on: ["key"])
-    |> map(fn: (r) => ({_value: if r.hours > 0.0 then r.wh / r.hours else 0.0}))
+    |> map(fn: (r) => ({_value: r.wh / r.hours}))
 """
 
 
@@ -183,8 +192,9 @@ def daily(query, tail):
             "rewrites" % QUERY)
     query = query.replace(FIXED_START, PICKED_START)
     query = query.replace(
-        "// How far back. Truncated to local midnight so the first day is whole.\n"
-        "lookback = -30d\n\n", "")
+        "// How far back. Truncated to local midnight so the first day is whole. A day\n"
+        "// short of thirty, so the first day stays inside a bucket kept for thirty.\n"
+        "lookback = -29d\n\n", "")
     if tail is None:
         return query
     return query.replace(FINAL, NAMED_FINAL) + "\n" + tail
