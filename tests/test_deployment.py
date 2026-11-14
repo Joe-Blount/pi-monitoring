@@ -132,6 +132,16 @@ def test_the_install_script_installs_only_this_node_s_fragments():
 
 
 
+def test_the_install_script_masks_the_desktop_audio_session_for_every_user():
+    """wireplumber follows every Bluetooth scan and connection the readers
+    make, and on a headless machine nothing needs it."""
+    script = (REPO / "deploy" / "install.sh").read_text()
+    assert "systemctl --global mask $AUDIO_UNITS" in script
+    for unit in ("wireplumber.service", "pipewire.service", "pipewire.socket",
+                 "pipewire-pulse.service", "pipewire-pulse.socket"):
+        assert unit in script, unit
+
+
 def test_the_poll_command_has_room_for_a_retrying_sensor():
     """A sensor that retries can take several seconds. telegraf's default
     command timeout is five, and a timeout looks exactly like a dead sensor."""

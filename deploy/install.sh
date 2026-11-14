@@ -250,6 +250,23 @@ install -d -m 0755 /var/lib/monitoring
 chgrp telegraf /var/lib/monitoring 2>/dev/null || true
 chmod g+w /var/lib/monitoring 2>/dev/null || true
 
+echo "==> desktop audio"
+# The desktop image runs PipeWire and its session manager, wireplumber, in
+# every login session. Nothing here plays sound. wireplumber watches BlueZ
+# for audio devices, so every Bluetooth scan and connection a pack or shunt
+# reader makes reaches it, and its memory grows with them until the kernel
+# kills it or the machine stops answering. The services are masked for every
+# user, and stopped in any session already running.
+AUDIO_UNITS="pipewire.socket pipewire.service pipewire-pulse.socket pipewire-pulse.service wireplumber.service filter-chain.service"
+# shellcheck disable=SC2086
+systemctl --global mask $AUDIO_UNITS >/dev/null 2>&1 \
+    || echo "WARNING: could not mask the desktop audio services"
+for uid in $(loginctl list-users --no-legend 2>/dev/null | awk '{print $1}'); do
+    user=$(id -nu "$uid" 2>/dev/null) || continue
+    # shellcheck disable=SC2086
+    systemctl --user -M "$user@" stop $AUDIO_UNITS >/dev/null 2>&1 || true
+done
+
 echo "==> where this machine is"
 # A solar shed window needs a latitude, a longitude and a timezone. They are
 # not in the node file on purpose: node files are committed and the

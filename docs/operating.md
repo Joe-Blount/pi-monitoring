@@ -309,6 +309,11 @@ in InfluxDB Cloud, as Cloud exports them. They are a record to compare and
 edit against; Cloud is where they are changed until one moves to the
 builder.
 
+Cloud's export leaves out which column colours a Mosaic cell. After
+importing [load-controller.json](dashboards/cloud/load-controller.json), the
+"Load power" cell says its data cannot be shown until that is set: edit the
+cell and pick _value as the fill column.
+
 Six dashboards are kept as files and built by
 [docs/dashboards/build.py](dashboards/build.py). Import each in the InfluxDB
 web interface: Dashboards, Create Dashboard, Import Dashboard. Each import
