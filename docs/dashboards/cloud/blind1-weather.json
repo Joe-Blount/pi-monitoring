@@ -149,71 +149,6 @@
               "scale": "linear"
             },
             {
-              "base": "10",
-              "name": "y",
-              "scale": "linear"
-            }
-          ],
-          "colorMapping": {
-            "voltage-blind1-pi-mean-": "#31C0F6"
-          },
-          "colorizeRows": true,
-          "colors": [
-            {
-              "id": "0A2oM1ldMXU99_EqDn89S",
-              "name": "Nineteen Eighty Four",
-              "type": "scale",
-              "hex": "#31C0F6"
-            },
-            {
-              "id": "VCJjOc8ccl_34bGi_xGY1",
-              "name": "Nineteen Eighty Four",
-              "type": "scale",
-              "hex": "#A500A5"
-            },
-            {
-              "id": "uXAN4mjhT3Ovm9g8W4zkY",
-              "name": "Nineteen Eighty Four",
-              "type": "scale",
-              "hex": "#FF7E27"
-            }
-          ],
-          "geom": "line",
-          "height": 5,
-          "hoverDimension": "auto",
-          "kind": "Xy",
-          "legendColorizeRows": true,
-          "legendOpacity": 1,
-          "legendOrientationThreshold": 100000000,
-          "name": "Voltage (at pi)",
-          "opacity": 1,
-          "orientationThreshold": 100000000,
-          "position": "overlaid",
-          "queries": [
-            {
-              "query": "from(bucket: \"raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"blind1\")\n  |> filter(fn: (r) => r[\"_field\"] == \"voltage\")\n  |> filter(fn: (r) => r[\"location\"] == \"pi\")\n  |> aggregateWindow(every: v.windowPeriod, fn: median, createEmpty: false)\n  |> yield(name: \"mean\")"
-            }
-          ],
-          "staticLegend": {
-            "colorizeRows": true,
-            "opacity": 1,
-            "orientationThreshold": 100000000,
-            "widthRatio": 1
-          },
-          "width": 6,
-          "widthRatio": 1,
-          "xCol": "_time",
-          "yCol": "_value",
-          "yPos": 5
-        },
-        {
-          "axes": [
-            {
-              "base": "10",
-              "name": "x",
-              "scale": "linear"
-            },
-            {
               "base": "2",
               "name": "y",
               "scale": "linear"
@@ -269,7 +204,7 @@
           "widthRatio": 1,
           "xCol": "_time",
           "yCol": "_value",
-          "yPos": 10
+          "yPos": 8
         },
         {
           "axes": [
@@ -334,7 +269,7 @@
           "widthRatio": 1,
           "xCol": "_time",
           "yCol": "_value",
-          "yPos": 15
+          "yPos": 13
         },
         {
           "colors": [
@@ -353,7 +288,7 @@
             }
           ],
           "decimalPlaces": 2,
-          "height": 5,
+          "height": 3,
           "kind": "Gauge",
           "name": "Total Rainfall",
           "queries": [
@@ -362,8 +297,8 @@
             }
           ],
           "staticLegend": {},
-          "width": 6,
-          "xPos": 6,
+          "width": 12,
+          "xPos": 0,
           "yPos": 5
         },
         {
@@ -430,7 +365,7 @@
           "xCol": "_time",
           "xPos": 6,
           "yCol": "_value",
-          "yPos": 15
+          "yPos": 13
         }
       ],
       "name": "Blind1: Weather"
