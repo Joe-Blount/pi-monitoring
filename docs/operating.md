@@ -364,6 +364,58 @@ absorption or float within the last six hours. A start that fails the check
 is skipped, so a sunny day's load overstates what a dark spell draws. A run
 started by hand skips the check.
 
+## Which code each machine runs
+
+Every install leaves a record in `/var/lib/monitoring/installed.json`, and
+the host device publishes it with each reading:
+
+| Field | Meaning |
+|---|---|
+| `code_commit` | The commit installed, abbreviated. |
+| `code_branch` | Its branch. `HEAD` when the checkout was not on a branch. |
+| `code_commit_time` | When that commit was made, in epoch seconds. |
+| `code_dirty` | `1.0` when the checkout had local changes at install, so what runs is not exactly that commit. |
+| `code_installed_time` | When the install ran, in epoch seconds. |
+
+A machine installed before the record existed publishes none of these until
+its next install. The record says what was installed, not what is on disk:
+a pull without an install changes the disk and leaves the record alone.
+
+To see every machine at once, as a table:
+
+```
+host = from(bucket: "raw")
+    |> range(start: -1h)
+    |> filter(fn: (r) => r.device == "host" and r._field =~ /^code_/)
+    |> last()
+
+text = host |> filter(fn: (r) => r._field == "code_commit" or r._field == "code_branch")
+
+times = host
+    |> filter(fn: (r) => r._field == "code_commit_time" or r._field == "code_installed_time")
+    |> map(fn: (r) => ({r with _value: string(v: time(v: int(v: r._value) * 1000000000))}))
+
+dirty = host
+    |> filter(fn: (r) => r._field == "code_dirty")
+    |> map(fn: (r) => ({r with _value: if r._value > 0.5 then "yes" else "no"}))
+
+union(tables: [text, times, dirty])
+    |> group(columns: ["_measurement", "node"])
+    |> pivot(rowKey: ["_measurement", "node"], columnKey: ["_field"], valueColumn: "_value")
+    |> group()
+    |> keep(
+        columns: [
+            "_measurement",
+            "node",
+            "code_commit",
+            "code_branch",
+            "code_commit_time",
+            "code_dirty",
+            "code_installed_time",
+        ],
+    )
+```
+
 ## What to do when telegraf is down
 
 ```

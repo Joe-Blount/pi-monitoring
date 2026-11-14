@@ -9,11 +9,16 @@ Every path it reads is injectable, so the whole thing is testable on a laptop
 against a fixture tree rather than only on Linux.
 """
 
+import json
 import os
 import socket
 
 from .base import Driver, DriverError
 
+
+#: Written by deploy/install.sh at the end of every install: the commit it
+#: installed and when. Read through the injectable root like everything else.
+INSTALLED_FILE = "var/lib/monitoring/installed.json"
 
 #: What the memory readings are divided by to reach megabytes. The kernel
 #: reports kibibytes, so this is 1024 rather than 1000, and the figures then
@@ -22,7 +27,8 @@ KIB_PER_MIB = 1024.0
 
 
 class HostDriver(Driver):
-    """Temperature, load, memory, uptime, boot time, disk and address."""
+    """Temperature, load, memory, uptime, boot time, disk, address and the
+    code installed."""
 
     description = "machine health: temperature, load, memory, uptime, disk"
 
@@ -201,6 +207,44 @@ class HostDriver(Driver):
         except OSError:
             return None
 
+    def installed(self):
+        """What the last install put on this machine, as fields.
+
+        The commit, its branch and its time, whether the checkout had local
+        changes, and when the install ran. Read from the record install.sh
+        leaves, rather than from git, because the collector does not run as
+        the checkout's owner, and because the record says what was installed
+        where the checkout says only what is on disk. A missing or unreadable
+        record gives no fields: a machine installed before the record existed
+        reports nothing rather than something wrong.
+        """
+        try:
+            with open(self._path(INSTALLED_FILE)) as handle:
+                record = json.load(handle)
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(record, dict):
+            return {}
+
+        def text(key):
+            value = record.get(key)
+            return value if isinstance(value, str) and value else None
+
+        def number(key):
+            value = record.get(key)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return None
+            return float(value)
+
+        dirty = record.get("dirty")
+        return {
+            "code_commit": text("commit"),
+            "code_branch": text("branch"),
+            "code_commit_time": number("commit_time"),
+            "code_dirty": (1.0 if dirty else 0.0) if isinstance(dirty, bool) else None,
+            "code_installed_time": number("installed_time"),
+        }
+
     # -- driver interface -------------------------------------------------
 
     def read(self):
@@ -230,6 +274,7 @@ class HostDriver(Driver):
         }
         if self.report_address:
             fields["ip"] = self.address()
+        fields.update(self.installed())
 
         if not any(value is not None for value in fields.values()):
             raise DriverError(

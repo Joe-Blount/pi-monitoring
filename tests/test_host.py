@@ -130,3 +130,45 @@ def test_load_and_memory_are_absent_rather_than_zero_when_unreadable(tmp_path):
 def test_a_check_reports_load_and_memory_alongside_temperature():
     message = driver().check()
     assert "load" in message and "memory" in message
+
+
+def test_the_installed_code_is_reported_from_the_install_record():
+    fields = driver().read()
+    assert fields["code_commit"] == "20422a11"
+    assert fields["code_branch"] == "blind-deploy"
+    assert fields["code_commit_time"] == 1794600000.0
+    assert fields["code_dirty"] == 0.0
+    assert fields["code_installed_time"] == 1794601234.0
+
+
+def test_a_machine_with_no_install_record_reports_no_code_fields(tmp_path):
+    (tmp_path / "proc").mkdir()
+    (tmp_path / "proc" / "uptime").write_text("5.0 1.0\n")
+    fields = driver(sysfs_root=str(tmp_path)).read()
+    assert not [name for name in fields if name.startswith("code_")]
+
+
+@pytest.mark.parametrize("record", [
+    "not json",
+    "[1, 2]",
+    '{"commit": 7, "branch": "", "commit_time": "soon", "dirty": "no",'
+    ' "installed_time": true}',
+])
+def test_an_unusable_install_record_gives_no_values_rather_than_wrong_ones(
+        tmp_path, record):
+    (tmp_path / "proc").mkdir()
+    (tmp_path / "proc" / "uptime").write_text("5.0 1.0\n")
+    target = tmp_path / "var" / "lib" / "monitoring"
+    target.mkdir(parents=True)
+    (target / "installed.json").write_text(record)
+    fields = driver(sysfs_root=str(tmp_path)).read()
+    assert all(fields.get(name) is None for name in (
+        "code_commit", "code_branch", "code_commit_time", "code_dirty",
+        "code_installed_time"))
+
+
+def test_install_writes_the_record_where_the_driver_reads_it():
+    from monitoring.drivers import host
+    script = (pathlib.Path(__file__).resolve().parent.parent
+              / "deploy" / "install.sh").read_text()
+    assert "/" + host.INSTALLED_FILE in script

@@ -707,6 +707,40 @@ else
     echo "    timer off: this node has no /etc/monitoring/wavlink-recover.yaml"
 fi
 
+echo "==> what is installed"
+# The host device publishes this record, so a dashboard can say which commit
+# each machine runs and when it was installed. Written last, after every step
+# that can fail, so it never names a commit that did not finish installing.
+installed_tmp=$(mktemp)
+if git -C "$REPO" rev-parse HEAD >/dev/null 2>&1; then
+    if [[ -n "$(git -C "$REPO" status --porcelain 2>/dev/null)" ]]; then
+        dirty=true
+    else
+        dirty=false
+    fi
+    python3 - "$installed_tmp" \
+        "$(git -C "$REPO" rev-parse --short=8 HEAD)" \
+        "$(git -C "$REPO" rev-parse --abbrev-ref HEAD)" \
+        "$(git -C "$REPO" log -1 --format=%ct HEAD)" \
+        "$dirty" "$(date +%s)" <<'PY'
+import json
+import sys
+
+path, commit, branch, commit_time, dirty, now = sys.argv[1:]
+with open(path, "w") as handle:
+    json.dump({"commit": commit, "branch": branch,
+               "commit_time": int(commit_time), "dirty": dirty == "true",
+               "installed_time": int(now)}, handle)
+PY
+else
+    python3 -c 'import json, sys, time
+json.dump({"installed_time": int(time.time())}, open(sys.argv[1], "w"))' \
+        "$installed_tmp"
+fi
+install -m 0644 "$installed_tmp" /var/lib/monitoring/installed.json
+rm -f "$installed_tmp"
+echo "    $(cat /var/lib/monitoring/installed.json)"
+
 echo "==> restarting telegraf"
 systemctl restart telegraf
 sleep 3
