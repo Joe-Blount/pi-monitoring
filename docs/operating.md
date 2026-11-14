@@ -507,8 +507,8 @@ To have sound back on a node:
 sudo systemctl --global unmask pipewire.socket pipewire.service pipewire-pulse.socket pipewire-pulse.service wireplumber.service filter-chain.service
 ```
 
-Then reboot, or log out and back in, so the session starts them. The next
-install masks them again.
+Then reboot, so every session starts them. The next install masks them
+again.
 
 ## What to do when telegraf is down
 

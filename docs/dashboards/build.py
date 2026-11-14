@@ -184,8 +184,9 @@ option location = timezone.location(name: "America/Chicago")
 moving = amps |> filter(fn: (r) => math.abs(x: r.shunt_amps) >= 2.0)
 
 // The day's throughput from each reading's size, taken before any averaging,
-// so charge and discharge add rather than cancel. Both devices read once a
-// minute, so the ratio of their mean sizes is the ratio of their amp-hours.
+// so charge and discharge add rather than cancel. The sizes are averaged over
+// the same windows as above and only windows holding both devices count, so
+// a gap in one device does not tilt the day.
 daily = from(bucket: "raw")
     |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
     |> filter(
@@ -194,13 +195,21 @@ daily = from(bucket: "raw")
                 and
                 (r.device == "bms" and r._field == "pack_amps" or r.device == "shunt" and r._field == "shunt_amps"),
     )
-    |> map(fn: (r) => ({day: date.truncate(t: r._time, unit: 1d), _field: r._field, _value: math.abs(x: r._value)}))
-    |> group(columns: ["day", "_field"])
-    |> mean()
+    |> map(fn: (r) => ({r with _value: math.abs(x: r._value)}))
+    |> group(columns: ["_field"])
+    |> aggregateWindow(every: w, fn: mean, createEmpty: false)
     |> group()
-    |> pivot(rowKey: ["day"], columnKey: ["_field"], valueColumn: "_value")
-    |> filter(fn: (r) => exists r.pack_amps and exists r.shunt_amps and r.shunt_amps > 0.0)
-    |> map(fn: (r) => ({day: r.day, _value: 100.0 * r.pack_amps / r.shunt_amps}))
+    |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
+    |> filter(fn: (r) => exists r.pack_amps and exists r.shunt_amps)
+    |> map(fn: (r) => ({day: date.truncate(t: r._time, unit: 1d), chins: r.pack_amps, bank: r.shunt_amps}))
+    |> group(columns: ["day"])
+    |> reduce(
+        identity: {chins: 0.0, bank: 0.0},
+        fn: (r, accumulator) => ({chins: accumulator.chins + r.chins, bank: accumulator.bank + r.bank}),
+    )
+    |> group()
+    |> filter(fn: (r) => r.bank > 0.0)
+    |> map(fn: (r) => ({day: r.day, _value: 100.0 * r.chins / r.bank}))
 
 union(
     tables: [
