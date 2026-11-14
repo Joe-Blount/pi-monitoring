@@ -10,13 +10,16 @@ import pathlib
 import subprocess
 import sys
 
+import pytest
+
 REPO = pathlib.Path(__file__).resolve().parent.parent
 BUILD = REPO / "docs" / "dashboards" / "build.py"
 DASHBOARD = REPO / "docs" / "dashboards" / "blind1-energy.json"
+HEALTH = REPO / "docs" / "dashboards" / "pi-health.json"
 
 
-def _template():
-    return json.loads(DASHBOARD.read_text())
+def _template(path=DASHBOARD):
+    return json.loads(path.read_text())
 
 
 def test_the_committed_dashboard_matches_its_builder():
@@ -25,13 +28,14 @@ def test_the_committed_dashboard_matches_its_builder():
     assert result.returncode == 0, result.stderr
 
 
-def _charts():
-    (dashboard,) = _template()
+def _charts(path=DASHBOARD):
+    (dashboard,) = _template(path)
     return dashboard["spec"]["charts"]
 
 
-def test_the_dashboard_is_a_template_in_the_format_the_cloud_export_writes():
-    (dashboard,) = _template()
+@pytest.mark.parametrize("path", [DASHBOARD, HEALTH])
+def test_the_dashboard_is_a_template_in_the_format_the_cloud_export_writes(path):
+    (dashboard,) = _template(path)
     assert dashboard["apiVersion"] == "influxdata.com/v2alpha1"
     assert dashboard["kind"] == "Dashboard"
     for chart in dashboard["spec"]["charts"]:
@@ -48,12 +52,24 @@ def test_the_daily_cells_follow_the_dashboards_time_range():
         assert "lookback" not in text
 
 
-def test_the_cells_tile_the_grid_without_overlapping():
+@pytest.mark.parametrize("path", [DASHBOARD, HEALTH])
+def test_the_cells_tile_the_grid_without_overlapping(path):
     taken = set()
-    for chart in _charts():
+    for chart in _charts(path):
         x, y, w, h = chart["xPos"], chart["yPos"], chart["width"], chart["height"]
         assert 0 <= x and x + w <= 12
         for column in range(x, x + w):
             for row in range(y, y + h):
                 assert (column, row) not in taken
                 taken.add((column, row))
+
+
+def test_the_health_dashboard_names_no_machine():
+    """A machine added later must appear with no edit to the dashboard."""
+    files = [p for p in (REPO / "sites").glob("*/*.yaml")
+             if p.parent.name != "example"]
+    names = {p.stem for p in files} | {p.parent.name for p in files}
+    for chart in _charts(HEALTH):
+        text = chart["queries"][0]["query"]
+        for name in names:
+            assert '"%s"' % name not in text, (chart["name"], name)

@@ -381,7 +381,15 @@ A machine installed before the record existed publishes none of these until
 its next install. The record says what was installed, not what is on disk:
 a pull without an install changes the disk and leaves the record alone.
 
-To see every machine at once, as a table:
+[docs/dashboards/pi-health.json](dashboards/pi-health.json) shows every
+machine at once: a table of each one's latest readings, how long ago it last
+reported, and the code it runs, with graphs of temperature, load, memory,
+swap, disk and uptime under it. It finds machines by their host readings, so
+a machine added later appears on it by itself. Import it the same way as
+the energy dashboard. A machine that has not reported for a week drops off
+the table.
+
+The same table as a query of its own:
 
 ```
 host = from(bucket: "raw")

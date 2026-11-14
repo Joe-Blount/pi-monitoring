@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the blind's energy dashboard from the daily energy query.
+"""Build the dashboards: the blind's energy, and every machine's health.
 
 docs/queries/blind1-daily-energy.flux is the one place the daily figures
 are worked out. The dashboard's daily cells are that query, started from the
@@ -10,6 +10,9 @@ disagree. Run this after changing the query and commit what it writes:
 
 With --check it writes nothing and exits 1 if the committed dashboard is out
 of date.
+
+The health dashboard finds machines by their host readings, so a machine
+added later appears on it with no change here.
 
 The output is an InfluxDB template, the format the web interface's own
 dashboard export writes, and imports there: Dashboards, Create Dashboard,
@@ -24,6 +27,7 @@ import sys
 HERE = pathlib.Path(__file__).resolve().parent
 QUERY = HERE.parent / "queries" / "blind1-daily-energy.flux"
 OUT = HERE / "blind1-energy.json"
+HEALTH_OUT = HERE / "pi-health.json"
 
 FIXED_START = "start = date.truncate(t: lookback, unit: 1d)\n"
 PICKED_START = "start = date.truncate(t: v.timeRangeStart, unit: 1d)\n"
@@ -297,6 +301,25 @@ def table(name, text):
     }
 
 
+def dashboard(meta_name, name, description, cells):
+    """An InfluxDB template holding one dashboard.
+
+    `cells` is (x, y, w, h, chart) on the dashboard's twelve-column grid.
+    """
+    charts = []
+    for x, y, w, h, chart in cells:
+        placed = {"name": chart["name"], "xPos": x, "yPos": y,
+                  "width": w, "height": h}
+        placed.update((k, v) for k, v in chart.items() if k != "name")
+        charts.append(placed)
+    return [{
+        "apiVersion": "influxdata.com/v2alpha1",
+        "kind": "Dashboard",
+        "metadata": {"name": meta_name},
+        "spec": {"name": name, "description": description, "charts": charts},
+    }]
+
+
 def build():
     query = QUERY.read_text()
     # (x, y, w, h, chart) on the dashboard's twelve-column grid.
@@ -315,36 +338,143 @@ def build():
                         "Wh")),
         (0, 9, 12, 4, table("Daily energy", daily(query, None))),
     ]
-    charts = []
-    for x, y, w, h, chart in cells:
-        placed = {"name": chart["name"], "xPos": x, "yPos": y,
-                  "width": w, "height": h}
-        placed.update((k, v) for k, v in chart.items() if k != "name")
-        charts.append(placed)
-    return [{
-        "apiVersion": "influxdata.com/v2alpha1",
-        "kind": "Dashboard",
-        "metadata": {"name": "blind-energy"},
-        "spec": {
-            "name": "Blind energy",
-            "description": "The blind's battery bank and solar, from the "
-                           "shunt and the charge controller.",
-            "charts": charts,
-        },
-    }]
+    return dashboard(
+        "blind-energy", "Blind energy",
+        "The blind's battery bank and solar, from the shunt and the charge "
+        "controller.", cells)
+
+
+# Every machine is found by the fields its host device publishes, never by
+# name, so the dashboard needs no edit when a machine is added. Each series
+# is one machine, labelled by its measurement (the site) and node.
+
+def health_graph(field):
+    return """\
+from(bucket: "raw")
+    |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+    |> filter(fn: (r) => r._field == "%s")
+    |> group(columns: ["_measurement", "node"])
+    |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)
+""" % field
+
+
+MACHINES = """\
+// One row per machine that has reported in the last week, newest readings.
+// A machine that stops reporting stays listed, and "seen" says how long ago.
+
+import "math"
+
+// Strings and numbers are read apart: one stream holding both is a type
+// conflict for every function that touches _value.
+recent = (fields) =>
+    from(bucket: "raw")
+        |> range(start: -7d)
+        |> filter(fn: (r) => contains(value: r._field, set: fields))
+        |> last()
+
+latest = recent(
+    fields: [
+        "uptime_seconds",
+        "cpu_temp_f",
+        "load_per_core",
+        "mem_used_pct",
+        "swap_used_pct",
+        "root_used_pct",
+        "code_dirty",
+        "code_installed_time",
+    ],
+)
+
+ago = (t) => string(v: duration(v: (int(v: now()) - int(v: t)) / 1000000000 * 1000000000))
+
+seen = latest
+    |> filter(fn: (r) => r._field == "uptime_seconds")
+    |> map(fn: (r) => ({r with _field: "seen", _value: ago(t: r._time) + " ago"}))
+
+uptime = latest
+    |> filter(fn: (r) => r._field == "uptime_seconds")
+    |> map(fn: (r) => ({r with _field: "up", _value: string(v: duration(v: int(v: r._value) * 1000000000))}))
+
+numbers = latest
+    |> filter(
+        fn: (r) =>
+            r._field == "cpu_temp_f" or r._field == "load_per_core" or r._field == "mem_used_pct"
+                or
+                r._field == "swap_used_pct" or r._field == "root_used_pct",
+    )
+    |> map(fn: (r) => ({r with _value: string(v: math.round(x: r._value * 100.0) / 100.0)}))
+
+text = recent(fields: ["ip", "code_commit", "code_branch"])
+
+dirty = latest
+    |> filter(fn: (r) => r._field == "code_dirty")
+    |> map(fn: (r) => ({r with _value: if r._value > 0.5 then "local changes" else "clean"}))
+
+installed = latest
+    |> filter(fn: (r) => r._field == "code_installed_time")
+    |> map(
+        fn: (r) =>
+            ({r with _value: ago(t: time(v: int(v: r._value) * 1000000000)) + " ago"}),
+    )
+
+union(tables: [seen, uptime, numbers, text, dirty, installed])
+    |> group(columns: ["_measurement", "node"])
+    |> pivot(rowKey: ["_measurement", "node"], columnKey: ["_field"], valueColumn: "_value")
+    |> group()
+    |> rename(columns: {_measurement: "site"})
+    |> sort(columns: ["site", "node"])
+"""
+
+MACHINE_COLUMNS = [
+    ("site", "site"), ("node", "node"), ("seen", "seen"), ("up", "up"),
+    ("ip", "address"), ("cpu_temp_f", "CPU F"), ("load_per_core", "load/core"),
+    ("mem_used_pct", "mem %"), ("swap_used_pct", "swap %"),
+    ("root_used_pct", "disk %"), ("code_commit", "commit"),
+    ("code_branch", "branch"), ("code_dirty", "checkout"),
+    ("code_installed_time", "installed"),
+]
+
+
+def machines_table():
+    chart = table("Machines", MACHINES)
+    chart["timeFormat"] = ""
+    chart["tableOptions"]["sortBy"] = "site"
+    chart["fieldOptions"] = [
+        {"fieldName": field, "displayName": label, "visible": True}
+        for field, label in MACHINE_COLUMNS]
+    return chart
+
+
+def build_health():
+    cells = [
+        (0, 0, 12, 3, machines_table()),
+        (0, 3, 6, 3, xy("CPU temperature", health_graph("cpu_temp_f"), "F")),
+        (6, 3, 6, 3, xy("Load per core", health_graph("load_per_core"), "")),
+        (0, 6, 4, 3, xy("Memory used", health_graph("mem_used_pct"), "%")),
+        (4, 6, 4, 3, xy("Swap used", health_graph("swap_used_pct"), "%")),
+        (8, 6, 4, 3, xy("Disk used", health_graph("root_used_pct"), "%")),
+        (0, 9, 12, 2, xy("Uptime", health_graph("uptime_seconds"), "s")),
+    ]
+    return dashboard(
+        "pi-health", "Pi health",
+        "Every machine that reports host readings, found by its readings.",
+        cells)
 
 
 def main(argv):
-    text = json.dumps(build(), indent=2) + "\n"
+    outputs = [(OUT, build()), (HEALTH_OUT, build_health())]
     if argv[1:] == ["--check"]:
-        if not OUT.exists() or OUT.read_text() != text:
-            print("%s is out of date; run %s" % (OUT, __file__), file=sys.stderr)
-            return 1
-        return 0
+        stale = [path for path, template in outputs
+                 if not path.exists()
+                 or path.read_text() != json.dumps(template, indent=2) + "\n"]
+        for path in stale:
+            print("%s is out of date; run %s" % (path, __file__), file=sys.stderr)
+        return 1 if stale else 0
     if argv[1:]:
         print("usage: %s [--check]" % argv[0], file=sys.stderr)
         return 2
-    OUT.write_text(text)
+    for path, template in outputs:
+        path.write_text(json.dumps(template, indent=2) + "\n")
     return 0
 
 
