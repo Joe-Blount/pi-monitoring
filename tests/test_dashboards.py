@@ -44,6 +44,9 @@ def test_the_dashboard_is_a_template_in_the_format_the_cloud_export_writes(path)
     assert dashboard["apiVersion"] == "influxdata.com/v2alpha1"
     assert dashboard["kind"] == "Dashboard"
     for chart in dashboard["spec"]["charts"]:
+        if chart["kind"] == "Markdown":
+            assert chart["note"].strip()
+            continue
         assert chart["kind"] in {"Xy", "Single_Stat", "Table"}
         assert chart["queries"][0]["query"].strip()
 
@@ -149,3 +152,18 @@ def test_the_sok_alarm_words_follow_the_drivers_bit_order():
     from monitoring.drivers import abc_bms
     assert [code for code, _words in build.SOK_PROTECTION] == [
         code for code, _description in abc_bms.PROTECTION_STATES]
+
+
+def test_the_load_estimates_name_only_loads_the_blind_controller_drives():
+    """A renamed load would otherwise drop out of the table with no error."""
+    import re
+    import yaml
+    node = yaml.safe_load((REPO / "sites" / "blind1" / "downstairs.yaml").read_text())
+    driven = set(node["control"]["loads"])
+    (chart,) = [c for c in _charts() if c["name"] == "Load estimates"]
+    text = chart["queries"][0]["query"]
+    (listed,) = re.findall(r"r\.load =~ /\^\(([a-z_|\[\].]+)\)\$/", text)
+    names = {part.replace("[.]", ".") for part in listed.split("|")}
+    assert {name.split(".")[0] for name in names} <= driven
+    for name in names:
+        assert '"%s"' % name in text, name

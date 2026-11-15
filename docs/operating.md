@@ -373,11 +373,23 @@ It shows:
   throughput as a flat step. A share above 100 or below 0 means one pack is
   charging the other. The share moves with state of charge, so a fixed
   share is not a sign of trouble by itself.
+- what each load draws, from the last time it was measured, with how many
+  measurements the last 30 days hold and their average. A load is measured
+  as the step in the bank's current when the controller switches it, with
+  no charge coming in, so the cameras are measured in the dark or while
+  the panels are off. Day and night are kept apart for the cameras, whose
+  infrared lights draw at night. The far cameras open each window five
+  minutes after the near ones, so each group's start is a step of its own.
+  The recorder is wired around its relay, so its row is the bank's draw
+  with every relay load off, and it includes the Pi, the network gear and
+  the radios. The pump's row includes the inverter. The query is
+  [docs/queries/blind1-loads.flux](queries/blind1-loads.flux).
 
 The supply and state of charge graphs follow the dashboard's time range. The
 daily cells start at the midnight on or before the range's start and run
 through today. The
-night draw is always the last 24 hours. Pick 24 hours for the supply graph
+night draw is always the last 24 hours, and the load estimates the last 30
+days. Pick 24 hours for the supply graph
 and 7 days for the daily ones. A range reaching back past the bucket's oldest
 data makes the first day a part day.
 

@@ -27,6 +27,7 @@ import sys
 
 HERE = pathlib.Path(__file__).resolve().parent
 QUERY = HERE.parent / "queries" / "blind1-daily-energy.flux"
+LOADS_QUERY = HERE.parent / "queries" / "blind1-loads.flux"
 OUT = HERE / "blind1-energy.json"
 HEALTH_OUT = HERE / "pi-health.json"
 CHINS_OUT = HERE / "blind1-chins.json"
@@ -410,6 +411,43 @@ def table(name, text):
     }
 
 
+def note(name, text):
+    return {"name": name, "kind": "Markdown", "note": text}
+
+
+LOADS_COLUMNS = [
+    ("load", "load"),
+    ("amps", "A"),
+    ("watts_at_13v2", "W"),
+    ("measured", "measured"),
+    ("times", "times in 30 days"),
+    ("average_amps", "average A"),
+]
+
+LOADS_NOTE = """\
+Each row is the step in the bank's current the last time the controller \
+switched that load, with no charge coming in. The cameras are measured at \
+night and by day apart, because their infrared lights draw at night.
+
+The far cameras start five minutes after the near ones, so each group's \
+start is a step of its own.
+
+**Recorder and base load** is what the bank draws with every relay load \
+off. The recorder is wired around its relay, so it is not measured apart \
+from the Pi, the network gear and the radios.
+
+The pump row includes the inverter, which starts with it.\
+"""
+
+
+def loads_table():
+    chart = status_table("Load estimates", LOADS_QUERY.read_text(), "load",
+                         LOADS_COLUMNS)
+    chart["decimalPlaces"] = 2
+    chart["timeFormat"] = "YYYY-MM-DD HH:mm"
+    return chart
+
+
 def dashboard(meta_name, name, description, cells):
     """An InfluxDB template holding one dashboard.
 
@@ -449,6 +487,8 @@ def build():
         (0, 13, 6, 3, xy("Current by pack (positive is charging)", PACK_CURRENT,
                          "A")),
         (6, 13, 6, 3, xy("Share of the bank's current", PACK_SHARE, "%")),
+        (0, 16, 8, 4, loads_table()),
+        (8, 16, 4, 4, note("How loads are measured", LOADS_NOTE)),
     ]
     return dashboard(
         "blind-energy", "Blind energy",

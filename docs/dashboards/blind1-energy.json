@@ -408,6 +408,76 @@
               "scale": "linear"
             }
           ]
+        },
+        {
+          "name": "Load estimates",
+          "xPos": 0,
+          "yPos": 16,
+          "width": 8,
+          "height": 4,
+          "kind": "Table",
+          "queries": [
+            {
+              "query": "// What each of the blind's loads draws, from the last time it was measured.\n//\n// A load is measured when the controller switches it: the step in the\n// bank's current across the switch is the load's draw. Each row is the\n// latest such step for a load, with when it was taken, how many were taken\n// in the last thirty days, and their average.\n//\n// The recorder's branch is wired around its relay, so it is never switched.\n// Its row is the bank's draw while every relay load has been off for five\n// minutes, with no charge coming in. That holds the recorder and everything\n// that cannot be shed: the Pi, the network gear, the charge controller and\n// the battery radios. The two are not measured apart.\n//\n// Watts are at a nominal 13.2 V.\n\nimport \"date\"\nimport \"join\"\nimport \"strings\"\nimport \"timezone\"\n\noption location = timezone.location(name: \"America/Chicago\")\n\nstart = -30d\n\nnode = (device, fields) => from(bucket: \"raw\")\n    |> range(start: start)\n    |> filter(fn: (r) => r._measurement == \"blind1\" and r.node == \"downstairs\" and r.device == device and r._field =~ fields)\n\n// The controller's relay loads. The recorder's relay is listed but its\n// branch is wired around it, so it is never measured.\nrelays = node(device: \"control\", fields: /^powered$/)\n    |> filter(fn: (r) => r.load =~ /^(cameras_far|cameras_near|cpu_fan|irrigation|irrigation[.]inverter)$/)\n\n// Switches in one publish are one event. The pump and its inverter start\n// and stop together, and that is the pump; any other pair is two loads at\n// once and is measured as neither. Each event knows how long since the one\n// before it and until the one after, which bounds its windows.\nevents = relays\n    |> group(columns: [\"load\"])\n    |> sort(columns: [\"_time\"])\n    |> difference()\n    |> filter(fn: (r) => r._value != 0.0)\n    |> group(columns: [\"_time\"])\n    |> reduce(\n        identity: {n: 0, names: \"\", dir: 0.0, pump_dir: 0.0},\n        fn: (r, accumulator) => ({\n            n: accumulator.n + 1,\n            names: accumulator.names + r.load + \" \",\n            dir: r._value,\n            pump_dir: if r.load == \"irrigation\" then r._value else accumulator.pump_dir,\n        }),\n    )\n    |> group()\n    |> sort(columns: [\"_time\"])\n    |> map(\n        fn: (r) => {\n            pump = r.n == 2 and strings.containsStr(v: r.names, substr: \"irrigation \")\n                and strings.containsStr(v: r.names, substr: \"irrigation.inverter \")\n            load = if r.n == 1 then strings.trimSpace(v: r.names) else if pump then \"irrigation\" else \"several\"\n\n            return {_time: r._time, load: load, dir: if pump then r.pump_dir else r.dir, t: int(v: r._time)}\n        },\n    )\n    |> duplicate(column: \"t\", as: \"t_prev\")\n    |> difference(columns: [\"t_prev\"], keepFirst: true)\n    |> sort(columns: [\"_time\"], desc: true)\n    |> duplicate(column: \"t\", as: \"t_next\")\n    |> difference(columns: [\"t_next\"], keepFirst: true)\n    |> sort(columns: [\"_time\"])\n    |> map(\n        fn: (r) => ({\n            ev: r._time,\n            load: r.load,\n            dir: r.dir,\n            since: if exists r.t_prev then r.t_prev else int(v: 1h),\n            until: if exists r.t_next then -r.t_next else int(v: 1h),\n        }),\n    )\n    |> filter(fn: (r) => r.load != \"several\")\n\n// Each event is offered every thirty-second slot from three minutes before\n// it to five minutes after, and a reading meets the events whose slots hold\n// it. The events are few, so they are the side that is copied.\nslots = (d) => events\n    |> map(fn: (r) => ({r with key: date.truncate(t: date.add(d: d, to: r.ev), unit: 30s)}))\n\noffered = union(\n    tables: [\n        slots(d: -210s), slots(d: -180s), slots(d: -150s), slots(d: -120s),\n        slots(d: -90s), slots(d: -60s), slots(d: -30s), slots(d: 0s),\n        slots(d: 30s), slots(d: 60s), slots(d: 90s), slots(d: 120s),\n        slots(d: 150s), slots(d: 180s), slots(d: 210s), slots(d: 240s),\n        slots(d: 270s), slots(d: 300s),\n    ],\n)\n\nreadings = (device, field) => node(device: device, fields: field)\n    |> group()\n    |> map(fn: (r) => ({_time: r._time, value: r._value, key: date.truncate(t: r._time, unit: 30s)}))\n\n// The controller publishes a switch up to thirty seconds after it makes\n// it, so a reading in those thirty seconds may already hold the step. A\n// camera's own start draws more than it runs on, so its after window opens\n// two minutes on. The pump is measured on its first reading, as the\n// controller measures it. Before an event, the last reading stands.\nsettle = (load) => if load == \"irrigation\" then 0 else int(v: 2m)\n\nside = (l, t) => {\n    age = int(v: t) - int(v: l.ev)\n\n    return if age < -int(v: 30s) and -age <= int(v: 3m) and -age < l.since then \"before\"\n        else if age > settle(load: l.load) and age <= int(v: 270s) and age < l.until then \"after\"\n        else \"none\"\n}\n\nmet = (device, field) => join.inner(\n    left: offered,\n    right: readings(device: device, field: field),\n    on: (l, r) => l.key == r.key,\n    as: (l, r) => ({ev: l.ev, load: l.load, dir: l.dir, side: side(l: l, t: r._time), _time: r._time, value: r.value}),\n)\n    |> filter(fn: (r) => r.side != \"none\")\n\namps = met(device: \"shunt\", field: /^shunt_amps$/)\n    |> group(columns: [\"ev\", \"load\", \"dir\", \"side\"])\n    |> sort(columns: [\"_time\"])\n\nused = union(\n    tables: [\n        amps |> filter(fn: (r) => r.side == \"before\") |> last(column: \"_time\"),\n        amps |> filter(fn: (r) => r.side == \"after\"),\n    ],\n)\n\n// Any charge while the step is measured, from the panels or a generator,\n// would hide part of it, so such an event is not measured. The charge\n// controller is checked from ninety seconds before the switch, which holds\n// the shunt reading the step starts from.\ncharging = union(tables: [\n    used |> filter(fn: (r) => r.value > 0.0),\n    met(device: \"mppt\", field: /^battery_amps$/)\n        |> filter(fn: (r) => r.value > 0.0)\n        |> filter(fn: (r) => r.side == \"after\" or int(v: r._time) - int(v: r.ev) >= -int(v: 90s)),\n])\n    |> group()\n    |> keep(columns: [\"ev\"])\n    |> distinct(column: \"ev\")\n    |> map(fn: (r) => ({ev: r._value, charging: true}))\n\nsteps = used\n    |> mean(column: \"value\")\n    |> group()\n    |> pivot(rowKey: [\"ev\", \"load\", \"dir\"], columnKey: [\"side\"], valueColumn: \"value\")\n    |> filter(fn: (r) => exists r.before and exists r.after)\n\nsteps_labelled = join.left(\n    left: steps,\n    right: charging,\n    on: (l, r) => l.ev == r.ev,\n    as: (l, r) => ({l with charging: exists r.charging}),\n)\n    |> filter(fn: (r) => not r.charging)\n    |> map(\n        fn: (r) => {\n            amps = (r.before - r.after) * r.dir\n            // Hours that are dark, or light, all year here. A camera's\n            // infrared lights draw at night, so the two are kept apart, and\n            // a switch in the hours between is left out.\n            hour = date.hour(t: r.ev)\n            when = if hour < 6 or hour >= 21 then \"night\" else if hour >= 9 and hour < 16 then \"day\" else \"twilight\"\n\n            // The pump's classes follow its check in the node file: 30 to\n            // 60 A is a pump moving water.\n            label = if r.load == \"cameras_far\" then \"Far cameras, \" + when\n                else if r.load == \"cameras_near\" then \"Near cameras, \" + when\n                else if r.load == \"irrigation\" and amps < 30.0 then \"Pump, dry\"\n                else if r.load == \"irrigation\" and amps > 60.0 then \"Pump, stalled\"\n                else if r.load == \"irrigation\" then \"Pump, wet (inverter included)\"\n                else if r.load == \"irrigation.inverter\" then \"Inverter, idle\"\n                else if r.load == \"cpu_fan\" then \"Pi fan\"\n                else r.load\n\n            return {label: label, _time: r.ev, amps: amps}\n        },\n    )\n    |> filter(fn: (r) => not strings.hasSuffix(v: r.label, suffix: \"twilight\"))\n\n// The draw with every relay load off for a whole five minutes, no charge\n// coming in and the bank discharging: the recorder, whose branch the relay\n// does not switch, and everything that cannot be shed.\nwindow = (tables=<-, fn) => tables\n    |> aggregateWindow(every: 5m, fn: fn, createEmpty: false, timeSrc: \"_start\")\n    |> group()\n\nbusy = relays\n    |> group(columns: [\"load\"])\n    |> window(fn: max)\n    |> group(columns: [\"_time\"])\n    |> sum()\n    |> group()\n    |> map(fn: (r) => ({_time: r._time, kind: \"busy\", value: r._value}))\n\nrest = union(\n    tables: [\n        busy,\n        node(device: \"shunt\", fields: /^shunt_amps$/) |> window(fn: mean)\n            |> map(fn: (r) => ({_time: r._time, kind: \"amps\", value: r._value})),\n        node(device: \"mppt\", fields: /^battery_amps$/) |> window(fn: max)\n            |> map(fn: (r) => ({_time: r._time, kind: \"solar\", value: r._value})),\n    ],\n)\n    |> pivot(rowKey: [\"_time\"], columnKey: [\"kind\"], valueColumn: \"value\")\n    |> filter(fn: (r) => exists r.busy and exists r.amps and exists r.solar)\n    |> filter(fn: (r) => r.busy == 0.0 and r.solar <= 0.0 and r.amps < 0.0)\n    |> sort(columns: [\"_time\"])\n    |> tail(n: 12)\n    |> map(fn: (r) => ({label: \"Recorder and base load\", _time: r._time, amps: -r.amps}))\n\nmeasured = union(tables: [steps_labelled, rest])\n    |> group(columns: [\"label\"])\n    |> sort(columns: [\"_time\"])\n\nstats = measured\n    |> reduce(\n        identity: {n: 0, total: 0.0},\n        fn: (r, accumulator) => ({n: accumulator.n + 1, total: accumulator.total + r.amps}),\n    )\n\njoin.inner(\n    left: measured |> last(column: \"_time\") |> group(),\n    right: stats |> group(),\n    on: (l, r) => l.label == r.label,\n    as: (l, r) => ({\n        load: l.label,\n        amps: l.amps,\n        watts_at_13v2: l.amps * 13.2,\n        measured: l._time,\n        times: r.n,\n        average_amps: r.total / float(v: r.n),\n    }),\n)\n    |> sort(columns: [\"load\"])\n"
+            }
+          ],
+          "timeFormat": "YYYY-MM-DD HH:mm",
+          "decimalPlaces": 2,
+          "enforceDecimals": true,
+          "colors": [
+            {
+              "name": "laser",
+              "type": "text",
+              "hex": "#00C9FF"
+            }
+          ],
+          "tableOptions": {
+            "verticalTimeAxis": true,
+            "wrapping": "truncate",
+            "fixFirstColumn": true,
+            "sortBy": "load"
+          },
+          "fieldOptions": [
+            {
+              "fieldName": "load",
+              "displayName": "load",
+              "visible": true
+            },
+            {
+              "fieldName": "amps",
+              "displayName": "A",
+              "visible": true
+            },
+            {
+              "fieldName": "watts_at_13v2",
+              "displayName": "W",
+              "visible": true
+            },
+            {
+              "fieldName": "measured",
+              "displayName": "measured",
+              "visible": true
+            },
+            {
+              "fieldName": "times",
+              "displayName": "times in 30 days",
+              "visible": true
+            },
+            {
+              "fieldName": "average_amps",
+              "displayName": "average A",
+              "visible": true
+            }
+          ]
+        },
+        {
+          "name": "How loads are measured",
+          "xPos": 8,
+          "yPos": 16,
+          "width": 4,
+          "height": 4,
+          "kind": "Markdown",
+          "note": "Each row is the step in the bank's current the last time the controller switched that load, with no charge coming in. The cameras are measured at night and by day apart, because their infrared lights draw at night.\n\nThe far cameras start five minutes after the near ones, so each group's start is a step of its own.\n\n**Recorder and base load** is what the bank draws with every relay load off. The recorder is wired around its relay, so it is not measured apart from the Pi, the network gear and the radios.\n\nThe pump row includes the inverter, which starts with it."
         }
       ]
     }
