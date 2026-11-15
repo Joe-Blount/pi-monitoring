@@ -433,3 +433,11 @@ def test_the_base_load_is_not_read_while_an_undriven_load_runs():
     bench.switch(cameras_far=False)
     bench.run(1800)
     assert "base" not in bench.meter.results
+
+
+def test_the_base_load_is_not_read_while_an_output_waits_for_its_first_drive():
+    """Until then it sits at its fail-safe, which may run it."""
+    bench = Bench(NIGHT, amps=-4.8, undriven=["cpu_fan"])
+    bench.switch(cameras_far=False)
+    bench.run(1800)
+    assert "base" not in bench.meter.results

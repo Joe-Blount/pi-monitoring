@@ -285,8 +285,9 @@ class Meter:
     # -- the base load --------------------------------------------------
 
     def _watch_base(self, fresh, charging, mono, wall):
+        # An output not yet driven sits at its fail-safe, which may run it.
         running = self.spec.get("running_undriven") or any(
-            on for output, on in self._connected.items()
+            self._connected.get(output, True) for output in self.kinds
             if output not in self.spec["wired_around"])
         if running or charging or self._quiet_since is None:
             self._quiet_since = None if (running or charging) else mono
