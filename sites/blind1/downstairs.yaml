@@ -321,6 +321,11 @@ control:
     # injector. Lower priority than the near cameras, so each of the same
     # windows is entered 10 to 15 points earlier, and they are off for good
     # at 20 percent, before the near cameras go dark.
+    #
+    # Each window opens five minutes after the near cameras' one. The
+    # recorder lists cameras in the order they come up, which keeps the two
+    # groups apart in it, and each start is then a step of its own on the
+    # shunt.
     cameras_far:
       type: dc_branch
       enabled: true
@@ -356,14 +361,14 @@ control:
 
         tiers:
           - below_pct: 60
-            schedule: {type: clock, on_from: "05:00", on_to: "22:00"}
+            schedule: {type: clock, on_from: "05:05", on_to: "22:00"}
 
           - below_pct: 40
             schedule:
               type: solar
               on_windows:
-                - {from: [sunrise, -1h], to: [sunrise, 2h]}
-                - {from: [sunset, -2h], to: [sunset, 1h]}
+                - {from: [sunrise, -55m], to: [sunrise, 2h]}
+                - {from: [sunset, -115m], to: [sunset, 1h]}
 
           - below_pct: 20
             schedule: {type: never}

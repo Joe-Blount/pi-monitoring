@@ -238,16 +238,32 @@ def test_the_recorder_is_running_whenever_a_camera_is(loads, suns, steps):
 
 @pytest.mark.parametrize("soc,hour,minute,connected", [
     (55.0, 21, 59, True),
-    (55.0, 5, 1, True),
+    (55.0, 5, 6, True),
     (35.0, 6, 30, True),
     (35.0, 12, 0, False),
     (35.0, 19, 30, True),
     (19.0, 6, 30, False),
 ])
-def test_the_far_cameras_keep_the_same_windows_at_higher_thresholds(
+def test_the_far_cameras_keep_the_near_cameras_windows_at_higher_thresholds(
         loads, suns, soc, hour, minute, connected):
     decision = settled(loads, suns, soc, at(hour, minute), load="cameras_far")
     assert decision.connected is connected, decision.reason
+
+
+@pytest.mark.parametrize("soc,opens", [
+    (45.0, lambda suns: at(5, 0)),
+    (22.0, lambda suns: suns[1]["sunrise"] - datetime.timedelta(hours=1)),
+    (22.0, lambda suns: suns[1]["sunset"] - datetime.timedelta(hours=2)),
+], ids=["clock", "sunrise", "sunset"])
+def test_the_far_cameras_open_each_window_five_minutes_after_the_near_cameras(
+        loads, suns, soc, opens):
+    start = opens(suns)
+    for minutes, far in ((2, False), (6, True)):
+        when = start + datetime.timedelta(minutes=minutes)
+        near = settled(loads, suns, soc, when)
+        assert near.connected, (minutes, near.reason)
+        decision = settled(loads, suns, soc, when, load="cameras_far")
+        assert decision.connected is far, (minutes, decision.reason)
 
 
 @pytest.mark.parametrize("load", ["cameras_far", "cameras_near", "nvr"])

@@ -891,10 +891,19 @@ def test_the_other_camera_branches_are_the_ones_that_were_agreed(name):
     for key in ("source", "stale_after", "release_margin_pct",
                 "enter_after_readings", "restore_dwell", "floor"):
         assert ladder[key] == near["shed_ladder"][key], key
+    if name != "cameras_far":
+        return
+    # Each window is the near cameras' one, opening five minutes later.
+    later = datetime.timedelta(minutes=5)
     for mine, theirs in zip(ladder["tiers"], near["shed_ladder"]["tiers"]):
-        if mine["schedule"]["type"] != "never":
-            assert mine["schedule"] == theirs["schedule"], (
-                "the far cameras keep the near cameras' windows")
+        kind = mine["schedule"]["type"]
+        if kind == "clock":
+            assert mine["schedule"] == dict(
+                theirs["schedule"], on_from=theirs["schedule"]["on_from"] + 5)
+        elif kind == "solar":
+            shifted = [dict(w, **{"from": (w["from"][0], w["from"][1] + later)})
+                       for w in theirs["schedule"]["on_windows"]]
+            assert mine["schedule"]["on_windows"] == shifted
 
 
 def test_the_camera_windows_stay_inside_the_tier_above_them_all_year():
