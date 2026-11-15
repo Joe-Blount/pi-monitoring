@@ -146,6 +146,9 @@ class ControlDriver(Driver):
                 "%s was not written during this boot, so the controller has "
                 "not published since the machine started" % self.path)
 
+        figures = record.get("figures")
+        figures = figures if isinstance(figures, dict) else {}
+
         own = _values(fields)
         own["published_age_seconds"] = max(
             0.0, self._monotonic() - float(stamp))
@@ -157,7 +160,17 @@ class ControlDriver(Driver):
                     "%s carries no usable value for load %s, so the "
                     "controller wrote a document it could not fill"
                     % (self.path, name))
+            # A load's measured draw rides on its own point.
+            if isinstance(figures.get(name), dict):
+                values.update(_values(figures[name]))
             points.append(Point(values, tags={"load": name}))
+        # And a load the controller does not drive gets a point of its own,
+        # carrying only what it was measured to draw.
+        for name in sorted(set(figures) - set(loads)):
+            values = _values(figures[name]) if isinstance(
+                figures[name], dict) else {}
+            if values:
+                points.append(Point(values, tags={"load": name}))
         return points
 
     def check(self):

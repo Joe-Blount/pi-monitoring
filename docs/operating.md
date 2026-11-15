@@ -379,7 +379,9 @@ It shows:
   coming in and no other relay switching, and keeps
   the latest figure for each on its card, in the meter's state file. It
   publishes every figure on every pass, so the table reads only the last
-  week and a figure stays until a newer one replaces it. Day and night are
+  week and a figure stays until a newer one replaces it. A load the node
+  file disables still has its figures published, since what it draws does
+  not change. Day and night are
   kept apart for the cameras, whose infrared lights draw at night, and a
   switch in twilight is not measured. The far cameras open each window
   five minutes after the near ones, so each group's start is a step of its

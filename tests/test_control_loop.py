@@ -724,7 +724,7 @@ def test_a_load_the_loop_sheds_is_measured_kept_on_the_card_and_published(
     assert pin.levels[-1] is True
     kept = json.loads((tmp_path / "loads.json").read_text())
     assert kept["cameras"]["day"]["amps"] == pytest.approx(4.0)
-    cameras = published["loads"]["cameras"]
+    cameras = published["figures"]["cameras"]
     assert cameras["draw_day_amps"] == pytest.approx(4.0)
     assert cameras["draw_day_at"] == pytest.approx(kept["cameras"]["day"]["at"])
 
@@ -735,8 +735,18 @@ def test_a_figure_kept_on_the_card_is_published_by_the_next_process(tmp_path):
          "base": {"amps": 1.8, "at": 1.0e9}}))
     machine, _, published, _ = build(tmp_path, meter=metered(tmp_path))
     machine.once()
-    assert published["loads"]["cameras"]["draw_night_amps"] == 2.9
+    assert published["figures"]["cameras"]["draw_night_amps"] == 2.9
     assert published["fields"]["base_amps"] == 1.8
+
+
+def test_a_load_the_node_file_disables_still_reports_what_it_draws(tmp_path):
+    (tmp_path / "loads.json").write_text(json.dumps(
+        {"irrigation": {"wet": {"amps": 46.4, "at": 1.0e9}}}))
+    machine, _, published, _ = build(tmp_path, meter=metered(tmp_path))
+    machine.once()
+    assert "irrigation" not in published["loads"]
+    assert published["figures"]["irrigation"] == {
+        "draw_wet_amps": 46.4, "draw_wet_at": 1.0e9}
 
 
 def test_a_meter_that_cannot_write_its_card_leaves_control_alone(
@@ -753,7 +763,7 @@ def test_a_meter_that_cannot_write_its_card_leaves_control_alone(
     state["mono"] += 10.0
     machine.once()
     assert pin.levels[-1] is True
-    assert published["loads"]["cameras"]["draw_day_amps"] == \
+    assert published["figures"]["cameras"]["draw_day_amps"] == \
         pytest.approx(4.0)
     assert capsys.readouterr().err.count("load meter:") == 1
 

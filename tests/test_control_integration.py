@@ -556,6 +556,21 @@ def test_a_load_published_with_no_fields_is_a_fault(tmp_path):
     assert "cameras" in str(raised.value)
 
 
+def test_a_loads_measured_draw_rides_on_its_own_point(tmp_path):
+    document = dict(DOCUMENT, figures={
+        "cameras": {"draw_night_amps": 2.9, "draw_night_at": 1.0e9},
+        "irrigation": {"draw_wet_amps": 46.4, "draw_wet_at": 1.0e9},
+        "empty": {}})
+    points = reader(written(tmp_path, document)).read()
+    fields = by_load(points)
+    assert fields["cameras"]["draw_night_amps"] == 2.9
+    assert "powered" in fields["cameras"]
+    assert fields["irrigation"] == {"draw_wet_amps": 46.4,
+                                    "draw_wet_at": 1.0e9}
+    assert "empty" not in fields
+    assert [one.tags.get("load") for one in points].count("cameras") == 1
+
+
 def test_a_controller_with_every_load_disabled_publishes_only_itself(
         tmp_path):
     """Not a fault: the node file said so, and the loop's own fields still

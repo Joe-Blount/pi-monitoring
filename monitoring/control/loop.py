@@ -429,17 +429,18 @@ class Loop:
             # load's amp-hours today.
             for key, value in (held.get("published_extra") or {}).items():
                 load[key] = float(value)
-            if self._meter is not None:
-                load.update(self._meter.fields_for(name))
             loads[name] = load
+        document = {"fields": fields, "loads": loads,
+                    "monotonic": float(mono_now), "boot_id": self._boot}
         if self._meter is not None:
             fields.update(self._meter.base_fields())
+            # Apart from the loads, so a load the node file disables still
+            # reports what it draws, and nothing that reads the loads sees
+            # one it does not drive.
+            document["figures"] = self._meter.figures()
 
         try:
-            self._publish(self._published_path or files.PUBLISHED,
-                          {"fields": fields, "loads": loads,
-                           "monotonic": float(mono_now),
-                           "boot_id": self._boot})
+            self._publish(self._published_path or files.PUBLISHED, document)
         except Exception:
             # Publishing is how somebody finds out. Controlling is the job.
             pass

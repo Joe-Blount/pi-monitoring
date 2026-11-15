@@ -319,6 +319,14 @@ class Meter:
             out[at_key] = float(figure["at"])
         return out
 
+    def figures(self):
+        """The published fields for every output with a figure kept, by
+        output. A load disabled in the node file is listed too: what it
+        draws does not change with whether the controller runs it."""
+        return {output: self.fields_for(output)
+                for output in sorted(self.results)
+                if output != "base" and self.fields_for(output)}
+
     def base_fields(self):
         figure = self.results.get("base")
         if not figure:
