@@ -244,12 +244,15 @@ busy = relays
     |> group()
     |> map(fn: (r) => ({_time: r._time, kind: "busy", value: r._value}))
 
-// A load the controller switches off is published up to thirty seconds
-// later, so the window before must be quiet too.
+// A switch is published up to thirty seconds after it is made, so a load
+// switched off late in the window before, or on late in this one, shows
+// only in the next window's publishes. The windows on both sides must be
+// quiet too.
 rest = union(
     tables: [
         busy,
         busy |> timeShift(duration: 5m) |> map(fn: (r) => ({_time: r._time, kind: "busy_before", value: r.value})),
+        busy |> timeShift(duration: -5m) |> map(fn: (r) => ({_time: r._time, kind: "busy_after", value: r.value})),
         node(device: "shunt", fields: /^shunt_amps$/) |> window(fn: mean)
             |> map(fn: (r) => ({_time: r._time, kind: "amps", value: r._value})),
         node(device: "mppt", fields: /^battery_amps$/) |> window(fn: max)
@@ -257,8 +260,8 @@ rest = union(
     ],
 )
     |> pivot(rowKey: ["_time"], columnKey: ["kind"], valueColumn: "value")
-    |> filter(fn: (r) => exists r.busy and exists r.busy_before and exists r.amps and exists r.solar)
-    |> filter(fn: (r) => r.busy == 0.0 and r.busy_before == 0.0 and r.solar <= 0.0 and r.amps < 0.0)
+    |> filter(fn: (r) => exists r.busy and exists r.busy_before and exists r.busy_after and exists r.amps and exists r.solar)
+    |> filter(fn: (r) => r.busy == 0.0 and r.busy_before == 0.0 and r.busy_after == 0.0 and r.solar <= 0.0 and r.amps < 0.0)
     |> sort(columns: ["_time"])
     |> map(fn: (r) => ({label: "Recorder and base load", _time: r._time, amps: -r.amps}))
 
