@@ -498,8 +498,8 @@ def build():
         (0, 13, 6, 3, xy("Current by pack (positive is charging)", PACK_CURRENT,
                          "A")),
         (6, 13, 6, 3, xy("Share of the bank's current", PACK_SHARE, "%")),
-        (0, 16, 8, 4, loads_table()),
-        (8, 16, 4, 4, note("How loads are measured", LOADS_NOTE)),
+        (0, 16, 7, 7, loads_table()),
+        (7, 16, 5, 7, note("How loads are measured", LOADS_NOTE)),
     ]
     return dashboard(
         "blind-energy", "Blind energy",

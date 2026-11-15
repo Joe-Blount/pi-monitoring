@@ -386,8 +386,8 @@ It shows:
   table holds values entered by hand from tests too rare to stay in the 30
   days. Add a row to `LOADS_NOTE` in
   [docs/dashboards/build.py](dashboards/build.py) after such a test, for
-  example one after rewiring, since an edit made in Cloud is lost on the
-  next push. The query is
+  example one after rewiring, since an edit made in Cloud is lost when the
+  dashboard is imported again. The query is
   [docs/queries/blind1-loads.flux](queries/blind1-loads.flux).
 
 The supply and state of charge graphs follow the dashboard's time range. The
