@@ -1013,9 +1013,10 @@ def load_meter(node, loads):
         _fail(where, "state_file must be an absolute path")
     # A load the controller does not drive sits at its fail-safe, and for
     # one energized to shed that is running: the base load would hold it.
+    # One wired around its relay is part of the base load anyway.
     running_undriven = sorted(
         name for name, load in (node.control.get("loads") or {}).items()
-        if name not in loads and isinstance(load, dict)
+        if name not in loads and name not in wired and isinstance(load, dict)
         and relay.ENERGIZE_TO_SHED in [
             part.get("polarity") for part in
             [load] + [load.get(k) for k in ("inverter", "pump")]

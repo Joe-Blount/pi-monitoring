@@ -1305,4 +1305,9 @@ def test_a_meter_may_name_a_load_the_node_file_disables():
 
 def test_a_disabled_load_whose_fail_safe_runs_it_is_listed_as_running():
     """Its draw would otherwise be read as part of the base load."""
-    assert spec.load_meter(meter_node(), {})["running_undriven"] == ["cameras"]
+    node = meter_node(wired_around=None)
+    assert spec.load_meter(node, {})["running_undriven"] == ["cameras"]
+
+
+def test_a_disabled_load_wired_around_its_relay_is_part_of_the_base_load():
+    assert spec.load_meter(meter_node(), {})["running_undriven"] == []
