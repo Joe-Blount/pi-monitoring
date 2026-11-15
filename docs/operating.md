@@ -383,7 +383,8 @@ It shows:
   file disables still has its figures published, since what it draws does
   not change. A load renamed or taken out of the node file keeps its old
   row until its entry is deleted from the state file and the controller
-  restarted. Day and night are
+  restarted, and for up to a week after that, while its last point is
+  still in the table's range. Day and night are
   kept apart for the cameras, whose infrared lights draw at night, and a
   switch in twilight is not measured. The far cameras open each window
   five minutes after the near ones, so each group's start is a step of its

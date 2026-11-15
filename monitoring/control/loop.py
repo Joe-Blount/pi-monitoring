@@ -106,7 +106,7 @@ class Loop:
             self._persisted[name] = held.get("persist")
         # What each load draws, measured as the loop switches it. Its
         # figures come back from the card, where a test made once is kept.
-        metered = spec.load_meter(node, self.specs) if self.specs else None
+        metered = spec.load_meter(node, self.specs or {})
         self._meter = None if metered is None else meter.Meter(
             metered, self.specs, files.read_json(metered["state_file"]))
         self._meter_failing = False

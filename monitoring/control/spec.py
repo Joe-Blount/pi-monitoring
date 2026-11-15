@@ -1001,9 +1001,12 @@ def load_meter(node, loads):
                      "could tell")
     charge = [_source("%s charge %d" % (where, index), entry, devices)
               for index, entry in enumerate(charge)]
+    # Named against the node file, not the loads enabled in it: a load
+    # disabled for a season is still wired the way it is.
+    named = set(node.control.get("loads") or {}) | set(loads)
     wired = raw.get("wired_around", [])
-    if not isinstance(wired, list) or any(name not in loads for name in wired):
-        _fail(where, "wired_around must list loads this controller drives, "
+    if not isinstance(wired, list) or any(name not in named for name in wired):
+        _fail(where, "wired_around must list loads in the node file, "
                      "found %r" % (wired,))
     state_file = raw.get("state_file")
     if not isinstance(state_file, str) or not state_file.startswith("/"):

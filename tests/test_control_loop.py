@@ -749,6 +749,20 @@ def test_a_load_the_node_file_disables_still_reports_what_it_draws(tmp_path):
         "draw_wet_amps": 46.4, "draw_wet_at": 1.0e9}
 
 
+def test_a_node_with_every_load_disabled_still_reports_what_they_draw(
+        tmp_path):
+    (tmp_path / "loads.json").write_text(json.dumps(
+        {"cameras": {"night": {"amps": 2.9, "at": 1.0e9}},
+         "base": {"amps": 1.8, "at": 1.0e9}}))
+    machine, _, published, _ = build(
+        tmp_path, meter=metered(tmp_path),
+        loads={"cameras": dict(CAMERAS, enabled=False)})
+    machine.once()
+    assert published["loads"] == {}
+    assert published["figures"]["cameras"]["draw_night_amps"] == 2.9
+    assert published["fields"]["base_amps"] == 1.8
+
+
 def test_a_meter_that_cannot_write_its_card_leaves_control_alone(
         tmp_path, monkeypatch, capsys):
     write_json = loop.files.write_json

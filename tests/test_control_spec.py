@@ -1295,3 +1295,8 @@ def test_a_meter_block_that_could_not_measure_honestly_is_refused(
 def test_a_meter_with_no_load_wired_around_parses():
     node = meter_node(wired_around=None)
     assert spec.load_meter(node, {"cameras": {}})["wired_around"] == []
+
+
+def test_a_meter_may_name_a_load_the_node_file_disables():
+    """Disabled for a season, it is still wired around its relay."""
+    assert spec.load_meter(meter_node(), {})["wired_around"] == ["cameras"]
