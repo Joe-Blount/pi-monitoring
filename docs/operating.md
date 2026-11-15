@@ -382,7 +382,10 @@ It shows:
   minutes after the near ones, so each group's start is a step of its own.
   The recorder is wired around its relay, so its row is the bank's draw
   with every relay load off, and it includes the Pi, the network gear and
-  the radios. The pump's row includes the inverter. The query is
+  the radios. The pump's row includes the inverter. The note beside the
+  table holds values entered by hand from tests too rare to stay in the 30
+  days; add a row there after a test such as one after rewiring. The query
+  is
   [docs/queries/blind1-loads.flux](queries/blind1-loads.flux).
 
 The supply and state of charge graphs follow the dashboard's time range. The

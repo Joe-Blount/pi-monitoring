@@ -436,7 +436,18 @@ start is a step of its own.
 off. The recorder is wired around its relay, so it is not measured apart \
 from the Pi, the network gear and the radios.
 
-The pump row includes the inverter, which starts with it.\
+The pump row includes the inverter, which starts with it.
+
+The table holds the last 30 days. Values from tests too rare to stay in \
+it, entered by hand:
+
+| Load | A | Measured |
+|---|---|---|
+| Pump, wet, with inverter | 46.4 | 2026-11-14, controller run |
+| Pump, dry, with inverter | 17.4 | 2026-11-14, controller run |
+| Far cameras, day | 2.0 | 2026-11-14, walk-down |
+| Near cameras, day | 2.4 | 2026-11-14, walk-down, hand reading |
+| Recorder and base load, day | 1.6 | 2026-11-14, walk-down, hand reading |
 """
 
 

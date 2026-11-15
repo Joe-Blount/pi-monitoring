@@ -477,7 +477,7 @@
           "width": 4,
           "height": 4,
           "kind": "Markdown",
-          "note": "Each row is the step in the bank's current the last time the controller switched that load, with no charge coming in. The cameras are measured at night and by day apart, because their infrared lights draw at night.\n\nThe far cameras start five minutes after the near ones, so each group's start is a step of its own.\n\n**Recorder and base load** is what the bank draws with every relay load off. The recorder is wired around its relay, so it is not measured apart from the Pi, the network gear and the radios.\n\nThe pump row includes the inverter, which starts with it."
+          "note": "Each row is the step in the bank's current the last time the controller switched that load, with no charge coming in. The cameras are measured at night and by day apart, because their infrared lights draw at night.\n\nThe far cameras start five minutes after the near ones, so each group's start is a step of its own.\n\n**Recorder and base load** is what the bank draws with every relay load off. The recorder is wired around its relay, so it is not measured apart from the Pi, the network gear and the radios.\n\nThe pump row includes the inverter, which starts with it.\n\nThe table holds the last 30 days. Values from tests too rare to stay in it, entered by hand:\n\n| Load | A | Measured |\n|---|---|---|\n| Pump, wet, with inverter | 46.4 | 2026-11-14, controller run |\n| Pump, dry, with inverter | 17.4 | 2026-11-14, controller run |\n| Far cameras, day | 2.0 | 2026-11-14, walk-down |\n| Near cameras, day | 2.4 | 2026-11-14, walk-down, hand reading |\n| Recorder and base load, day | 1.6 | 2026-11-14, walk-down, hand reading |\n"
         }
       ]
     }
