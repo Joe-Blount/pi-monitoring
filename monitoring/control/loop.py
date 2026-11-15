@@ -32,7 +32,7 @@ import datetime
 import os
 import sys
 
-from . import clock, decide, files, override, relay, spec, sun
+from . import clock, decide, files, meter, override, relay, spec, sun
 
 
 class LoopError(RuntimeError):
@@ -104,6 +104,11 @@ class Loop:
                     "record_unreadable"):
                 self._read_record(name)
             self._persisted[name] = held.get("persist")
+        # What each load draws, measured as the loop switches it. Its
+        # figures come back from the card, where a test made once is kept.
+        metered = spec.load_meter(node, self.specs) if self.specs else None
+        self._meter = None if metered is None else meter.Meter(
+            metered, self.specs, files.read_json(metered["state_file"]))
         self.started = self._monotonic()
         self.passes = 0
         #: The level this process has driven on each pin. Not the stored
@@ -172,9 +177,10 @@ class Loop:
 
         prior = self.state
         switches = self._switches()
+        readings = self._readings()
         decisions, self.state = decide.decide(
             local_now, mono_now, verdict.trusted,
-            self._readings(), switches, self.specs, self.state, suns)
+            readings, switches, self.specs, self.state, suns)
 
         if apply:
             driven = []
@@ -184,6 +190,9 @@ class Loop:
                 if persist:
                     self._save_pins(prior, driven)
                 raise
+            if persist and self._meter is not None:
+                self._measure(decisions, driven, readings, local_now,
+                              mono_now, verdict, suns)
 
         self.passes += 1
         if persist:
@@ -193,6 +202,26 @@ class Loop:
             if verdict.trusted:
                 self._prune_expired(switches, local_now.timestamp())
         return decisions
+
+    def _measure(self, decisions, driven, readings, local_now, mono_now,
+                 verdict, suns):
+        """Give the meter this pass, and keep its figures on the card.
+
+        A failure to measure or to write is reported and otherwise ignored:
+        controlling is the job.
+        """
+        try:
+            self._meter.observe(
+                mono_now, local_now.timestamp() if verdict.trusted else None,
+                local_now, suns, readings,
+                {name: decisions[name].connected for name in driven})
+            if self._meter.changed:
+                files.write_json(self._meter.spec["state_file"],
+                                 self._meter.results, mode=0o644,
+                                 durable=True)
+                self._meter.changed = False
+        except Exception as exc:
+            sys.stderr.write("load meter: %s\n" % exc)
 
     def _prune_expired(self, switches, now_epoch):
         """Take forces past their expiry out of the switches file.
@@ -394,7 +423,11 @@ class Loop:
             # load's amp-hours today.
             for key, value in (held.get("published_extra") or {}).items():
                 load[key] = float(value)
+            if self._meter is not None:
+                load.update(self._meter.fields_for(name))
             loads[name] = load
+        if self._meter is not None:
+            fields.update(self._meter.base_fields())
 
         try:
             self._publish(self._published_path or files.PUBLISHED,

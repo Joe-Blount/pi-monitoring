@@ -198,6 +198,19 @@ control:
   # a dead Pi takes the input side down with it.
   relay_trigger: low
 
+  # What each load draws, measured as the step in the bank's current when
+  # the controller switches it, and the base load, measured while every
+  # switched load is off. The latest figures are kept on the card and
+  # published with the controller's own. See monitoring/control/meter.py.
+  meter:
+    shunt: {device: shunt, field: shunt_amps}
+    charge:
+      - {device: mppt, field: battery_amps}
+    # The recorder's branch is wired around its relay, so switching it moves
+    # nothing; its draw is part of the base load until it is rewired.
+    wired_around: [nvr]
+    state_file: /var/lib/monitoring/blind1-loads.json
+
   loads:
 
     # Three DC branches, each on its own relay and switched on its 12 V

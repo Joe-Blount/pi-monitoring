@@ -373,27 +373,32 @@ It shows:
   throughput as a flat step. A share above 100 or below 0 means one pack is
   charging the other. The share moves with state of charge, so a fixed
   share is not a sign of trouble by itself.
-- what each load draws, from the last time it was measured, with how many
-  measurements the last 30 days hold and their average. A load is measured
-  as the step in the bank's current when the controller switches it, with
-  no charge coming in, so the cameras are measured in the dark or while
-  the panels are off. Day and night are kept apart for the cameras, whose
-  infrared lights draw at night. The far cameras open each window five
-  minutes after the near ones, so each group's start is a step of its own.
-  The recorder is wired around its relay, so its row is the bank's draw
-  with every relay load off, and it includes the Pi, the network gear and
-  the radios. The pump's row includes the inverter. The note beside the
-  table holds values entered by hand from tests too rare to stay in the 30
-  days. Add a row to `LOADS_NOTE` in
-  [docs/dashboards/build.py](dashboards/build.py) after such a test, for
-  example one after rewiring, since an edit made in Cloud is lost when the
-  dashboard is imported again. The query is
-  [docs/queries/blind1-loads.flux](queries/blind1-loads.flux).
+- what each load draws, as the controller last measured it. The controller
+  measures a load as the step in the bank's current when it switches the
+  load, with no charge coming in and no other relay switching, and keeps
+  the latest figure for each on its card, in the meter's state file. It
+  publishes every figure on every pass, so the table reads only the last
+  week and a figure stays until a newer one replaces it. Day and night are
+  kept apart for the cameras, whose infrared lights draw at night, and a
+  switch in twilight is not measured. The far cameras open each window
+  five minutes after the near ones, so each group's start is a step of its
+  own. The base load is the bank's draw after every relay load has been
+  off for ten minutes: the Pi, the network gear, the radios and the
+  recorder, which is wired around its relay. The pump is measured with the
+  inverter that starts with it. The meter block in the node file names the
+  shunt, the charge sources and the loads wired around their relays; take
+  the recorder out of wired_around once its branch goes through its relay.
+  The note beside the table holds values from tests made by hand. Add a row
+  to `LOADS_NOTE` in [docs/dashboards/build.py](dashboards/build.py) after
+  such a test, since an edit made in Cloud is lost when the dashboard is
+  imported again. The query is
+  [docs/queries/blind1-loads.flux](queries/blind1-loads.flux), and the
+  meter is [monitoring/control/meter.py](../monitoring/control/meter.py).
 
 The supply and state of charge graphs follow the dashboard's time range. The
 daily cells start at the midnight on or before the range's start and run
 through today. The
-night draw is always the last 24 hours, and the load estimates the last 30
+night draw is always the last 24 hours, and the load estimates the last 7
 days. Pick 24 hours for the supply graph
 and 7 days for the daily ones. A range reaching back past the bucket's oldest
 data makes the first day a part day.

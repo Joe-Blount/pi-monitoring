@@ -97,8 +97,8 @@ DAY_SECONDS = 86400.0
 #: since restarted at zero, so keeping them would hold a dwell for as long as
 #: the machine had previously been up. A path here could only move the writes
 #: onto the card in exchange for state that is thrown away on arrival.
-CONTROL_KEYS = {"enabled", "loads", "loop_interval", "relay_trigger",
-                "spare_pins"}
+CONTROL_KEYS = {"enabled", "loads", "loop_interval", "meter",
+                "relay_trigger", "spare_pins"}
 
 #: Keys this module answers for itself, with the reason an operator needs.
 #:
@@ -126,6 +126,9 @@ FLOOR_KEYS = {"sources"}
 FLOOR_SOURCE_KEYS = {"device", "field", "shed_below", "restore_above",
                      "fallback"}
 SOURCE_KEYS = {"device", "field"}
+
+#: The keys of a control block's meter. See monitoring/control/meter.py.
+METER_KEYS = {"shunt", "charge", "wired_around", "state_file"}
 
 #: Keys an irrigation load may carry, and the keys of each of its blocks.
 IRRIGATION_KEYS = {"type", "enabled", "on_stale_data", "inverter", "pump",
@@ -974,6 +977,39 @@ def load_control(node):
         for spec in loads.values():
             spec["trigger"] = trigger
     return loads
+
+
+def load_meter(node, loads):
+    """The node's load meter, or None when its control block has none.
+
+    `shunt` is the current through the whole bank, negative while it
+    discharges. `charge` lists the readings that are positive while charge
+    comes in. `wired_around` names loads whose relay switches nothing, so
+    switching them is not measured and their draw is part of the base load.
+    """
+    raw = node.control.get("meter")
+    if raw is None:
+        return None
+    where = "control meter"
+    _only(where, raw, METER_KEYS)
+    devices = {device.name for device in node.devices if device.enabled}
+    shunt = _source(where + " shunt", raw.get("shunt"), devices)
+    charge = raw.get("charge")
+    if not isinstance(charge, list) or not charge:
+        _fail(where, "needs at least one source in charge: a step taken "
+                     "while charge comes in would be wrong, and nothing "
+                     "could tell")
+    charge = [_source("%s charge %d" % (where, index), entry, devices)
+              for index, entry in enumerate(charge)]
+    wired = raw.get("wired_around", [])
+    if not isinstance(wired, list) or any(name not in loads for name in wired):
+        _fail(where, "wired_around must list loads this controller drives, "
+                     "found %r" % (wired,))
+    state_file = raw.get("state_file")
+    if not isinstance(state_file, str) or not state_file.startswith("/"):
+        _fail(where, "state_file must be an absolute path")
+    return {"shunt": shunt, "charge": charge, "wired_around": list(wired),
+            "state_file": state_file}
 
 
 def outputs(load):

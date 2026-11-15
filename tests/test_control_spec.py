@@ -1249,3 +1249,49 @@ def test_a_floor_of_only_fallback_sources_is_refused():
     broken = dict(LADDER, floor={"sources": [
         dict(LADDER["floor"]["sources"][0], fallback=True)]})
     assert "fallback" in refused(shed_ladder=broken)
+
+
+# -- the load meter -----------------------------------------------------------
+
+METER = {
+    "shunt": {"device": "shunt", "field": "shunt_amps"},
+    "charge": [{"device": "mppt", "field": "battery_amps"}],
+    "wired_around": ["cameras"],
+    "state_file": "/var/lib/monitoring/loads.json",
+}
+
+
+def meter_node(**changes):
+    node = FakeNode({"cameras": CAMERAS}, devices=("bms", "mppt", "shunt"))
+    raw = dict(METER, **changes)
+    node.control["meter"] = {k: v for k, v in raw.items() if v is not None}
+    return node
+
+
+def test_a_node_with_no_meter_measures_nothing():
+    assert spec.load_meter(FakeNode({"cameras": CAMERAS}), {"cameras": {}}) \
+        is None
+
+
+def test_the_meter_block_parses():
+    assert spec.load_meter(meter_node(), {"cameras": {}}) == METER
+
+
+@pytest.mark.parametrize("changes, words", [
+    ({"shunt": {"device": "nowhere", "field": "shunt_amps"}}, "nowhere"),
+    ({"charge": []}, "charge"),
+    ({"charge": None}, "charge"),
+    ({"wired_around": ["recorder"]}, "wired_around"),
+    ({"state_file": "loads.json"}, "absolute"),
+    ({"cadence": "1m"}, "cadence"),
+])
+def test_a_meter_block_that_could_not_measure_honestly_is_refused(
+        changes, words):
+    with pytest.raises(spec.SpecError) as raised:
+        spec.load_meter(meter_node(**changes), {"cameras": {}})
+    assert words in str(raised.value)
+
+
+def test_a_meter_with_no_load_wired_around_parses():
+    node = meter_node(wired_around=None)
+    assert spec.load_meter(node, {"cameras": {}})["wired_around"] == []

@@ -420,40 +420,46 @@ LOADS_COLUMNS = [
     ("amps", "A"),
     ("watts_at_13v2", "W"),
     ("measured", "measured"),
-    ("times", "times in 30 days"),
-    ("average_amps", "average A"),
 ]
 
 LOADS_NOTE = """\
-Each row is the step in the bank's current the last time the controller \
-switched that load, with no charge coming in. The cameras are measured at \
-night and by day apart, because their infrared lights draw at night.
+The controller measures each load as the step in the bank's current when \
+it switches that load, with no charge coming in and nothing else \
+switching. It keeps the latest figure for each and publishes it on every \
+pass, so a figure stays in the table until a newer one replaces it.
 
-The far cameras start five minutes after the near ones, so each group's \
-start is a step of its own.
+The cameras are measured at night and by day apart, because their \
+infrared lights draw at night. A switch in twilight is not measured. The \
+far cameras start five minutes after the near ones, so each group's start \
+is a step of its own.
 
-**Recorder and base load** is what the bank draws with every relay load \
-off. The recorder is wired around its relay, so it is not measured apart \
-from the Pi, the network gear and the radios.
+**Base load** is what the bank draws after every relay load has been off \
+for ten minutes. The recorder is wired around its relay, so it is part of \
+the base load.
 
-The pump row includes the inverter, which starts with it.
+The pump is measured with the inverter that starts with it.
 
-The table holds the last 30 days. Values from tests too rare to stay in \
-it, entered by hand:
+Values from tests made by hand:
 
 | Load | A | Measured |
 |---|---|---|
-| Pump, wet, with inverter | 46.4 | 2026-11-14, controller run |
-| Pump, dry, with inverter | 17.4 | 2026-11-14, controller run |
-| Far cameras, day | 2.0 | 2026-11-14, walk-down |
-| Near cameras, day | 2.4 | 2026-11-14, walk-down, hand reading |
-| Recorder and base load, day | 1.6 | 2026-11-14, walk-down, hand reading |
+| Pump moving water, with inverter | 46.4 | 2026-11-14, controller run |
+| Pump running dry, with inverter | 17.4 | 2026-11-14, controller run |
+| Far cameras by day | 2.0 | 2026-11-14, walk-down |
+| Near cameras by day | 2.4 | 2026-11-14, walk-down, hand reading |
+| Base load by day | 1.6 | 2026-11-14, walk-down, hand reading |
+| Far cameras at night | 2.9 | 2026-11-14, walk-down |
+| Near cameras at night | 3.4 | 2026-11-14, walk-down |
+| Base load at night | 1.8 | 2026-11-14, walk-down |
 """
 
 
 def loads_table():
     chart = status_table("Load estimates", LOADS_QUERY.read_text(), "load",
                          LOADS_COLUMNS)
+    # The query sorts the rows. A column named here is imported as a hidden
+    # field, and Cloud then does not show it.
+    del chart["tableOptions"]["sortBy"]
     chart["decimalPlaces"] = 2
     chart["timeFormat"] = "YYYY-MM-DD HH:mm"
     return chart

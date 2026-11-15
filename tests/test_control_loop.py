@@ -6,6 +6,7 @@ hardware.
 """
 
 import datetime
+import json
 import pathlib
 import zoneinfo
 
@@ -31,9 +32,11 @@ class FakeDevice:
 
 
 class FakeNode:
-    def __init__(self, loads, devices=("bms", "mppt")):
+    def __init__(self, loads, devices=("bms", "mppt", "shunt"), meter=None):
         self.devices = [FakeDevice(name) for name in devices]
         self.control = {"loads": loads, "relay_trigger": "high"}
+        if meter is not None:
+            self.control["meter"] = meter
 
 
 LADDER = {
@@ -63,7 +66,7 @@ def reading(soc=60.0, cell=3.30, age=1.0):
 
 
 def build(tmp_path, readings=None, at=None, mono=0.0, trusted=True,
-          switches=None, loads=None, boot=BOOT, prune=None):
+          switches=None, loads=None, boot=BOOT, prune=None, meter=None):
     """A loop whose world is entirely under the test's control."""
     pin = relay.Pretend(23, relay.ENERGIZE_TO_SHED, relay.HIGH)
     published = {}
@@ -73,7 +76,7 @@ def build(tmp_path, readings=None, at=None, mono=0.0, trusted=True,
              else reading()}
 
     machine = loop.Loop(
-        FakeNode(loads or {"cameras": CAMERAS}), LOCATION, ZONE,
+        FakeNode(loads or {"cameras": CAMERAS}, meter=meter), LOCATION, ZONE,
         relays={"cameras": pin},
         now=lambda: state["now"],
         monotonic=lambda: state["mono"],
@@ -682,6 +685,68 @@ def test_a_start_before_the_first_temperature_never_energizes_a_cold_fan(
         world["mono"] = mono
         machine.once()
     assert pin.levels and True not in pin.levels
+
+
+# -- measuring what a load draws ---------------------------------------------
+
+def metered(tmp_path):
+    return {"shunt": {"device": "shunt", "field": "shunt_amps"},
+            "charge": [{"device": "mppt", "field": "battery_amps"}],
+            "state_file": str(tmp_path / "loads.json")}
+
+
+def metered_reading(soc, amps, taken, mono):
+    out = reading(soc=soc)
+    out["shunt"] = {"fields": {"shunt_amps": amps},
+                    "age_seconds": mono - taken, "taken_at": taken}
+    out["mppt"] = {"fields": {"battery_amps": 0.0}, "age_seconds": 5.0,
+                   "taken_at": mono - 5.0}
+    return out
+
+
+def shed_cameras_while_metered(tmp_path, state, machine):
+    """Cameras running at noon, then shed, with a shunt reading a minute."""
+    for mono, soc, amps, taken in [
+            (0.0, 60.0, -6.0, 0.0), (100.0, 60.0, -6.0, 95.0),
+            (110.0, 5.0, -6.0, 95.0), (240.0, 5.0, -2.0, 235.0),
+            (300.0, 5.0, -2.0, 295.0), (400.0, 5.0, -2.0, 395.0)]:
+        state["mono"] = mono
+        state["now"] = datetime.datetime(2026, 6, 21, 12, tzinfo=ZONE) \
+            + datetime.timedelta(seconds=mono)
+        state["readings"] = metered_reading(soc, amps, taken, mono)
+        machine.once()
+
+
+def test_a_load_the_loop_sheds_is_measured_kept_on_the_card_and_published(
+        tmp_path):
+    machine, pin, published, state = build(tmp_path, meter=metered(tmp_path))
+    shed_cameras_while_metered(tmp_path, state, machine)
+    assert pin.levels[-1] is True
+    kept = json.loads((tmp_path / "loads.json").read_text())
+    assert kept["cameras"]["day"]["amps"] == pytest.approx(4.0)
+    cameras = published["loads"]["cameras"]
+    assert cameras["draw_day_amps"] == pytest.approx(4.0)
+    assert cameras["draw_day_at"] == pytest.approx(kept["cameras"]["day"]["at"])
+
+
+def test_a_figure_kept_on_the_card_is_published_by_the_next_process(tmp_path):
+    (tmp_path / "loads.json").write_text(json.dumps(
+        {"cameras": {"night": {"amps": 2.9, "at": 1.0e9}},
+         "base": {"amps": 1.8, "at": 1.0e9}}))
+    machine, _, published, _ = build(tmp_path, meter=metered(tmp_path))
+    machine.once()
+    assert published["loads"]["cameras"]["draw_night_amps"] == 2.9
+    assert published["fields"]["base_amps"] == 1.8
+
+
+def test_a_meter_that_cannot_write_its_card_leaves_control_alone(tmp_path):
+    spec_ = metered(tmp_path)
+    spec_["state_file"] = str(tmp_path / "missing" / "loads.json")
+    machine, pin, published, state = build(tmp_path, meter=spec_)
+    shed_cameras_while_metered(tmp_path, state, machine)
+    assert pin.levels[-1] is True
+    assert published["loads"]["cameras"]["draw_day_amps"] == \
+        pytest.approx(4.0)
 
 
 # -- the board's trigger, from the node file to the pin ----------------------

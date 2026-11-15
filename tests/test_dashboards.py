@@ -154,20 +154,31 @@ def test_the_sok_alarm_words_follow_the_drivers_bit_order():
         code for code, _description in abc_bms.PROTECTION_STATES]
 
 
-def test_the_load_estimates_list_every_relay_load_the_blind_controller_switches():
-    """A renamed or added load would otherwise drop out of the table, or
-    count as recorder draw, with no error."""
-    import re
+def test_the_load_estimates_name_every_figure_the_blind_controller_measures():
+    """A figure with no name of its own shows as its bare load and
+    condition, so a renamed or added load would otherwise pass unnoticed."""
     import yaml
+    from monitoring.control import meter
     node = yaml.safe_load((REPO / "sites" / "blind1" / "downstairs.yaml").read_text())
-    driven = set(node["control"]["loads"])
+    loads = node["control"]["loads"]
+    wired_around = set(node["control"]["meter"]["wired_around"])
+    conditions = {"branch": ["night", "day"], "pump": ["wet", "dry", "high"],
+                  "inverter": ["idle"], "other": [""]}
+    rows = ["base "]
+    for output, kind in meter.Meter(
+            {"charge": [], "shunt": {}, "wired_around": []}, loads).kinds.items():
+        if output.split(".")[0] in wired_around:
+            continue
+        rows += ["%s %s" % (output, c) for c in conditions[kind]]
     (chart,) = [c for c in _charts() if c["name"] == "Load estimates"]
     text = chart["queries"][0]["query"]
-    (listed,) = re.findall(r"r\.load =~ /\^\(([a-z_|\[\].]+)\)\$/", text)
-    names = {part.replace("[.]", ".") for part in listed.split("|")}
-    # Every relay load the recorder's row must leave out is listed: one
-    # missing would count as recorder draw.
-    assert {name.split(".")[0] for name in names} == driven - {"nvr"}
-    assert "irrigation.inverter" in names
-    for name in names:
-        assert '"%s"' % name in text, name
+    for row in rows:
+        assert 'r.row == "%s"' % row in text, row
+
+
+def test_the_load_estimates_table_shows_its_load_column():
+    """A table sorted by a column imports that column as a hidden field."""
+    (chart,) = [c for c in _charts() if c["name"] == "Load estimates"]
+    assert "sortBy" not in chart["tableOptions"]
+    assert chart["fieldOptions"][0] == {
+        "fieldName": "load", "displayName": "load", "visible": True}
