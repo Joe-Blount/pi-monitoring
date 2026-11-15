@@ -324,11 +324,12 @@ def test_figures_kept_on_the_card_come_back_and_malformed_ones_do_not():
         "base": {"amps": 1.8, "at": 1.0e9},
         "junk": ["not", "figures"],
         "irrigation.inverter": {"idle": {"amps": 3.0, "at": 1.0e9}},
-        "retired": {"": {"amps": 1.0, "at": 1.0e9}},
+        "disabled": {"wet": {"amps": 46.4, "at": 1.0e9}},
     }
     bench = Bench(NIGHT, results=kept)
     assert bench.meter.results == {
         "cameras_far": {"night": {"amps": 2.9, "at": 1.0e9}},
+        "disabled": {"wet": {"amps": 46.4, "at": 1.0e9}},
         "base": {"amps": 1.8, "at": 1.0e9},
     }
     assert bench.meter.fields_for("cameras_far") == {

@@ -115,8 +115,7 @@ class Meter:
             else:
                 self.kinds[name] = ("branch" if load["type"] == "dc_branch"
                                     else "other")
-        self.results = _clean(results, set(self.kinds) - {
-            name for name, kind in self.kinds.items() if kind == "inverter"})
+        self.results = _clean(results)
         #: True when results changed in a way worth writing to the card.
         self.changed = False
 
@@ -328,9 +327,12 @@ class Meter:
                 "base_at": float(figure["at"])}
 
 
-def _clean(results, outputs):
-    """Only well-formed figures, for the base load and the given outputs,
-    from a record written by an earlier process."""
+def _clean(results):
+    """Only well-formed figures from a record written by an earlier process.
+
+    A load disabled in the node file keeps its figures, for when it is
+    enabled again. An inverter's are dropped: it is not measured alone.
+    """
     out = {}
     if not isinstance(results, dict):
         return out
@@ -339,7 +341,7 @@ def _clean(results, outputs):
             if _figure(figures):
                 out["base"] = dict(figures)
             continue
-        if output not in outputs or not isinstance(figures, dict):
+        if output.endswith(".inverter") or not isinstance(figures, dict):
             continue
         kept = {c: dict(f) for c, f in figures.items()
                 if isinstance(c, str) and _figure(f)}
