@@ -141,36 +141,46 @@ side = (l, t) => {
         else "none"
 }
 
-met = (device, field) => join.inner(
+// A charge reading counts anywhere in the event's span, settling time
+// included.
+spanned = (l, t) => {
+    age = int(v: t) - int(v: l.ev)
+
+    return if -age <= int(v: 3m) and age <= int(v: 270s) and age < l.until then "charge" else "none"
+}
+
+// One reading that meets no event, for the same reason as the event above.
+nothing = array.from(rows: [{_time: 1970-01-01T00:00:00Z, value: 0.0, key: 1900-01-01T00:00:00Z}])
+
+met = (device, field, sides) => join.inner(
     left: offered,
-    right: readings(device: device, field: field),
+    right: union(tables: [readings(device: device, field: field), nothing]),
     on: (l, r) => l.key == r.key,
-    as: (l, r) => ({ev: l.ev, load: l.load, dir: l.dir, side: side(l: l, t: r._time), _time: r._time, value: r.value}),
+    as: (l, r) => ({ev: l.ev, load: l.load, dir: l.dir, side: sides(l: l, t: r._time), _time: r._time, value: r.value}),
 )
     |> filter(fn: (r) => r.side != "none")
 
-amps = met(device: "shunt", field: /^shunt_amps$/)
+amps = met(device: "shunt", field: /^shunt_amps$/, sides: side)
     |> group(columns: ["ev", "load", "dir", "side"])
     |> sort(columns: ["_time"])
 
 // Any charge while the step is measured, from the panels or a generator,
-// would hide part of it, so such an event is not measured. The charge is
-// looked for from the reading the step starts from to the last one it
-// ends on: in time order, a charge controller reading counts once that
-// first reading has passed.
+// would hide part of it, so such an event is not measured. In time order, a
+// charge controller reading counts from the reading the step starts from to
+// the end of the event's span, which holds the last reading it ends on.
 steps = union(
     tables: [
         amps |> filter(fn: (r) => r.side == "before") |> last(column: "_time"),
         amps |> filter(fn: (r) => r.side == "after" and r.load != "irrigation"),
         amps |> filter(fn: (r) => r.side == "after" and r.load == "irrigation") |> first(column: "_time"),
-        met(device: "mppt", field: /^battery_amps$/)
+        met(device: "mppt", field: /^battery_amps$/, sides: spanned)
             |> map(fn: (r) => ({ev: r.ev, load: r.load, dir: r.dir, side: "charge", _time: r._time, value: r.value})),
     ],
 )
     |> group(columns: ["ev", "load", "dir"])
     |> sort(columns: ["_time"])
     |> reduce(
-        identity: {started: false, before: 0.0, after: 0.0, n: 0.0, last: 0, charging: false},
+        identity: {started: false, before: 0.0, after: 0.0, n: 0.0, charging: false},
         fn: (r, accumulator) => {
             started = accumulator.started or r.side == "before"
             measured = r.side == "after" and started
@@ -180,10 +190,8 @@ steps = union(
                 before: if r.side == "before" then r.value else accumulator.before,
                 after: if measured then accumulator.after + r.value else accumulator.after,
                 n: if measured then accumulator.n + 1.0 else accumulator.n,
-                last: if measured then int(v: r._time) else accumulator.last,
                 charging: accumulator.charging or (r.side != "charge" and r.value > 0.0)
-                    or (r.side == "charge" and started and r.value > 0.0
-                        and (accumulator.last == 0 or int(v: r._time) <= accumulator.last)),
+                    or (r.side == "charge" and started and r.value > 0.0),
             }
         },
     )
