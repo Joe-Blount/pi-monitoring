@@ -13,6 +13,7 @@
 //
 // Watts are at a nominal 13.2 V.
 
+import "array"
 import "date"
 import "join"
 import "strings"
@@ -44,15 +45,24 @@ events = relays
     // A change across a gap in the controller's publishes, such as a
     // restart, happened at some time inside the gap. It still bounds its
     // neighbours' windows, but it is not measured.
-    |> map(fn: (r) => ({r with load: if r.elapsed > 45 then "gap" else r.load}))
+    // Its window opens at the last publish before the gap.
+    |> map(
+        fn: (r) => {
+            gap = r.elapsed > 45
+
+            return {r with load: if gap then "gap" else r.load,
+                opened: int(v: r._time) - (if gap then r.elapsed * int(v: 1s) else 0)}
+        },
+    )
     |> group(columns: ["_time"])
     |> reduce(
-        identity: {n: 0, names: "", dir: 0.0, pump_dir: 0.0},
+        identity: {n: 0, names: "", dir: 0.0, pump_dir: 0.0, opened: 0},
         fn: (r, accumulator) => ({
             n: accumulator.n + 1,
             names: accumulator.names + r.load + " ",
             dir: r._value,
             pump_dir: if r.load == "irrigation" then r._value else accumulator.pump_dir,
+            opened: if accumulator.n == 0 or r.opened < accumulator.opened then r.opened else accumulator.opened,
         }),
     )
     |> group()
@@ -63,13 +73,14 @@ events = relays
                 and strings.containsStr(v: r.names, substr: "irrigation.inverter ")
             load = if r.n == 1 then strings.trimSpace(v: r.names) else if pump then "irrigation" else "several"
 
-            return {_time: r._time, load: load, dir: if pump then r.pump_dir else r.dir, t: int(v: r._time)}
+            return {_time: r._time, load: load, dir: if pump then r.pump_dir else r.dir,
+                t: int(v: r._time), opened: r.opened}
         },
     )
     |> duplicate(column: "t", as: "t_prev")
     |> difference(columns: ["t_prev"], keepFirst: true)
     |> sort(columns: ["_time"], desc: true)
-    |> duplicate(column: "t", as: "t_next")
+    |> duplicate(column: "opened", as: "t_next")
     |> difference(columns: ["t_next"], keepFirst: true)
     |> sort(columns: ["_time"])
     |> map(
@@ -78,15 +89,20 @@ events = relays
             load: r.load,
             dir: r.dir,
             since: if exists r.t_prev then r.t_prev else int(v: 1h),
-            until: if exists r.t_next then -r.t_next else int(v: 1h),
+            // From this event to the next one's opening.
+            until: if exists r.t_next then r.opened - r.t - r.t_next else int(v: 1h),
         }),
     )
     |> filter(fn: (r) => r.load != "several" and r.load != "gap")
 
+// One event that meets no reading, so the joins below never see an empty
+// side when the controller switched nothing in the range.
+none = array.from(rows: [{ev: 1970-01-01T00:00:00Z, load: "none", dir: 0.0, since: 0, until: 0}])
+
 // Each event is offered every thirty-second slot from three minutes before
 // it to five minutes after, and a reading meets the events whose slots hold
 // it. The events are few, so they are the side that is copied.
-slots = (d) => events
+slots = (d) => union(tables: [events, none])
     |> map(fn: (r) => ({r with key: date.truncate(t: date.add(d: d, to: r.ev), unit: 30s)}))
 
 offered = union(
@@ -137,42 +153,45 @@ amps = met(device: "shunt", field: /^shunt_amps$/)
     |> group(columns: ["ev", "load", "dir", "side"])
     |> sort(columns: ["_time"])
 
-used = union(
+// Any charge while the step is measured, from the panels or a generator,
+// would hide part of it, so such an event is not measured. The charge is
+// looked for from the reading the step starts from to the last one it
+// ends on: in time order, a charge controller reading counts once that
+// first reading has passed.
+steps = union(
     tables: [
         amps |> filter(fn: (r) => r.side == "before") |> last(column: "_time"),
         amps |> filter(fn: (r) => r.side == "after" and r.load != "irrigation"),
         amps |> filter(fn: (r) => r.side == "after" and r.load == "irrigation") |> first(column: "_time"),
+        met(device: "mppt", field: /^battery_amps$/)
+            |> map(fn: (r) => ({ev: r.ev, load: r.load, dir: r.dir, side: "charge", _time: r._time, value: r.value})),
     ],
 )
+    |> group(columns: ["ev", "load", "dir"])
+    |> sort(columns: ["_time"])
+    |> reduce(
+        identity: {started: false, before: 0.0, after: 0.0, n: 0.0, last: 0, charging: false},
+        fn: (r, accumulator) => {
+            started = accumulator.started or r.side == "before"
+            measured = r.side == "after" and started
 
-// Any charge while the step is measured, from the panels or a generator,
-// would hide part of it, so such an event is not measured. The charge
-// controller is checked from ninety seconds before the switch, which holds
-// the shunt reading the step starts from.
-charging = union(tables: [
-    used |> filter(fn: (r) => r.value > 0.0),
-    met(device: "mppt", field: /^battery_amps$/)
-        |> filter(fn: (r) => r.value > 0.0)
-        |> filter(fn: (r) => r.side == "after" or int(v: r._time) - int(v: r.ev) >= -int(v: 90s)),
-])
+            return {
+                started: started,
+                before: if r.side == "before" then r.value else accumulator.before,
+                after: if measured then accumulator.after + r.value else accumulator.after,
+                n: if measured then accumulator.n + 1.0 else accumulator.n,
+                last: if measured then int(v: r._time) else accumulator.last,
+                charging: accumulator.charging or (r.side != "charge" and r.value > 0.0)
+                    or (r.side == "charge" and started and r.value > 0.0
+                        and (accumulator.last == 0 or int(v: r._time) <= accumulator.last)),
+            }
+        },
+    )
     |> group()
-    |> keep(columns: ["ev"])
-    |> distinct(column: "ev")
-    |> map(fn: (r) => ({ev: r._value, charging: true}))
+    |> filter(fn: (r) => r.started and r.n > 0.0 and not r.charging)
+    |> map(fn: (r) => ({ev: r.ev, load: r.load, dir: r.dir, before: r.before, after: r.after / r.n}))
 
-steps = used
-    |> mean(column: "value")
-    |> group()
-    |> pivot(rowKey: ["ev", "load", "dir"], columnKey: ["side"], valueColumn: "value")
-    |> filter(fn: (r) => exists r.before and exists r.after)
-
-steps_labelled = join.left(
-    left: steps,
-    right: charging,
-    on: (l, r) => l.ev == r.ev,
-    as: (l, r) => ({l with charging: exists r.charging}),
-)
-    |> filter(fn: (r) => not r.charging)
+steps_labelled = steps
     |> map(
         fn: (r) => {
             amps = (r.before - r.after) * r.dir
@@ -217,9 +236,12 @@ busy = relays
     |> group()
     |> map(fn: (r) => ({_time: r._time, kind: "busy", value: r._value}))
 
+// A load the controller switches off is published up to thirty seconds
+// later, so the window before must be quiet too.
 rest = union(
     tables: [
         busy,
+        busy |> timeShift(duration: 5m) |> map(fn: (r) => ({_time: r._time, kind: "busy_before", value: r.value})),
         node(device: "shunt", fields: /^shunt_amps$/) |> window(fn: mean)
             |> map(fn: (r) => ({_time: r._time, kind: "amps", value: r._value})),
         node(device: "mppt", fields: /^battery_amps$/) |> window(fn: max)
@@ -227,32 +249,28 @@ rest = union(
     ],
 )
     |> pivot(rowKey: ["_time"], columnKey: ["kind"], valueColumn: "value")
-    |> filter(fn: (r) => exists r.busy and exists r.amps and exists r.solar)
-    |> filter(fn: (r) => r.busy == 0.0 and r.solar <= 0.0 and r.amps < 0.0)
+    |> filter(fn: (r) => exists r.busy and exists r.busy_before and exists r.amps and exists r.solar)
+    |> filter(fn: (r) => r.busy == 0.0 and r.busy_before == 0.0 and r.solar <= 0.0 and r.amps < 0.0)
     |> sort(columns: ["_time"])
     |> map(fn: (r) => ({label: "Recorder and base load", _time: r._time, amps: -r.amps}))
 
-measured = union(tables: [steps_labelled, rest])
+// In time order, so each load ends on its latest measurement.
+union(tables: [steps_labelled, rest])
     |> group(columns: ["label"])
     |> sort(columns: ["_time"])
-
-stats = measured
     |> reduce(
-        identity: {n: 0, total: 0.0},
-        fn: (r, accumulator) => ({n: accumulator.n + 1, total: accumulator.total + r.amps}),
+        identity: {n: 0, total: 0.0, amps: 0.0, measured: 1970-01-01T00:00:00Z},
+        fn: (r, accumulator) => ({n: accumulator.n + 1, total: accumulator.total + r.amps, amps: r.amps, measured: r._time}),
     )
-
-join.inner(
-    left: measured |> last(column: "_time") |> group(),
-    right: stats |> group(),
-    on: (l, r) => l.label == r.label,
-    as: (l, r) => ({
-        load: l.label,
-        amps: l.amps,
-        watts_at_13v2: l.amps * 13.2,
-        measured: l._time,
-        times: r.n,
-        average_amps: r.total / float(v: r.n),
-    }),
-)
+    |> group()
+    |> map(
+        fn: (r) => ({
+            load: r.label,
+            amps: r.amps,
+            watts_at_13v2: r.amps * 13.2,
+            measured: r.measured,
+            times: r.n,
+            average_amps: r.total / float(v: r.n),
+        }),
+    )
     |> sort(columns: ["load"])
