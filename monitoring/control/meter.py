@@ -124,6 +124,7 @@ class Meter:
         self._last_switch = None
         self._shunt = None          # (taken_at, amps) of the newest reading
         self._pending = None
+        self._charged = None        # monotonic time charge was last seen
         self._quiet_since = None
         self._base = []
         self._base_written = self.results.get("base", {}).get("amps")
@@ -131,14 +132,16 @@ class Meter:
     # -- one pass -------------------------------------------------------
 
     def observe(self, mono, wall, local_now, suns, readings, connected):
-        """Take one pass: its readings, then the relays as they now stand.
+        """Take one pass: its readings, then the relays as the pass left them.
 
         `connected` holds each output the loop drove this pass and whether
-        its load is now running. `wall` is the epoch on a trusted clock, or
+        its load runs after the pass. `wall` is the epoch on a trusted clock, or
         None, and nothing is measured without one: a figure has to say when
         it was taken.
         """
         charging = self._charging(readings)
+        if charging:
+            self._charged = mono
         fresh = self._new_shunt(readings)
 
         if self._pending is not None:
@@ -150,8 +153,10 @@ class Meter:
             self._connected[output] = now_on
             if before is None:
                 # The first drive after a start: whatever the pin did, it
-                # is not a step anyone saw begin.
+                # is not a step anyone saw begin, and it may have moved the
+                # current under a step being measured.
                 self._last_switch = mono
+                self._pending = None
             elif before != now_on:
                 switched.append((output, 1.0 if now_on else -1.0))
 
@@ -222,6 +227,11 @@ class Meter:
                 return
             if last is not None and baseline[0] <= last + SHUNT_LAG:
                 return
+            # Charge that stopped before the switch may still be in the
+            # reading the step would start from.
+            if (self._charged is not None
+                    and baseline[0] <= self._charged + SHUNT_LAG):
+                return
         if baseline[1] > 0.0:
             return
 
@@ -243,11 +253,12 @@ class Meter:
             return
         opens, closes = WINDOWS.get(pending["kind"], WINDOWS["other"])
         if fresh is not None:
+            if fresh[1] > 0.0:
+                # Charge from a source the meter does not read.
+                self._pending = None
+                return
             age = fresh[0] - pending["switched"]
             if opens <= age <= closes:
-                if fresh[1] > 0.0:
-                    self._pending = None
-                    return
                 pending["after"].append(fresh[1])
         first_only = pending["kind"] == "pump"
         if (first_only and pending["after"]) or mono - pending["switched"] > closes:

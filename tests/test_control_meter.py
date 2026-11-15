@@ -46,7 +46,7 @@ class Bench:
     reading every sixty seconds."""
 
     def __init__(self, local, results=None, amps=-8.0, charge=0.0,
-                 charge_age=5.0, lag=1.0):
+                 charge_age=5.0, lag=1.0, undriven=()):
         self.meter = meter.Meter(SPEC, LOADS, results)
         self.mono = 1000.0
         self.local = local
@@ -56,6 +56,8 @@ class Bench:
         self.lag = lag
         self.taken = None
         self.connected = dict(OFF, cameras_far=True)
+        for output in undriven:
+            del self.connected[output]
         self.pass_()
 
     def readings(self):
@@ -385,3 +387,38 @@ def test_the_pumps_figure_is_not_taken_from_a_reading_stamped_soon_after_its_sta
     bench.run(150)
     figures = bench.meter.results["irrigation"]
     assert figures["wet"]["amps"] == pytest.approx(46.4)
+
+
+def test_a_switch_soon_after_charge_stops_is_not_measured():
+    """The reading the step would start from may still hold the charge."""
+    bench = Bench(NIGHT, charge=3.0, amps=-8.0)
+    bench.run(120)
+    bench.charge = 0.0
+    bench.run(10)
+    bench.switch(cameras_far=False)
+    bench.amps = -3.0
+    bench.run(300)
+    assert bench.meter.results == {}
+
+
+def test_a_relays_first_drive_drops_a_step_being_measured():
+    bench = Bench(NIGHT, undriven=["cpu_fan"])
+    bench.run(120)
+    bench.switch(cameras_far=False)
+    bench.amps = -5.0
+    bench.run(60)
+    bench.switch(cpu_fan=True)
+    bench.amps = -6.0
+    bench.run(300)
+    assert "cameras_far" not in bench.meter.results
+
+
+def test_a_positive_shunt_reading_while_a_camera_settles_drops_the_step():
+    bench = Bench(NIGHT)
+    bench.run(120)
+    bench.switch(cameras_far=False)
+    bench.amps = 1.0
+    bench.run(60)
+    bench.amps = -3.0
+    bench.run(300)
+    assert bench.meter.results == {}
