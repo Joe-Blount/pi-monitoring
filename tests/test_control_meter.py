@@ -321,6 +321,8 @@ def test_figures_kept_on_the_card_come_back_and_malformed_ones_do_not():
         "cpu_fan": {"": {"amps": 0.17, "at": True}},
         "base": {"amps": 1.8, "at": 1.0e9},
         "junk": ["not", "figures"],
+        "irrigation.inverter": {"idle": {"amps": 3.0, "at": 1.0e9}},
+        "retired": {"": {"amps": 1.0, "at": 1.0e9}},
     }
     bench = Bench(NIGHT, results=kept)
     assert bench.meter.results == {
@@ -354,3 +356,32 @@ def test_the_period_of_a_switch_by_the_sun(local, expected):
 
 def test_a_switch_without_a_sun_has_no_period():
     assert meter.period(NIGHT, []) is None
+
+
+def test_a_pump_started_long_after_its_inverter_is_not_measured():
+    """The inverter may have been running a tool meanwhile."""
+    bench = Bench(DAY, amps=-2.0)
+    bench.connected["cameras_far"] = False
+    bench.run(120)
+    bench.switch(**{"irrigation.inverter": True})
+    bench.amps = -5.0
+    bench.run(60)
+    bench.switch(irrigation=True)
+    bench.amps = -48.4
+    bench.run(150)
+    assert bench.meter.results == {}
+
+
+def test_the_pumps_figure_is_not_taken_from_a_reading_stamped_soon_after_its_start():
+    """It may have been taken before the pump ran."""
+    bench = Bench(DAY, amps=-2.0, lag=1.0)
+    bench.connected["cameras_far"] = False
+    bench.run(80)
+    bench.switch(**{"irrigation.inverter": True})
+    bench.amps = -5.0
+    bench.switch(irrigation=True)
+    bench.run(20)
+    bench.amps = -48.4
+    bench.run(150)
+    figures = bench.meter.results["irrigation"]
+    assert figures["wet"]["amps"] == pytest.approx(46.4)

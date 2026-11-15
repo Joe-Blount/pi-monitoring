@@ -17,8 +17,8 @@ A step is kept only when nothing else could have moved the current:
 
 A camera's own start draws more than it runs on, so its readings are taken
 from two minutes after the switch. The pump is measured on its first reading
-at least fifteen seconds after it starts, as the irrigation check measures
-it, and the inverter that starts just before it is part of that step. Only
+stamped at least thirty seconds after it starts, so the reading cannot be
+one the shunt took before, and the inverter that starts just before it is part of that step. Only
 that start is measured. The inverter is not measured alone, since a force
 may run it to power whatever is plugged into it, and a pump's stop is not,
 since the inverter may stay on after it.
@@ -45,10 +45,14 @@ import datetime
 #: Seconds after a switch before readings count, and the last second they
 #: count, by the kind of output.
 WINDOWS = {
-    "pump": (15.0, 150.0),
+    "pump": (30.0, 150.0),
     "inverter": (15.0, 270.0),
     "other": (120.0, 270.0),
 }
+
+#: The longest a pump may follow its inverter's start and be measured with
+#: it: a run starts the pump on the pass after the inverter's settle.
+PUMP_FOLLOWS = 30.0
 
 #: The oldest a reading may be at the switch and still be the step's start.
 BASELINE_MAX_AGE = 90.0
@@ -111,7 +115,8 @@ class Meter:
             else:
                 self.kinds[name] = ("branch" if load["type"] == "dc_branch"
                                     else "other")
-        self.results = _clean(results)
+        self.results = _clean(results, set(self.kinds) - {
+            name for name, kind in self.kinds.items() if kind == "inverter"})
         #: True when results changed in a way worth writing to the card.
         self.changed = False
 
@@ -205,7 +210,8 @@ class Meter:
             # The pump follows its inverter by seconds, and the step runs
             # from the reading before the inverter.
             if (direction < 0 or pending is None
-                    or pending["output"] != output + ".inverter"):
+                    or pending["output"] != output + ".inverter"
+                    or mono - pending["switched"] > PUMP_FOLLOWS):
                 return
             baseline = pending["baseline"]
         else:
@@ -311,8 +317,9 @@ class Meter:
                 "base_at": float(figure["at"])}
 
 
-def _clean(results):
-    """Only well-formed figures from a record written by an earlier process."""
+def _clean(results, outputs):
+    """Only well-formed figures, for the base load and the given outputs,
+    from a record written by an earlier process."""
     out = {}
     if not isinstance(results, dict):
         return out
@@ -321,7 +328,7 @@ def _clean(results):
             if _figure(figures):
                 out["base"] = dict(figures)
             continue
-        if not isinstance(figures, dict):
+        if output not in outputs or not isinstance(figures, dict):
             continue
         kept = {c: dict(f) for c, f in figures.items()
                 if isinstance(c, str) and _figure(f)}
