@@ -177,7 +177,8 @@ def test_the_load_estimates_name_every_figure_the_blind_controller_measures():
         assert 'r.row == "%s"' % row in text, row
 
 
-@pytest.mark.parametrize("path", BUILT)
+@pytest.mark.parametrize("path", BUILT + sorted(
+    (REPO / "docs" / "dashboards" / "cloud").glob("*.json")))
 def test_no_table_fixes_its_first_column(path):
     """Cloud does not draw a fixed first column, so the column that names
     each row would be missing."""
