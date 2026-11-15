@@ -394,7 +394,8 @@ class Loop:
         `loads`, by name, with the field names bare. The reader turns each
         load into its own point tagged with the load, so a chart repeats
         over loads without naming any and a load added to the node file
-        needs no panel edited.
+        needs no panel edited. The meter's figures sit under `figures`, by
+        output, for every output with one kept, driven or not.
 
         `decided_on` is left out, not written as zero, when no value
         informed the decision: a zero would read as a battery at zero

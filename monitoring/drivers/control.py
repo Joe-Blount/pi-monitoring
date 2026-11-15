@@ -42,6 +42,9 @@ over loads and a table over all of them is generic, so a load added to the
 node file needs no panel edited. The loop's own fields, and the age, go on
 the point with no load tag. Every load the loop drives is in the document it
 writes, so none can be driven and go unreported.
+
+What a load was measured to draw, under `figures`, goes on its load's point,
+or on a point of its own for a load the loop does not drive.
 """
 
 import json

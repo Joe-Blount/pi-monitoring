@@ -381,7 +381,9 @@ It shows:
   publishes every figure on every pass, so the table reads only the last
   week and a figure stays until a newer one replaces it. A load the node
   file disables still has its figures published, since what it draws does
-  not change. Day and night are
+  not change. A load renamed or taken out of the node file keeps its old
+  row until its entry is deleted from the state file and the controller
+  restarted. Day and night are
   kept apart for the cameras, whose infrared lights draw at night, and a
   switch in twilight is not measured. The far cameras open each window
   five minutes after the near ones, so each group's start is a step of its
