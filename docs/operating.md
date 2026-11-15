@@ -384,8 +384,10 @@ It shows:
   with every relay load off, and it includes the Pi, the network gear and
   the radios. The pump's row includes the inverter. The note beside the
   table holds values entered by hand from tests too rare to stay in the 30
-  days; add a row there after a test such as one after rewiring. The query
-  is
+  days. Add a row to `LOADS_NOTE` in
+  [docs/dashboards/build.py](dashboards/build.py) after such a test, for
+  example one after rewiring, since an edit made in Cloud is lost on the
+  next push. The query is
   [docs/queries/blind1-loads.flux](queries/blind1-loads.flux).
 
 The supply and state of charge graphs follow the dashboard's time range. The
