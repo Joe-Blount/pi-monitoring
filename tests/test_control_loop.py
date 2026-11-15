@@ -739,14 +739,32 @@ def test_a_figure_kept_on_the_card_is_published_by_the_next_process(tmp_path):
     assert published["fields"]["base_amps"] == 1.8
 
 
-def test_a_meter_that_cannot_write_its_card_leaves_control_alone(tmp_path):
-    spec_ = metered(tmp_path)
-    spec_["state_file"] = str(tmp_path / "missing" / "loads.json")
-    machine, pin, published, state = build(tmp_path, meter=spec_)
+def test_a_meter_that_cannot_write_its_card_leaves_control_alone(
+        tmp_path, monkeypatch, capsys):
+    write_json = loop.files.write_json
+
+    def refuse(path, *args, **kwargs):
+        if path.endswith("loads.json"):
+            raise OSError("read-only file system")
+        return write_json(path, *args, **kwargs)
+    monkeypatch.setattr(loop.files, "write_json", refuse)
+    machine, pin, published, state = build(tmp_path, meter=metered(tmp_path))
     shed_cameras_while_metered(tmp_path, state, machine)
+    state["mono"] += 10.0
+    machine.once()
     assert pin.levels[-1] is True
     assert published["loads"]["cameras"]["draw_day_amps"] == \
         pytest.approx(4.0)
+    assert capsys.readouterr().err.count("load meter:") == 1
+
+
+def test_a_meter_that_fails_leaves_control_alone(tmp_path, monkeypatch):
+    machine, pin, _, state = build(tmp_path, meter=metered(tmp_path))
+    def broken(*_args, **_kwargs):
+        raise ValueError("broken")
+    monkeypatch.setattr(machine._meter, "observe", broken)
+    shed_cameras_while_metered(tmp_path, state, machine)
+    assert pin.levels[-1] is True
 
 
 # -- the board's trigger, from the node file to the pin ----------------------

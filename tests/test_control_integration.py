@@ -598,3 +598,19 @@ def test_the_document_the_loop_writes_lands_where_the_node_files_point(
     literal, and a test above holds them to it; this is the other half of
     that agreement."""
     assert files.PUBLISHED == "/run/monitoring/control.json"
+
+
+def test_the_shipped_meter_is_built_for_every_load_the_node_file_can_enable():
+    """Each load's parsed spec is what the meter reads, so an irrigation
+    load switched on in the file must not stop the controller starting."""
+    from monitoring.control import meter
+    node = config.load(NODE, drivers.names())
+    for device in node.devices:
+        device.enabled = True
+    for load in node.control["loads"].values():
+        load["enabled"] = True
+    loads = spec.load_control(node)
+    built = meter.Meter(spec.load_meter(node, loads), loads)
+    assert built.kinds["irrigation"] == "pump"
+    assert built.kinds["irrigation.inverter"] == "inverter"
+    assert built.bands["irrigation"] == (30.0, 60.0)

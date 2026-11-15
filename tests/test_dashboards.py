@@ -160,10 +160,11 @@ def test_the_load_estimates_name_every_figure_the_blind_controller_measures():
     import yaml
     from monitoring.control import meter
     node = yaml.safe_load((REPO / "sites" / "blind1" / "downstairs.yaml").read_text())
-    loads = node["control"]["loads"]
+    loads = {name: dict(load, pump={"expect_amps": (30.0, 60.0)})
+             for name, load in node["control"]["loads"].items()}
     wired_around = set(node["control"]["meter"]["wired_around"])
     conditions = {"branch": ["night", "day"], "pump": ["wet", "dry", "high"],
-                  "inverter": ["idle"], "other": [""]}
+                  "inverter": [], "other": [""]}
     rows = ["base "]
     for output, kind in meter.Meter(
             {"charge": [], "shunt": {}, "wired_around": []}, loads).kinds.items():

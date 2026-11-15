@@ -36,7 +36,6 @@ from(bucket: "raw")
                 else if r.row == "irrigation wet" then "Pump moving water, with inverter"
                 else if r.row == "irrigation dry" then "Pump running dry, with inverter"
                 else if r.row == "irrigation high" then "Pump above its band, with inverter"
-                else if r.row == "irrigation.inverter idle" then "Pump inverter idle"
                 else if r.row == "cpu_fan " then "Pi fan"
                 else if r.row == "base " then "Base load: recorder, Pi, network, radios"
                 else strings.trimSpace(v: r.row),

@@ -433,11 +433,12 @@ infrared lights draw at night. A switch in twilight is not measured. The \
 far cameras start five minutes after the near ones, so each group's start \
 is a step of its own.
 
-**Base load** is what the bank draws after every relay load has been off \
-for ten minutes. The recorder is wired around its relay, so it is part of \
+**Base load** is the bank's mean draw over the ten minutes after every \
+relay load has been off for ten. The recorder is wired around its relay, so it is part of \
 the base load.
 
-The pump is measured with the inverter that starts with it.
+The pump is measured as it starts, with the inverter that starts just \
+before it.
 
 Values from tests made by hand:
 

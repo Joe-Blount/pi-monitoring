@@ -19,7 +19,7 @@ LOADS = {
     "nvr": {"type": "dc_branch"},
     "cpu_fan": {"type": "cpu_fan"},
     "irrigation": {"type": "sequenced_ac",
-                   "pump": {"readback": {"expect_amps": [30, 60]}}},
+                   "pump": {"expect_amps": (30.0, 60.0)}},
 }
 
 TZ = datetime.timezone(datetime.timedelta(hours=-6))
@@ -45,25 +45,29 @@ class Bench:
     """One meter, stepped pass by pass on a ten-second loop with a shunt
     reading every sixty seconds."""
 
-    def __init__(self, local, results=None, amps=-8.0, charge=0.0):
+    def __init__(self, local, results=None, amps=-8.0, charge=0.0,
+                 charge_age=5.0, lag=1.0):
         self.meter = meter.Meter(SPEC, LOADS, results)
         self.mono = 1000.0
         self.local = local
         self.amps = amps
         self.charge = charge
+        self.charge_age = charge_age
+        self.lag = lag
         self.taken = None
         self.connected = dict(OFF, cameras_far=True)
         self.pass_()
 
     def readings(self):
         if self.taken is None or self.mono - self.taken >= 60.0:
-            self.taken = self.mono - 1.0
+            self.taken = self.mono - self.lag
         return {
             "shunt": {"fields": {"shunt_amps": self.amps},
                       "age_seconds": self.mono - self.taken,
                       "taken_at": self.taken},
             "mppt": {"fields": {"battery_amps": self.charge},
-                     "age_seconds": 5.0, "taken_at": self.mono - 5.0},
+                     "age_seconds": self.charge_age,
+                     "taken_at": self.mono - self.charge_age},
         }
 
     def pass_(self, trusted=True):
@@ -216,15 +220,66 @@ def test_the_pump_is_measured_with_its_inverter_from_the_reading_before_it(
     assert "irrigation.inverter" not in bench.meter.results
 
 
-def test_the_inverter_alone_is_measured_idle():
+def test_the_inverter_alone_is_not_measured():
+    """A force may run it to power a tool, whose draw would be its own."""
     bench = Bench(DAY, amps=-2.0)
     bench.connected["cameras_far"] = False
     bench.run(120)
     bench.switch(**{"irrigation.inverter": True})
     bench.amps = -5.0
     bench.run(300)
-    assert bench.meter.results["irrigation.inverter"]["idle"]["amps"] == \
-        pytest.approx(3.0)
+    bench.switch(**{"irrigation.inverter": False})
+    bench.amps = -2.0
+    bench.run(300)
+    assert bench.meter.results == {}
+
+
+def test_the_pumps_stop_is_not_measured():
+    """The inverter may stay on after it, so the step is not the pump's
+    start reversed."""
+    bench = Bench(DAY, amps=-48.4)
+    bench.connected.update(cameras_far=False, irrigation=True,
+                           **{"irrigation.inverter": True})
+    bench.run(120)
+    bench.switch(irrigation=False)
+    bench.amps = -5.0
+    bench.run(300)
+    assert bench.meter.results == {}
+
+
+def test_a_reading_stamped_soon_after_a_switch_does_not_start_the_next_step():
+    """It may have been taken before the switch, and hold the load still
+    running."""
+    bench = Bench(NIGHT, lag=1.0)
+    bench.run(100)
+    bench.switch(cpu_fan=True)
+    bench.run(10)
+    bench.switch(cameras_far=False)
+    bench.amps = -5.0
+    bench.run(300)
+    assert "cameras_far" not in bench.meter.results
+
+
+def test_a_reading_stamped_well_after_a_switch_starts_the_next_step():
+    bench = Bench(NIGHT, lag=1.0)
+    bench.run(60)
+    bench.switch(cpu_fan=True)
+    bench.run(60)
+    bench.switch(cameras_far=False)
+    bench.amps = -5.0
+    bench.run(300)
+    assert "cameras_far" in bench.meter.results
+
+
+def test_a_charge_source_gone_quiet_counts_as_charge_coming_in():
+    """The panels may be carrying the load, hiding the step."""
+    bench = Bench(DAY, charge=6.0, charge_age=600.0, amps=-0.1)
+    bench.run(120)
+    bench.switch(cameras_far=False)
+    bench.amps = -0.05
+    bench.run(300)
+    bench.run(1200)
+    assert bench.meter.results == {}
 
 
 def test_the_base_load_is_read_after_every_switched_load_is_off_ten_minutes():

@@ -8,23 +8,30 @@ makes the switch, so it knows the moment exactly.
 A step is kept only when nothing else could have moved the current:
 
 - no other relay switched while it was measured,
-- no charge came in, from the panels or a generator, from the reading it
-  starts from to the last one it ends on, and
-- the reading it starts from came after any earlier switch.
+- every charge source named in the meter block read fresh and not positive,
+  and the shunt did not, from the reading it starts from to the last one it
+  ends on, and
+- the reading it starts from came well after any earlier switch: a reading
+  is stamped when the collector has it, a few seconds after the shunt took
+  it, so one stamped just after a switch may still hold the state before.
 
 A camera's own start draws more than it runs on, so its readings are taken
 from two minutes after the switch. The pump is measured on its first reading
 at least fifteen seconds after it starts, as the irrigation check measures
-it, and the inverter that starts just before it is part of that step.
+it, and the inverter that starts just before it is part of that step. Only
+that start is measured. The inverter is not measured alone, since a force
+may run it to power whatever is plugged into it, and a pump's stop is not,
+since the inverter may stay on after it.
 
 Camera branches draw more at night, when their infrared lights are on, so a
 direct-current branch keeps a figure for the night and one for the day, and
 a switch in twilight is not measured. The pump keeps one for moving water,
 one for running dry, and one above its band. Every other relay keeps one.
 
-The base load is what the bank draws while every switched load has been off
-for ten minutes with no charge coming in: the controller, the network gear,
-the radios, and any load wired around its relay.
+The base load is the mean of ten shunt readings taken once every switched
+load has been off for ten minutes with no charge coming in: the controller,
+the network gear, the radios, and any load wired around its relay. The first
+figure comes about twenty minutes after the last load goes off.
 
 The latest figure for each is kept on the card, so a test made once is not
 lost, and published on every pass.
@@ -48,6 +55,11 @@ BASELINE_MAX_AGE = 90.0
 
 #: The oldest a charge reading may be and still say whether charge is coming.
 CHARGE_MAX_AGE = 120.0
+
+#: How long after a switch a shunt reading may still hold the state before
+#: it: the collector stamps a reading when it has it, which is up to its read
+#: timeout after the shunt took it.
+SHUNT_LAG = 30.0
 
 #: Quiet time before the base load is read, and the readings averaged.
 BASE_QUIET = 600.0
@@ -95,8 +107,7 @@ class Meter:
             if load["type"] == "sequenced_ac":
                 self.kinds[name + ".inverter"] = "inverter"
                 self.kinds[name] = "pump"
-                self.bands[name] = tuple(
-                    load["pump"]["readback"]["expect_amps"])
+                self.bands[name] = tuple(load["pump"]["expect_amps"])
             else:
                 self.kinds[name] = ("branch" if load["type"] == "dc_branch"
                                     else "other")
@@ -156,9 +167,14 @@ class Meter:
         return float(value), reading.get("taken_at")
 
     def _charging(self, readings):
+        """True unless every charge source says, freshly, that none comes in.
+
+        A source gone quiet may be the panels carrying the load, which would
+        hide the step, so it counts as charge.
+        """
         for source in self.spec["charge"]:
             value, _ = self._value(readings, source, CHARGE_MAX_AGE)
-            if value is not None and value > 0.0:
+            if value is None or value > 0.0:
                 return True
         return False
 
@@ -185,17 +201,20 @@ class Meter:
         if kind is None or output in self.spec["wired_around"]:
             return
 
-        if (kind == "pump" and direction > 0 and pending is not None
-                and pending["output"].endswith(".inverter")
-                and pending["direction"] > 0):
-            # The pump follows its inverter by seconds; the step runs from
-            # the reading before the inverter.
+        if kind == "pump":
+            # The pump follows its inverter by seconds, and the step runs
+            # from the reading before the inverter.
+            if (direction < 0 or pending is None
+                    or pending["output"] != output + ".inverter"):
+                return
             baseline = pending["baseline"]
         else:
+            if kind == "inverter" and direction < 0:
+                return
             baseline = self._shunt
             if baseline is None or mono - baseline[0] > BASELINE_MAX_AGE:
                 return
-            if last is not None and baseline[0] <= last:
+            if last is not None and baseline[0] <= last + SHUNT_LAG:
                 return
         if baseline[1] > 0.0:
             return
@@ -205,8 +224,6 @@ class Meter:
             condition = period(local_now, suns)
             if condition is None:
                 return
-        elif kind == "inverter":
-            condition = "idle"
         self._pending = {
             "output": output, "kind": kind, "direction": direction,
             "switched": mono, "baseline": baseline, "after": [],
@@ -229,7 +246,9 @@ class Meter:
         first_only = pending["kind"] == "pump"
         if (first_only and pending["after"]) or mono - pending["switched"] > closes:
             self._pending = None
-            if pending["after"] and wall is not None:
+            # An inverter's start only holds the baseline for its pump.
+            if (pending["after"] and wall is not None
+                    and pending["kind"] != "inverter"):
                 self._finish(pending, wall)
 
     def _finish(self, pending, wall):

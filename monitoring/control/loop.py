@@ -109,6 +109,7 @@ class Loop:
         metered = spec.load_meter(node, self.specs) if self.specs else None
         self._meter = None if metered is None else meter.Meter(
             metered, self.specs, files.read_json(metered["state_file"]))
+        self._meter_failing = False
         self.started = self._monotonic()
         self.passes = 0
         #: The level this process has driven on each pin. Not the stored
@@ -220,8 +221,13 @@ class Loop:
                                  self._meter.results, mode=0o644,
                                  durable=True)
                 self._meter.changed = False
+            self._meter_failing = False
         except Exception as exc:
-            sys.stderr.write("load meter: %s\n" % exc)
+            # Once per run of failures: a card that will not take the write
+            # fails on every pass.
+            if not self._meter_failing:
+                sys.stderr.write("load meter: %s\n" % exc)
+            self._meter_failing = True
 
     def _prune_expired(self, switches, now_epoch):
         """Take forces past their expiry out of the switches file.

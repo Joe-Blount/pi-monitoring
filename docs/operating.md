@@ -375,17 +375,18 @@ It shows:
   share is not a sign of trouble by itself.
 - what each load draws, as the controller last measured it. The controller
   measures a load as the step in the bank's current when it switches the
-  load, with no charge coming in and no other relay switching, and keeps
+  load, with the charge controller reading fresh and showing no charge
+  coming in and no other relay switching, and keeps
   the latest figure for each on its card, in the meter's state file. It
   publishes every figure on every pass, so the table reads only the last
   week and a figure stays until a newer one replaces it. Day and night are
   kept apart for the cameras, whose infrared lights draw at night, and a
   switch in twilight is not measured. The far cameras open each window
   five minutes after the near ones, so each group's start is a step of its
-  own. The base load is the bank's draw after every relay load has been
-  off for ten minutes: the Pi, the network gear, the radios and the
-  recorder, which is wired around its relay. The pump is measured with the
-  inverter that starts with it. The meter block in the node file names the
+  own. The base load is the bank's mean draw over the ten minutes after
+  every relay load has been off for ten: the Pi, the network gear, the radios and the
+  recorder, which is wired around its relay. The pump is measured as it starts,
+  with the inverter that starts just before it. The meter block in the node file names the
   shunt, the charge sources and the loads wired around their relays; take
   the recorder out of wired_around once its branch goes through its relay.
   The note beside the table holds values from tests made by hand. Add a row
