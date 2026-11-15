@@ -185,11 +185,13 @@ steps_labelled = join.left(
             // The pump's classes are the band its check uses in the node
             // file: 30 to 60 A is a pump moving water. Like the check, the
             // step holds the inverter's idle draw, since the last reading
-            // before a start almost always comes before the inverter's.
+            // before a start almost always comes before the inverter's. A
+            // first reading can land in the pump's starting surge, so a
+            // high one may be that rather than a stall.
             label = if r.load == "cameras_far" then "Far cameras, " + when
                 else if r.load == "cameras_near" then "Near cameras, " + when
                 else if r.load == "irrigation" and amps < 30.0 then "Pump, dry"
-                else if r.load == "irrigation" and amps > 60.0 then "Pump, stalled"
+                else if r.load == "irrigation" and amps > 60.0 then "Pump, stalled or still starting"
                 else if r.load == "irrigation" then "Pump, wet (inverter included)"
                 else if r.load == "irrigation.inverter" then "Inverter, idle"
                 else if r.load == "cpu_fan" then "Pi fan"

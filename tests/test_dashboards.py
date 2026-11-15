@@ -168,5 +168,6 @@ def test_the_load_estimates_list_every_relay_load_the_blind_controller_switches(
     # Every relay load the recorder's row must leave out is listed: one
     # missing would count as recorder draw.
     assert {name.split(".")[0] for name in names} == driven - {"nvr"}
+    assert "irrigation.inverter" in names
     for name in names:
         assert '"%s"' % name in text, name

@@ -319,8 +319,8 @@ control:
 
     # The four cameras further out, on one cable from their own PoE
     # injector. Lower priority than the near cameras, so each of the near
-    # cameras' windows is entered 10 to 15 points earlier, and they are off for good
-    # at 20 percent, before the near cameras go dark.
+    # cameras' windows is entered 10 to 15 points earlier, and they are off
+    # for good at 20 percent, before the near cameras go dark.
     #
     # Each window opens five minutes after the near cameras' one. The
     # recorder lists cameras in the order they come up, which keeps the two
