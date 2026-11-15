@@ -403,7 +403,8 @@ def table(name, text):
         "tableOptions": {
             "verticalTimeAxis": True,
             "wrapping": "truncate",
-            "fixFirstColumn": True,
+            # Cloud does not draw a fixed first column at all.
+            "fixFirstColumn": False,
             "sortBy": "day",
         },
         "fieldOptions": [{"fieldName": c, "displayName": c, "visible": True}
@@ -458,9 +459,6 @@ Values from tests made by hand:
 def loads_table():
     chart = status_table("Load estimates", LOADS_QUERY.read_text(), "load",
                          LOADS_COLUMNS)
-    # The query sorts the rows. A column named here is imported as a hidden
-    # field, and Cloud then does not show it.
-    del chart["tableOptions"]["sortBy"]
     chart["decimalPlaces"] = 2
     chart["timeFormat"] = "YYYY-MM-DD HH:mm"
     return chart

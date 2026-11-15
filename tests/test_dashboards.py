@@ -177,9 +177,10 @@ def test_the_load_estimates_name_every_figure_the_blind_controller_measures():
         assert 'r.row == "%s"' % row in text, row
 
 
-def test_the_load_estimates_table_shows_its_load_column():
-    """A table sorted by a column imports that column as a hidden field."""
-    (chart,) = [c for c in _charts() if c["name"] == "Load estimates"]
-    assert "sortBy" not in chart["tableOptions"]
-    assert chart["fieldOptions"][0] == {
-        "fieldName": "load", "displayName": "load", "visible": True}
+@pytest.mark.parametrize("path", BUILT)
+def test_no_table_fixes_its_first_column(path):
+    """Cloud does not draw a fixed first column, so the column that names
+    each row would be missing."""
+    tables = [c for c in _charts(path) if c["kind"] == "Table"]
+    for chart in tables:
+        assert chart["tableOptions"]["fixFirstColumn"] is False, chart["name"]

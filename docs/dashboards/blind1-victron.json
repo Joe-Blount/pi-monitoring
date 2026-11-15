@@ -166,7 +166,7 @@
           "tableOptions": {
             "verticalTimeAxis": true,
             "wrapping": "truncate",
-            "fixFirstColumn": true,
+            "fixFirstColumn": false,
             "sortBy": "read"
           },
           "fieldOptions": [

@@ -98,7 +98,7 @@
           ],
           "staticLegend": {},
           "tableOptions": {
-            "fixFirstColumn": true,
+            "fixFirstColumn": false,
             "sortBy": "load",
             "verticalTimeAxis": true,
             "wrapping": "wrap"
@@ -494,7 +494,7 @@
           ],
           "staticLegend": {},
           "tableOptions": {
-            "fixFirstColumn": true,
+            "fixFirstColumn": false,
             "sortBy": "_field",
             "verticalTimeAxis": true,
             "wrapping": "wrap"
