@@ -1011,8 +1011,17 @@ def load_meter(node, loads):
     state_file = raw.get("state_file")
     if not isinstance(state_file, str) or not state_file.startswith("/"):
         _fail(where, "state_file must be an absolute path")
+    # A load the controller does not drive sits at its fail-safe, and for
+    # one energized to shed that is running: the base load would hold it.
+    running_undriven = sorted(
+        name for name, load in (node.control.get("loads") or {}).items()
+        if name not in loads and isinstance(load, dict)
+        and relay.ENERGIZE_TO_SHED in [
+            part.get("polarity") for part in
+            [load] + [load.get(k) for k in ("inverter", "pump")]
+            if isinstance(part, dict)])
     return {"shunt": shunt, "charge": charge, "wired_around": list(wired),
-            "state_file": state_file}
+            "running_undriven": running_undriven, "state_file": state_file}
 
 
 def outputs(load):

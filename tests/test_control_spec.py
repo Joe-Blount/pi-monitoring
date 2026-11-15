@@ -1274,7 +1274,8 @@ def test_a_node_with_no_meter_measures_nothing():
 
 
 def test_the_meter_block_parses():
-    assert spec.load_meter(meter_node(), {"cameras": {}}) == METER
+    assert spec.load_meter(meter_node(), {"cameras": {}}) == dict(
+        METER, running_undriven=[])
 
 
 @pytest.mark.parametrize("changes, words", [
@@ -1300,3 +1301,8 @@ def test_a_meter_with_no_load_wired_around_parses():
 def test_a_meter_may_name_a_load_the_node_file_disables():
     """Disabled for a season, it is still wired around its relay."""
     assert spec.load_meter(meter_node(), {})["wired_around"] == ["cameras"]
+
+
+def test_a_disabled_load_whose_fail_safe_runs_it_is_listed_as_running():
+    """Its draw would otherwise be read as part of the base load."""
+    assert spec.load_meter(meter_node(), {})["running_undriven"] == ["cameras"]

@@ -390,7 +390,9 @@ It shows:
   five minutes after the near ones, so each group's start is a step of its
   own. The base load is the bank's mean draw over the ten minutes after
   every relay load has been off for ten: the Pi, the network gear, the radios and the
-  recorder, which is wired around its relay. The pump is measured as it starts,
+  recorder, which is wired around its relay. It is not read while a load
+  the node file disables sits at a fail-safe that runs it, as a camera
+  branch energized to shed does. The pump is measured as it starts,
   with the inverter that starts just before it. The meter block in the node file names the
   shunt, the charge sources and the loads wired around their relays; take
   the recorder out of wired_around once its branch goes through its relay.

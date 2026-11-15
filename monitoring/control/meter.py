@@ -30,7 +30,8 @@ one for running dry, and one above its band. Every other relay keeps one.
 
 The base load is the mean of ten shunt readings taken once every switched
 load has been off for ten minutes with no charge coming in: the controller,
-the network gear, the radios, and any load wired around its relay. The first
+the network gear, the radios, and any load wired around its relay. It is not read while a
+load the controller does not drive sits at a fail-safe that runs it. The first
 figure comes about twenty minutes after the last load goes off.
 
 The latest figure for each is kept on the card, so a test made once is not
@@ -284,8 +285,9 @@ class Meter:
     # -- the base load --------------------------------------------------
 
     def _watch_base(self, fresh, charging, mono, wall):
-        running = any(on for output, on in self._connected.items()
-                      if output not in self.spec["wired_around"])
+        running = self.spec.get("running_undriven") or any(
+            on for output, on in self._connected.items()
+            if output not in self.spec["wired_around"])
         if running or charging or self._quiet_since is None:
             self._quiet_since = None if (running or charging) else mono
             self._base = []

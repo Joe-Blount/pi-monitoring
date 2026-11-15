@@ -423,3 +423,13 @@ def test_a_positive_shunt_reading_while_a_camera_settles_drops_the_step():
     bench.amps = -3.0
     bench.run(300)
     assert bench.meter.results == {}
+
+
+def test_the_base_load_is_not_read_while_an_undriven_load_runs():
+    """A load the controller does not drive may sit at a fail-safe that
+    runs it."""
+    bench = Bench(NIGHT, amps=-4.8)
+    bench.meter.spec = dict(SPEC, running_undriven=["cameras_near"])
+    bench.switch(cameras_far=False)
+    bench.run(1800)
+    assert "base" not in bench.meter.results
