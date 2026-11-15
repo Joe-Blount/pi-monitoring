@@ -244,7 +244,7 @@ def test_the_recorder_is_running_whenever_a_camera_is(loads, suns, steps):
     (35.0, 19, 30, True),
     (19.0, 6, 30, False),
 ])
-def test_the_far_cameras_keep_the_near_cameras_windows_at_higher_thresholds(
+def test_the_far_cameras_shed_by_their_own_windows_at_higher_thresholds(
         loads, suns, soc, hour, minute, connected):
     decision = settled(loads, suns, soc, at(hour, minute), load="cameras_far")
     assert decision.connected is connected, decision.reason

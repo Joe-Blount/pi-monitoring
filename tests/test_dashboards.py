@@ -154,8 +154,9 @@ def test_the_sok_alarm_words_follow_the_drivers_bit_order():
         code for code, _description in abc_bms.PROTECTION_STATES]
 
 
-def test_the_load_estimates_name_only_loads_the_blind_controller_drives():
-    """A renamed load would otherwise drop out of the table with no error."""
+def test_the_load_estimates_list_every_relay_load_the_blind_controller_switches():
+    """A renamed or added load would otherwise drop out of the table, or
+    count as recorder draw, with no error."""
     import re
     import yaml
     node = yaml.safe_load((REPO / "sites" / "blind1" / "downstairs.yaml").read_text())
@@ -164,6 +165,8 @@ def test_the_load_estimates_name_only_loads_the_blind_controller_drives():
     text = chart["queries"][0]["query"]
     (listed,) = re.findall(r"r\.load =~ /\^\(([a-z_|\[\].]+)\)\$/", text)
     names = {part.replace("[.]", ".") for part in listed.split("|")}
-    assert {name.split(".")[0] for name in names} <= driven
+    # Every relay load the recorder's row must leave out is listed: one
+    # missing would count as recorder draw.
+    assert {name.split(".")[0] for name in names} == driven - {"nvr"}
     for name in names:
         assert '"%s"' % name in text, name

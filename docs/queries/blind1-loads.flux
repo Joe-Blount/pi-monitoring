@@ -38,8 +38,13 @@ relays = node(device: "control", fields: /^powered$/)
 events = relays
     |> group(columns: ["load"])
     |> sort(columns: ["_time"])
+    |> elapsed(unit: 1s)
     |> difference()
     |> filter(fn: (r) => r._value != 0.0)
+    // A change across a gap in the controller's publishes, such as a
+    // restart, happened at some time inside the gap. It still bounds its
+    // neighbours' windows, but it is not measured.
+    |> map(fn: (r) => ({r with load: if r.elapsed > 45 then "gap" else r.load}))
     |> group(columns: ["_time"])
     |> reduce(
         identity: {n: 0, names: "", dir: 0.0, pump_dir: 0.0},
@@ -76,7 +81,7 @@ events = relays
             until: if exists r.t_next then -r.t_next else int(v: 1h),
         }),
     )
-    |> filter(fn: (r) => r.load != "several")
+    |> filter(fn: (r) => r.load != "several" and r.load != "gap")
 
 // Each event is offered every thirty-second slot from three minutes before
 // it to five minutes after, and a reading meets the events whose slots hold
@@ -99,17 +104,24 @@ readings = (device, field) => node(device: device, fields: field)
     |> map(fn: (r) => ({_time: r._time, value: r._value, key: date.truncate(t: r._time, unit: 30s)}))
 
 // The controller publishes a switch up to thirty seconds after it makes
-// it, so a reading in those thirty seconds may already hold the step. A
-// camera's own start draws more than it runs on, so its after window opens
-// two minutes on. The pump is measured on its first reading, as the
-// controller measures it. Before an event, the last reading stands.
+// it, so a reading in those thirty seconds before a publish may already
+// hold that switch's step, and is used on neither side of it. A camera's
+// own start draws more than it runs on, so its after window opens two
+// minutes on, and its step is the mean of the readings in it. The pump is
+// measured on its first reading after the switch is published, close to
+// where the controller checks it. Before an event, the last reading stands.
 settle = (load) => if load == "irrigation" then 0 else int(v: 2m)
+
+// The thirty seconds kept clear before the next publish. A run the check
+// stops is stopped by the very reading that measures it, so that reading
+// always comes before the stop.
+margin = (load) => if load == "irrigation" then 0 else int(v: 30s)
 
 side = (l, t) => {
     age = int(v: t) - int(v: l.ev)
 
     return if age < -int(v: 30s) and -age <= int(v: 3m) and -age < l.since then "before"
-        else if age > settle(load: l.load) and age <= int(v: 270s) and age < l.until then "after"
+        else if age > settle(load: l.load) and age <= int(v: 270s) and age < l.until - margin(load: l.load) then "after"
         else "none"
 }
 
@@ -128,7 +140,8 @@ amps = met(device: "shunt", field: /^shunt_amps$/)
 used = union(
     tables: [
         amps |> filter(fn: (r) => r.side == "before") |> last(column: "_time"),
-        amps |> filter(fn: (r) => r.side == "after"),
+        amps |> filter(fn: (r) => r.side == "after" and r.load != "irrigation"),
+        amps |> filter(fn: (r) => r.side == "after" and r.load == "irrigation") |> first(column: "_time"),
     ],
 )
 
@@ -169,8 +182,10 @@ steps_labelled = join.left(
             hour = date.hour(t: r.ev)
             when = if hour < 6 or hour >= 21 then "night" else if hour >= 9 and hour < 16 then "day" else "twilight"
 
-            // The pump's classes follow its check in the node file: 30 to
-            // 60 A is a pump moving water.
+            // The pump's classes are the band its check uses in the node
+            // file: 30 to 60 A is a pump moving water. Like the check, the
+            // step holds the inverter's idle draw, since the last reading
+            // before a start almost always comes before the inverter's.
             label = if r.load == "cameras_far" then "Far cameras, " + when
                 else if r.load == "cameras_near" then "Near cameras, " + when
                 else if r.load == "irrigation" and amps < 30.0 then "Pump, dry"
@@ -213,7 +228,6 @@ rest = union(
     |> filter(fn: (r) => exists r.busy and exists r.amps and exists r.solar)
     |> filter(fn: (r) => r.busy == 0.0 and r.solar <= 0.0 and r.amps < 0.0)
     |> sort(columns: ["_time"])
-    |> tail(n: 12)
     |> map(fn: (r) => ({label: "Recorder and base load", _time: r._time, amps: -r.amps}))
 
 measured = union(tables: [steps_labelled, rest])
