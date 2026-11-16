@@ -270,8 +270,11 @@ collect host --node <file>
 To see the device's own unparsed output instead of the parsed reading:
 
 ```
-collect host --node <file> --raw
+collect <device> --node <file> --raw
 ```
+
+Not every driver has a raw mode; host has none. A resident device such as
+the charge controller is held by its collector, so stop telegraf first.
 
 ## Tell whether data is reaching the database
 

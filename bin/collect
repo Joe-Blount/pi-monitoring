@@ -6,7 +6,7 @@
     collect mppt --node ... --stream                   a resident device, forever
     collect --node ... --list                          what this node declares
     collect --node ... --check                         probe without reading
-    collect host --node ... --raw                      unparsed device output
+    collect <device> --node ... --raw                  unparsed device output
 
 Nothing here writes to InfluxDB. Output goes to standard output and is picked
 up by telegraf, which owns scheduling, buffering, retry and credentials.
